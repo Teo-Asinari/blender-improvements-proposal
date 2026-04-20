@@ -6,19 +6,17 @@ Research date: 2026-04-20. Target Blender versions considered: 4.2 LTS, 4.3, 4.4
 
 ## 1. `pyopenvdb` / `openvdb` in Blender's bundled Python
 
-**Status: partially available since Blender 3.6; module name changed in 4.4; must be explicitly exposed.**
+**Status: bundled since Blender 3.6; renamed and hidden behind `expose_bundled_modules()` in 4.4.**
 
-- Blender began shipping an OpenVDB Python module in the official build as of **Blender 3.6**, following long-standing requests (see ["Build pyopenvdb as part of make deps"](https://devtalk.blender.org/t/build-pyopenvdb-as-part-of-make-deps/14148) and [D8123](https://developer.blender.org/D8123)). The module was called `pyopenvdb`.
-- As of **Blender 4.4**, the module is still bundled but the import name was changed from `pyopenvdb` to `openvdb`, and it is no longer on `sys.path` by default. An add-on must call [`bpy.utils.expose_bundled_modules()`](https://developer.blender.org/docs/release_notes/4.4/python_api/) to add Blender's vendored VFX libraries to `sys.path` before importing (Blender 4.4 release notes, Python API section).
+- Blender began shipping an OpenVDB Python module in the official build in **Blender 3.6** (history: ["Build pyopenvdb as part of make deps"](https://devtalk.blender.org/t/build-pyopenvdb-as-part-of-make-deps/14148); patch [D8123](https://developer.blender.org/D8123)). Import name was `pyopenvdb`.
+- In **Blender 4.4**, the module is still bundled but renamed to `openvdb`, and is no longer on `sys.path` by default. Add-ons must call [`bpy.utils.expose_bundled_modules()`](https://developer.blender.org/docs/release_notes/4.4/python_api/) first:
   ```python
-  import bpy
-  bpy.utils.expose_bundled_modules()
-  import openvdb
+  import bpy; bpy.utils.expose_bundled_modules(); import openvdb
   ```
-- **Critical caveat:** the bundled `openvdb` Python module is the stock upstream module. It lets an add-on **load `.vdb` files from disk and manipulate grids in its own memory**, but it does **not** share C++ grid pointers with Blender's internal `Volume` datablocks. That is the same limitation called out in the original 2020 forum thread: "pyopenvdb in Blender's Python Console without the ability to modify Blender's OpenVDB grids, only to have access to out-of-box pyopenvdb." No evidence was found that this has changed.
-- On Linux distro builds (e.g. NixOS, issue [NixOS/nixpkgs#447287](https://github.com/NixOS/nixpkgs/issues/447287)) the module is sometimes missing because it was not built — add-ons must handle `ImportError` gracefully.
+- **Critical caveat:** the bundled `openvdb` Python module is the stock upstream module. It lets an add-on load `.vdb` files and manipulate grids **in its own Python-side memory**, but it does **not** share C++ grid pointers with Blender's internal `Volume` datablocks. This matches the 2020 forum thread's description ("access to out-of-box pyopenvdb… without the ability to modify Blender's OpenVDB grids"), and no evidence was found that this has changed.
+- On some distro builds (e.g. NixOS, [nixpkgs#447287](https://github.com/NixOS/nixpkgs/issues/447287)) the module is simply missing — add-ons must handle `ImportError`.
 
-Roadmap: no public tracker item was located proposing a Python binding that would give Python direct, writable access to the grids owned by `bpy.data.volumes[...]`. This should be treated as **not currently on the roadmap**.
+Roadmap: no tracker item was located proposing Python write access to `bpy.data.volumes[...]` grids. Treat as **not on the roadmap**.
 
 ---
 
@@ -26,14 +24,14 @@ Roadmap: no public tracker item was located proposing a Python binding that woul
 
 **Status: read-only metadata; no voxel-level read/write from Python.**
 
-From the current Blender Python API docs ([`bpy.types.Volume`](https://docs.blender.org/api/current/bpy.types.Volume.html), [`bpy.types.VolumeGrid`](https://docs.blender.org/api/current/bpy.types.VolumeGrid.html), [`bpy.types.VolumeGrids`](https://docs.blender.org/api/current/bpy.types.VolumeGrids.html)):
+From the current Blender Python API ([`Volume`](https://docs.blender.org/api/current/bpy.types.Volume.html), [`VolumeGrid`](https://docs.blender.org/api/current/bpy.types.VolumeGrid.html), [`VolumeGrids`](https://docs.blender.org/api/current/bpy.types.VolumeGrids.html)):
 
-- `Volume` datablock exposes a `filepath` (a `.vdb` file path), sequence settings, a `grids` collection, and display properties. It is backed by a file — setting `filepath` causes the file to be (lazily) loaded on evaluation.
-- `VolumeGrid` exposes only **`name`, `data_type` (enum, read-only), `channels` (int, read-only), `is_loaded` (bool, read-only), `matrix_object`**, plus `load()` and `unload()` methods. There is **no voxel buffer accessor, no active-voxel iterator, no setter for values**.
-- The C API documented on the Volume wiki page ([wiki.blender.org/wiki/Source/Objects/Volume](https://wiki.blender.org/wiki/Source/Objects/Volume)) uses `BKE_volume_grid_openvdb_for_read` / `BKE_volume_grid_openvdb_for_write` with a copy-on-write model, but none of these are wrapped for Python.
-- `bpy.data.volumes.new()` / `bpy.data.volumes.load()` exist, but `new()` creates an empty datablock that must still point at a `.vdb` file on disk to get any grid content. There is **no supported Python path to construct a `Volume` datablock from an in-memory NumPy array or from a `pyopenvdb.FloatGrid`** (confirmed via [Blender Artists: "How can I get data from a volume grid?"](https://blenderartists.org/t/how-can-i-get-data-from-a-volume-grid/1365344), where the accepted workaround is to write a `.vdb` file and reload it).
+- `Volume` exposes a `filepath`, sequence settings, a `grids` collection, and display properties. It is backed by a file; setting `filepath` triggers a lazy reload.
+- `VolumeGrid` exposes only `name`, `data_type` (enum, read-only), `channels` (int, read-only), `is_loaded` (bool, read-only), `matrix_object`, plus `load()` / `unload()`. **No voxel buffer accessor, no active-voxel iterator, no value setter.**
+- The C API (`BKE_volume_grid_openvdb_for_read` / `..._for_write`, copy-on-write model — see the [Volume wiki](https://wiki.blender.org/wiki/Source/Objects/Volume)) is not wrapped for Python.
+- `bpy.data.volumes.new()` / `.load()` exist, but `new()` creates an empty datablock still expecting a disk `.vdb`. **No supported Python path constructs a `Volume` datablock from a NumPy array or `openvdb.FloatGrid`** — the community workaround is writing a `.vdb` and reloading ([Blender Artists thread](https://blenderartists.org/t/how-can-i-get-data-from-a-volume-grid/1365344)).
 
-**Consequence for this proposal:** a Python-only sculpt loop would have to (a) maintain its own `openvdb.FloatGrid`, (b) serialize to a temp `.vdb` file after each stroke, (c) reassign `Volume.filepath` to force a reload, then (d) meshify and swap into a mesh object for display. This is not viable at interactive rates for non-trivial grid sizes.
+**Consequence:** a Python-only sculpt loop must (a) keep its own `openvdb.FloatGrid`, (b) serialize to a temp `.vdb` per stroke, (c) reassign `Volume.filepath` to reload, (d) meshify for display. Not viable at interactive rates.
 
 ---
 
@@ -67,15 +65,13 @@ Importantly, **Blender 5.0 (Oct 2025) shipped native Geometry Node wrappers for 
 
 ## 5. Meshing a VDB grid for viewport display
 
-Options, roughly in order of quality:
+1. **`openvdb::tools::volumeToMesh`** — adaptive meshing, optionally feature-preserving via a reference surface; reference path ~15% slower than plain ([VolumeToMesh docs](https://www.openvdb.org/documentation/doxygen/VolumeToMesh_8h.html)). **This is what Blender's Voxel Remesher already calls internally.**
+2. **Volume-to-Mesh modifier / Voxel Remesh** — same OpenVDB call through DNA/modifiers; triggerable from Python via `bpy.ops.object.voxel_remesh()`. Adds operator + depsgraph overhead per stroke.
+3. **Blender 5.0 `Grid to Mesh` Geometry Node** ([docs](https://docs.blender.org/manual/en/latest/modeling/geometry_nodes/volume/operations/grid_to_mesh.html)) — same underlying call, usable from a GN tree, keeps everything in the eval graph.
+4. **Pure-Python marching cubes / NumPy** — far too slow for interactive rates.
+5. **Screen-space SDF raymarching** — avoid meshing, use a custom `gpu` draw handler. Blender's GPU API does not let you integrate cleanly with selection/depth or sculpt brushes.
 
-1. **`openvdb::tools::volumeToMesh` / `VolumeToMesh`** — adaptive dual-contouring-ish with adaptivity, optionally feature-preserving via a reference surface. Quality is good; the docs note the reference-surface path is ~15% slower than the plain path ([openvdb.org VolumeToMesh docs](https://www.openvdb.org/documentation/doxygen/VolumeToMesh_8h.html)). **This is what Blender's Voxel Remesher already calls internally.**
-2. **Blender's Volume-to-Mesh modifier / Voxel Remesh** — same underlying OpenVDB call, but exposed through Blender's DNA/modifier stack. Triggerable from Python by toggling the modifier or by issuing `bpy.ops.object.voxel_remesh()`. Adds operator-dispatch and depsgraph overhead per stroke.
-3. **Blender 5.0 "Grid to Mesh" Geometry Node** ([docs](https://docs.blender.org/manual/en/latest/modeling/geometry_nodes/volume/operations/grid_to_mesh.html)) — same underlying call again, accessible via a GN tree. Good for a v0 prototype because it keeps everything in Blender's eval graph.
-4. **Custom marching cubes / dual contouring in Python + NumPy** — far too slow for interactive rates on any useful grid.
-5. **Screen-space SDF raymarching directly** — avoid meshing entirely; draw the grid with a custom GPU shader. Blender's `gpu` module permits custom viewport draw handlers but does not let you intercept selection / depth composition properly, and you lose all of Blender's sculpt brush integration.
-
-**Performance reality check.** Community reports and the Blender manual's own warnings note that Voxel Remesh at small voxel sizes (<0.01) on ~1M-triangle inputs takes multiple seconds and can crash (see [blenderartists voxel remesh thread](https://blenderartists.org/t/openvdb-remesh/1102023), [3dx.info workflow guide](https://3dx.info/mastering-the-blender-sculpting-workflow-leveraging-voxel-remesh-and-dynamesh-for-cleaner-topology/)). **Uncertainty flag:** I did not find authoritative benchmarks specifically for re-meshing only the narrow band around a brush stamp, which is what 3DCoat does. 3DCoat's speed comes from (a) never remeshing globally between strokes and (b) doing local-only volumeToMesh in a small bounding box. Implementing the same pattern on top of Blender's whole-mesh replacement semantics is the principal performance challenge.
+**Performance reality check.** Voxel Remesh at small voxel sizes (<0.01) on ~1M-triangle inputs takes multiple seconds and can crash ([blenderartists remesh thread](https://blenderartists.org/t/openvdb-remesh/1102023); [3dx.info workflow guide](https://3dx.info/mastering-the-blender-sculpting-workflow-leveraging-voxel-remesh-and-dynamesh-for-cleaner-topology/)). **Uncertainty flag:** I found no authoritative benchmarks for meshing *only the narrow band around a brush stamp*, which is what 3DCoat does. 3DCoat's speed comes from never globally remeshing and doing local-bbox `volumeToMesh`. Replicating that on top of Blender's whole-mesh-replacement semantics is the principal performance problem.
 
 ---
 
@@ -83,14 +79,14 @@ Options, roughly in order of quality:
 
 Ranked by severity for an add-on-only approach:
 
-1. **No Python-level write access to `bpy.data.volumes[*]` grids.** The Volume datablock API is filepath-driven and read-only metadata only (Section 2). Every edit must round-trip through either a `.vdb` file on disk or a Geometry Nodes tree rebuild. Not interactive-rate.
-2. **No sculpt brush integration point for volumes.** Blender's Sculpt mode operates on `Mesh` (and SubD/multires), not on `Volume`. The brush system, stroke API, PBVH, and undo stack all assume mesh input. An add-on would have to re-implement brush strokes from modal operators and live with Blender's undo system not covering them natively.
-3. **Local meshing of a narrow band is not directly exposed.** Blender's Voxel Remesh always re-meshes the whole object. Without C++ access to `tools::volumeToMesh` on a user-provided bbox, per-stroke viewport meshing will be dominated by full-grid conversion cost (Section 5).
-4. **Bundled `openvdb` module does not share grids with Blender's internal Volume storage.** An add-on can use `openvdb` for its own computation, but pushing the result back into a `Volume` datablock requires the file-round-trip (Section 1). No public plan to fix this was found.
-5. **CPython + OpenVDB ABI churn.** Blender has bumped Python 3.10 → 3.11 within the 4.x cycle, and OpenVDB major versions change roughly yearly. Any compiled helper wheel must be re-cut per Blender release, across 4 platform targets, each time (Section 4).
-6. **Undo/Redo semantics for volumes.** Blender's global undo does not understand in-memory VDB edits made outside the depsgraph. Add-ons typically re-apply operators; a voxel sculpt add-on would need a custom undo ring buffer of grid diffs.
-7. **Viewport display of dynamic volumes.** `Volume` objects render correctly in EEVEE/Cycles as smoke/fog, but previewing them as solid SDF surfaces in Solid shading is not native — you either meshify (Section 5) or build a custom GPU draw handler (loses selection/occlusion).
-8. **Blender Extensions policy** forbids network installs of binary deps — everything must be in the wheel ([guidelines](https://developer.blender.org/docs/features/extensions/moderation/guidelines/)). Fine in theory, painful at the ~50 MB OpenVDB wheel-size tier × 4 platforms.
+1. **No Python write access to `bpy.data.volumes[*]` grids.** Volume datablocks are filepath-driven; `VolumeGrid` is read-only metadata (§2). Every edit must round-trip through a `.vdb` file or a GN tree rebuild. Not interactive-rate.
+2. **No sculpt brush integration point for volumes.** Sculpt mode targets `Mesh` (+ SubD/multires), not `Volume`. Brush system, stroke API, PBVH, and undo all assume mesh input. An add-on must reimplement strokes via modal operators and work around the undo stack.
+3. **Local narrow-band meshing not exposed.** Blender's Voxel Remesh re-meshes the whole object. Without C++ access to `tools::volumeToMesh` on a user bbox, per-stroke meshing is dominated by full-grid conversion (§5).
+4. **Bundled `openvdb` does not share grids with `Volume` storage** (§1). Pushing results back to a datablock requires a file round-trip.
+5. **CPython + OpenVDB ABI churn.** Python 3.10 → 3.11 inside the 4.x cycle; OpenVDB majors change ~yearly. Every Blender minor = rebuild across 4 platforms (§4).
+6. **Undo/Redo.** Global undo does not see in-memory VDB edits outside the depsgraph — needs a custom grid-diff ring buffer.
+7. **Viewport display.** `Volume` objects render fine in EEVEE/Cycles as fog, but previewing as a solid SDF surface in Solid shading is not native — either meshify (§5) or a custom `gpu` draw handler (loses selection/occlusion).
+8. **Extensions policy** forbids network-install binary deps — everything must ship in the wheel ([guidelines](https://developer.blender.org/docs/features/extensions/moderation/guidelines/)). ~50 MB × 4 platforms adds up.
 
 ---
 
