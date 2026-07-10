@@ -8,7 +8,11 @@ translucently over the surface, so island boundaries are instantly visible
 from seam topology, no Unwrap required. Since v1.2.0 the overlay is
 **crack-free**: faces are drawn exactly on the surface (shader depth
 bias) instead of being pushed apart along their normals, so no more
-gaps between adjacent faces.
+gaps between adjacent faces. Since v1.3.0 a second display mode
+visualizes **texel density as a checkerboard** mapped through the mesh's
+actual UVs — islands with mismatched density show visibly different
+checker scales on the surface, optionally tinted by how far each island
+deviates from the mesh's median density.
 
 *(No screenshots included — see the GUI checklist below to see it live in
 under a minute.)*
@@ -29,8 +33,10 @@ For development, symlink/copy the folder into your Blender
 
 1. Select a mesh object (Object or Edit Mode).
 2. Open the 3D viewport **sidebar** (press `N`) and pick the
-   **UV Islands** tab — it has the **UV Island Colors** checkbox, a
-   refresh button, and a live **island count**.
+   **UV Islands** tab — it has the **UV Island Overlay** checkbox, a
+   refresh button, a **Mode** dropdown (*Island Colors* / *Texel
+   Density*) and a live status readout (island count; in density mode
+   also the mesh's median density).
 3. The same controls also live at the bottom of the viewport header
    **Overlays popover** (the two-overlapping-circles icon), where
    overlay toggles conventionally go.
@@ -45,7 +51,9 @@ reshuffles existing ones.
 
 ## Island sources: Seams (predicted) vs UVs (actual)
 
-Both panels have a **Source** dropdown choosing how islands are defined:
+In **Island Colors** mode both panels have a **Source** dropdown
+choosing how islands are defined (the density mode always uses actual
+UVs and hides this dropdown):
 
 - **Seams (predicted)** — the default. Islands are connected face regions
   bounded by seam edges (boundary edges bound; non-manifold edges connect
@@ -116,6 +124,68 @@ traceback **once** to the system console (`Window > Toggle System
 Console` on Windows), and both panels show a *"Draw failed — see system
 console"* error row. Hitting **Refresh** clears the error and retries.
 
+## Texel-density checker mode (v1.3.0)
+
+Set **Mode** to **Texel Density** to replace the per-island colors with
+a checkerboard mapped through the mesh's **actual UVs**. Because the
+checker lives in UV space, its on-surface scale is a direct readout of
+texel density: islands that were unwrapped larger or smaller than their
+neighbors show bigger or smaller checkers, and a density change *within*
+an island (stretching) shows as a checker gradient. Islands in this mode
+always come from true UV connectivity (there are no UVs to measure on a
+seam prediction), so the **Source** dropdown applies to Island Colors
+mode only.
+
+**Units convention.** Texel density is the linear ratio
+`sqrt(UV area / 3D area)` — UV units per world unit, so an island whose
+UVs are scaled 2x reports exactly 2x the density. The panel multiplies
+it by the **Texture Size** property (assumed square texture edge,
+default 1024 px) to show the familiar **px/unit** figure. Per island the
+ratio is computed over *summed* areas (area-weighted, not a mean of
+per-face ratios); the panel shows the **median** across islands.
+
+Properties (in both panels, DENSITY mode only):
+
+- **Checker Size** — checkers per UV unit (default 32: on a 1024 px
+  texture each checker covers 32 px). It is a shader **push constant**
+  (probed on 5.1.2: `FLOAT` push constants work with
+  `GPUShaderCreateInfo`), so dragging it updates live — no geometry or
+  batch rebuild ever happens for this property.
+- **Texture Size** — only converts the median readout to px/unit;
+  changing it recomputes nothing.
+- **Deviation Tint** (default on) — multiplies the checker with a subtle
+  per-island tint by **log2 deviation from the median density**: blue
+  below the median, neutral at it, red above, saturating at ±2 octaves
+  (¼x / 4x). The checker tells you *where and in which direction* the
+  density jumps; the tint tells you *how bad* at a glance. The tint is
+  baked into the same per-vertex color attribute Island Colors mode
+  uses, so toggling it rebuilds once.
+
+**UV requirement.** Density needs a UV layer. Without one the panel
+shows *"Mesh has no UVs"* and nothing is drawn — that is a state, not an
+error (the *"Draw failed"* row is reserved for real failures).
+Degenerate faces are excluded from the statistics: a face with zero UV
+area or zero 3D area contributes to neither area sum, and an island with
+no valid face at all has *undefined* density — it is skipped by the
+median and rendered with the neutral tint (checker as-is, which for
+zero-area UVs degenerates to a flat shade).
+
+**Refreshing.** DENSITY mode uses the classic dirty → rebuild-at-next-
+draw path (the SEAM live debounce machinery is Island Colors-only).
+Probed on 5.1.2: UV edits *do* fire `is_updated_geometry` — direct
+`foreach_set` writes in Object Mode, edit-bmesh UV writes, and
+`uv.unwrap` alike — so re-unwrapping is picked up automatically; the
+**Refresh** button remains the escape hatch.
+
+**Performance** (302,500-face grid, Blender 5.1.2 headless): full
+DENSITY rebuild 2.4 s in Object Mode / 4.5 s in Edit Mode. Breakdown:
+UV-connectivity island computation 1.75 s (both modes); soup + UV
+extraction 0.35 s on the Object-Mode numpy `foreach_get` fast path vs
+2.6 s on the Edit-Mode bmesh loop-iteration fallback (the fallback is
+*required* in Edit Mode: while the edit bmesh owns the mesh, the Mesh
+`uv_layers` data arrays are empty — probed on 5.1.2); area + density
+statistics 0.10 s.
+
 ## How it draws (v1.2.0: crack-free depth-biased overlay)
 
 The overlay is a triangle soup whose vertex positions are **bit-identical
@@ -150,6 +220,17 @@ lives in module-level constants (`overlay.VERT_SHADER_SRC` /
 `FRAG_SHADER_SRC`) and compilation stays lazy at draw time, so a shader
 error surfaces through the loud *"Draw failed"* row, never silently.
 
+The DENSITY mode (v1.3.0) is a second shader built the same way
+(`overlay.DENSITY_VERT_SHADER_SRC` / `DENSITY_FRAG_SHADER_SRC`,
+compiled lazily behind the same latch, same depth-bias term): it adds a
+per-loop `vec2 uv` vertex attribute and a `float checker_res` push
+constant, and the fragment stage derives checker parity from
+`floor(uv * checker_res)`, mixing two mid-tone gray shades (0.35 /
+0.85 — distinguishable over both light and dark viewport themes at the
+overlay's 0.4 alpha) multiplied by the per-island deviation tint. The
+Island Colors shader and its attributes are untouched — the test suite
+pins that structurally.
+
 ## How islands are detected
 
 `islands.py` implements both sources, pure and bpy-free:
@@ -167,14 +248,17 @@ error surfaces through the loud *"Draw failed"* row, never silently.
   300k faces; the test suite asserts equivalence on several meshes
   including non-manifold ones.
 
-## Relationship to the texel-density checker overlay
+## Module layout
 
-This add-on's island computation (`islands.py`: `compute_islands`,
-`face_index_to_island`, stable color assignment) is the **shared
-foundation** for the planned texel-density checker overlay: that tool
-needs the same face→island partition to compute per-island UV-area /
-mesh-area ratios and tint islands by density instead of by id. Keep
-`islands.py` pure (no `bpy`/`gpu` imports) so both overlays can reuse it.
+- `islands.py` — pure island computation and color assignment (above).
+- `density.py` (v1.3.0) — pure texel-density math: triangle areas,
+  per-island `sqrt(UV area / 3D area)` densities with degenerate-face
+  exclusions, median, and the log2-deviation tint ramp. Like
+  `islands.py` it imports neither `bpy` nor `gpu` (the suite pins the
+  purity of both), so all of it is testable headless and reusable.
+- `live.py` — pure debounce state machine for the SEAM live refresh.
+- `overlay.py` — the bpy/gpu glue: geometry extraction, state, shaders,
+  draw callback.
 
 ## Limitations
 
@@ -206,6 +290,16 @@ mesh-area ratios and tint islands by density instead of by id. Keep
   after installing (see the checklist in the tests section notes).
 - Colors are distinct but unlabeled; with hundreds of islands, adjacent
   hues can get close (value is cycled to compensate).
+- **DENSITY mode**: needs a UV layer (panel hints, draws nothing
+  without one). Hidden faces are excluded from the drawn soup *and*
+  from the density statistics, matching what you see. Overlapping UVs
+  count their area once per face (overlaps are not detected), and the
+  density is measured against the base mesh in object space —
+  modifiers and object scale are not applied (matching what unwrapping
+  operates on; apply scale for world-true px/unit numbers). The
+  deviation tint compares islands *within* the active mesh only —
+  cross-object density matching needs the same texture-size convention
+  applied manually. Density readouts assume square textures.
 
 ## Tests
 
@@ -217,20 +311,32 @@ addons/uv_island_overlay/tests/run_tests.sh
 ```
 
 Blender exits 0 even when a `--python` script raises, so each test prints
-a sentinel (`ISLANDS_TESTS_PASSED`, `REGISTER_TESTS_PASSED`) and the
+a sentinel (`ISLANDS_TESTS_PASSED`, `DENSITY_TESTS_PASSED`,
+`REGISTER_TESTS_PASSED`) and the
 wrapper greps for them, printing `ALL_TESTS_PASSED` / `TESTS_FAILED` and
 setting the exit code. GPU shader/batch creation is impossible in
 `--background` (`gpu.shader.create_from_info` raises `SystemError` on
 5.1.2; building the `GPUShaderCreateInfo` *descriptor* works headless —
-probed), so all gpu work is deferred to draw time and exception-guarded;
-the register test verifies the draw callback no-ops gracefully
-headlessly, checks the GLSL constants structurally (MVP transform,
-w-scaled depth-bias term, color passthrough), and asserts the soup
-positions are bit-identical to the mesh's vertex coordinates on both
-build paths (the crack-free guarantee). The shader's actual compile/draw
+probed, for both shaders), so all gpu work is deferred to draw time and
+exception-guarded; the register test verifies the draw callback no-ops
+gracefully headlessly, checks the GLSL constants structurally (MVP
+transform, w-scaled depth-bias term, color passthrough; for the density
+shader also the UV attribute, the `floor(uv * checker_res)` checker
+parity and the `FLOAT` push constant), asserts the soup positions are
+bit-identical to the mesh's vertex coordinates (the crack-free
+guarantee), and pins that the Island Colors shader is untouched by the
+density mode. `test_density.py` covers the density math on constructed
+meshes with known ratios (a 2x-scaled-UV island must report *exactly*
+2x density), degenerate-face exclusions, the deviation tint's
+sign/clamp/neutral cases, no-UV behavior, and Object-Mode-numpy vs
+Edit-Mode-bmesh extraction equivalence; the register test additionally
+covers mode-switch invalidation, DENSITY depsgraph routing, and that a
+checker-size change never rebuilds. The shaders' actual compile/draw
 can only be confirmed in the GUI.
 
-### GUI checklist (v1.2.0 drawing — not coverable headless)
+### GUI checklist (drawing — not coverable headless)
+
+v1.2.0 (Island Colors mode):
 
 1. Enable the overlay on a curved mesh (e.g. a UV sphere or Suzanne with
    a few seams): the colored faces must be **seamlessly connected** — no
@@ -247,8 +353,31 @@ can only be confirmed in the GUI.
    *"Draw failed — see system console"* row instead of drawing nothing
    silently.
 
+v1.3.0 (Texel Density mode):
+
+7. On an unwrapped mesh, switch **Mode** to **Texel Density**: a
+   checkerboard must appear on the surface, **uniform in scale within
+   each island** (on an undistorted unwrap) and continuous across faces
+   of the same island.
+8. Scale one island's UVs up 2x in the UV editor (then hit Refresh if
+   it does not auto-update): its checkers must shrink to half size on
+   the surface — a visible scale jump against neighboring islands —
+   and, with **Deviation Tint** on, the island must warm toward red
+   (denser than median) while the others cool toward blue; toggling the
+   tint off must return all islands to the plain gray checker.
+9. Drag **Checker Size**: the checker must rescale live while dragging
+   (it is a uniform — no rebuild hitch), and the panel median readout
+   must NOT change (checker size does not affect density).
+10. On a mesh with no UV layer, DENSITY mode must draw nothing and show
+    *"Mesh has no UVs"* in the panel — no error row.
+11. Switch back to **Island Colors**: it must look exactly as it did
+    before v1.3.0 (same colors, same crack-free shell).
+12. Check both a light and a dark viewport theme: the two checker
+    shades must stay clearly distinguishable in each.
+
 ## Credits
 
-Inspired by island-visualization workflows found in specialized 3D tools
-such as 3DCoat. This project is independent and is not affiliated with or
+Inspired by island-visualization and texel-density-checker workflows
+found in specialized 3D tools such as 3DCoat (e.g. its retopo/UV
+rooms). This project is independent and is not affiliated with or
 endorsed by Pilgway.

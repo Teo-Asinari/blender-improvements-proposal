@@ -24,6 +24,21 @@ Island sources (v1.1.0):
   app-timer + cheap checksum, and use a vectorized numpy path over Mesh
   arrays (~5x faster than the bmesh path at 300k verts).
 
+Display modes (v1.3.0):
+- 'ISLANDS' — the classic per-island coloring above (unchanged: same
+  shader, same attributes, same build paths).
+- 'DENSITY' — texel-density checkerboard: the fragment stage computes
+  checker parity from the mesh's actual per-loop UVs (passed as a vec2
+  attribute), so islands with mismatched density show visibly different
+  checker scales on the surface. Islands come from TRUE UV connectivity
+  (density is a property of the actual unwrap — there are no UVs to
+  measure on a seam prediction), so the SEAM live pipeline does not
+  apply; geometry/UV updates ride the classic dirty -> rebuild-at-next-
+  draw path instead (UV edits DO fire is_updated_geometry — probed on
+  5.1.2 for foreach_set writes, edit-bmesh writes and uv.unwrap alike).
+  An optional per-island tint (blue below / red above the mesh's median
+  density) rides the same per-vertex color attribute ISLANDS mode uses.
+
 The SEAM live path deliberately never calls Object.update_from_editmode():
 probed on 5.1.2, that tags the depsgraph and would make the refresh loop
 self-triggering. Instead, edit-mode state is snapshotted with
@@ -81,6 +96,45 @@ void main()
 }
 """
 
+# --- DENSITY mode (v1.3.0) --------------------------------------------------
+# Checker shades, multiplied by the per-island tint in the fragment
+# stage. Mid-tone grays 0.5 apart: over a dark viewport theme the light
+# squares carry the contrast, over a light theme the dark ones do, and
+# at ALPHA 0.4 the two stay clearly distinguishable from each other in
+# both while the mesh still reads through.
+CHECKER_DARK = 0.35
+CHECKER_LIGHT = 0.85
+
+# Default checkers per UV unit (mirrors the WindowManager property so
+# the draw path has a fallback if reading the property ever fails). At
+# 32, each checker covers 32 px of a 1024 px texture.
+DEFAULT_CHECKER_SIZE = 32
+
+DENSITY_VERT_SHADER_SRC = """
+void main()
+{
+    gl_Position = ModelViewProjectionMatrix * vec4(pos, 1.0);
+    /* Same clip-space depth bias as the ISLANDS shader. */
+    gl_Position.z -= %r * gl_Position.w;
+    finalColor = color;
+    uvInterp = uv;
+}
+""" % CLIP_DEPTH_BIAS
+
+DENSITY_FRAG_SHADER_SRC = """
+void main()
+{
+    /* Checker parity from the interpolated UV: checker_res cells per
+     * UV unit. checker_res is a push constant (probed on 5.1.2: FLOAT
+     * push constants are supported), so resolution changes are a
+     * uniform update — no geometry or batch rebuild. */
+    vec2 cell = floor(uvInterp * checker_res);
+    float parity = mod(cell.x + cell.y, 2.0);
+    float shade = mix(%r, %r, parity);
+    fragColor = vec4(finalColor.rgb * shade, finalColor.a);
+}
+""" % (CHECKER_DARK, CHECKER_LIGHT)
+
 # Live SEAM-mode refresh: recompute only after this much quiet since the
 # last geometry update (a whole seam-marking burst costs ONE recompute),
 # polling the debounce at LIVE_POLL_S. Per depsgraph tick the cost is
@@ -103,11 +157,17 @@ class _State:
     dirty = True           # geometry/batch needs rebuilding at next draw
     object_name = None     # active mesh object being overlaid
     source = 'SEAM'        # 'UV' or 'SEAM' (synced from the WM enum)
+    mode = 'ISLANDS'       # 'ISLANDS' or 'DENSITY' (synced from WM enum)
     island_count = 0
     coords = None          # triangle-soup positions (object space)
     colors = None          # per-vertex RGBA, flat per face
+    uvs = None             # per-vertex UV soup (DENSITY mode only)
+    densities = None       # per-island density array (DENSITY mode only)
+    median_density = None  # unitless median density (DENSITY mode only)
+    no_uvs = False         # DENSITY mode on a mesh with no UV layer
     batch = None           # gpu batch (lazily built, viewport only)
     shader = None
+    density_shader = None  # checker shader (DENSITY mode, lazy like shader)
     seam_checksum = None   # checksum of the state the SEAM build used
     debounce = live.Debounce(LIVE_QUIET_S)
     # First draw-time error since the last enable/refresh, as a formatted
@@ -135,6 +195,23 @@ def active_source():
     return _state.source
 
 
+def active_mode():
+    return _state.mode
+
+
+def has_no_uvs():
+    """True when the last DENSITY-mode build found no UV layer on the
+    tracked mesh (a state the panel hints at — not an error)."""
+    return _state.no_uvs
+
+
+def median_density():
+    """Unitless median texel density (sqrt(UV area / 3D area)) of the
+    last DENSITY-mode build, or None (no build / no valid faces).
+    Multiply by an assumed texture edge in px to get px/unit."""
+    return _state.median_density
+
+
 def last_draw_error():
     return _state.last_draw_error
 
@@ -155,12 +232,45 @@ def set_source(source, context=None):
         refresh(context)
 
 
+def set_mode(mode, context=None):
+    """Switch the display mode ('ISLANDS'/'DENSITY'). Same contract as
+    set_source: no-op when unchanged, invalidates and rebuilds
+    immediately when the overlay is enabled."""
+    if mode == _state.mode:
+        return
+    _state.mode = mode
+    _state.seam_checksum = None
+    _state.debounce.reset()
+    if _state.enabled:
+        refresh(context)
+
+
+def on_checker_size_changed():
+    """Checker resolution changed: it is a push constant read at draw
+    time (probed on 5.1.2 — FLOAT push constants are supported), so no
+    rebuild of geometry or batch is needed; just repaint."""
+    if _state.enabled:
+        _tag_redraw_view3d()
+
+
+def on_density_tint_changed(context=None):
+    """Deviation-tint toggle changed: the tint is baked into the
+    per-vertex color attribute (same pipeline as ISLANDS colors), so
+    this needs a rebuild — but only in DENSITY mode."""
+    if _state.enabled and _state.mode == 'DENSITY':
+        refresh(context)
+
+
 def on_tracked_geometry_update():
     """Called by the depsgraph handler when the tracked object reports a
-    geometry update. UV mode keeps the classic behavior (dirty -> rebuild
-    at next draw). SEAM mode goes through the debounced live pipeline so
-    a burst of seam edits costs one recompute, after the burst."""
-    if _state.source == 'SEAM':
+    geometry update. UV source and DENSITY mode keep the classic
+    behavior (dirty -> rebuild at next draw; UV edits and re-unwraps DO
+    report is_updated_geometry — probed on 5.1.2). SEAM source in
+    ISLANDS mode goes through the debounced live pipeline so a burst of
+    seam edits costs one recompute, after the burst."""
+    if _state.mode != 'ISLANDS':
+        mark_dirty()
+    elif _state.source == 'SEAM':
         note_activity()
     else:
         mark_dirty()
@@ -370,6 +480,148 @@ def _build_bmesh(obj, force_seam=False):
 
 
 # ---------------------------------------------------------------------------
+# DENSITY-mode build (v1.3.0)
+# ---------------------------------------------------------------------------
+
+def _density_soup_arrays(me):
+    """Object-Mode fast path: (coords, uvs, tri_polygon) triangle soup
+    with per-corner UVs via Mesh.foreach_get + numpy. Measured on a
+    302,500-face grid (5.1.2): 0.37 s vs 2.9 s for the bmesh loop
+    iteration below. Edit Mode CANNOT use this path: while the edit
+    bmesh owns the mesh, the Mesh uv_layers data arrays are empty
+    (probed on 5.1.2 — foreach_get reports a needed length of 0), hence
+    the bmesh fallback."""
+    import numpy as np
+
+    uv_layer = me.uv_layers.active
+    uv = np.empty(len(me.loops) * 2, dtype=np.float32)
+    uv_layer.data.foreach_get("uv", uv)
+    uv = uv.reshape(-1, 2)
+    co = np.empty(len(me.vertices) * 3, dtype=np.float32)
+    me.vertices.foreach_get("co", co)
+    co = co.reshape(-1, 3)
+
+    if hasattr(me, "calc_loop_triangles"):
+        me.calc_loop_triangles()
+    tris = me.loop_triangles
+    n_tris = len(tris)
+    tv = np.empty(n_tris * 3, dtype=np.int32)
+    tris.foreach_get("vertices", tv)
+    tl = np.empty(n_tris * 3, dtype=np.int32)
+    tris.foreach_get("loops", tl)
+    tp = np.empty(n_tris, dtype=np.int32)
+    tris.foreach_get("polygon_index", tp)
+    hide = np.empty(len(me.polygons), dtype=bool)
+    me.polygons.foreach_get("hide", hide)
+
+    visible = ~hide[tp]
+    tv = tv.reshape(-1, 3)[visible]
+    tl = tl.reshape(-1, 3)[visible]
+    tp = tp[visible]
+
+    # Positions bit-identical to the mesh's (crack-free contract, same
+    # as the ISLANDS paths); UVs taken verbatim from the loops.
+    coords = np.ascontiguousarray(co[tv.ravel()], dtype=np.float32)
+    uvs = np.ascontiguousarray(uv[tl.ravel()], dtype=np.float32)
+    return coords, uvs, tp.astype(np.int64)
+
+
+def _density_soup_bmesh(bm, uv_layer):
+    """Edit-Mode fallback: the same (coords, uvs, tri_face) soup from
+    the edit bmesh via Python loop iteration (measured 2.9 s at 302k
+    faces — required in Edit Mode, see _density_soup_arrays)."""
+    import numpy as np
+
+    coords = []
+    uvs = []
+    tri_face = []
+    for tri in bm.calc_loop_triangles():
+        face = tri[0].face
+        if face.hide:
+            continue
+        tri_face.append(face.index)
+        for loop in tri:
+            co = loop.vert.co
+            coords.append((co.x, co.y, co.z))
+            u = loop[uv_layer].uv
+            uvs.append((u.x, u.y))
+    return (np.asarray(coords, dtype=np.float32).reshape(-1, 3),
+            np.asarray(uvs, dtype=np.float32).reshape(-1, 2),
+            np.asarray(tri_face, dtype=np.int64))
+
+
+def _build_density(obj):
+    """(coords, colors, uvs, island_count, densities, median, no_uvs)
+    for DENSITY mode.
+
+    Islands come from TRUE UV connectivity (islands.compute_islands) —
+    density is a property of the actual unwrap, so seam predictions do
+    not apply. Per-island densities/median via density.py (see there for
+    the sqrt(UV area / 3D area) convention and degenerate-face
+    exclusions). The optional deviation tint is baked into the same
+    per-vertex color attribute ISLANDS mode uses; with the tint off the
+    colors are all neutral. A mesh with no UV layer returns
+    no_uvs=True and empty geometry — a state, not an error (no latch).
+    Reads happen via bmesh in Edit Mode / Mesh arrays in Object Mode:
+    no datablock snapshot, so this build is safe inside a draw callback
+    (unlike the SEAM live path)."""
+    import bmesh
+    import numpy as np
+    from . import density as density_mod
+    from . import islands as islands_mod
+
+    if obj.mode == 'EDIT':
+        bm = bmesh.from_edit_mesh(obj.data)
+        owned = False
+    else:
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        owned = True
+    try:
+        uv_layer = bm.loops.layers.uv.active
+        if uv_layer is None:
+            return None, None, None, 0, None, None, True
+
+        bm.faces.ensure_lookup_table()
+        bm.faces.index_update()
+        isl = islands_mod.compute_islands(bm, uv_layer)
+        if not isl:
+            return [], [], [], 0, None, None, False
+        count = len(isl)
+        face_to_island = np.asarray(
+            islands_mod.face_index_to_island(isl), dtype=np.int64)
+
+        if obj.mode == 'EDIT':
+            coords, uvs, tri_face = _density_soup_bmesh(bm, uv_layer)
+        else:
+            coords, uvs, tri_face = _density_soup_arrays(obj.data)
+
+        tri_isl = face_to_island[tri_face]
+        area_3d = density_mod.triangle_areas_3d(coords.reshape(-1, 3, 3))
+        area_uv = density_mod.triangle_areas_uv(uvs.reshape(-1, 3, 2))
+        densities = density_mod.island_densities(
+            tri_isl, area_uv, area_3d, count)
+        median = density_mod.median_density(densities)
+
+        wm = getattr(bpy.context, "window_manager", None)
+        tint_on = bool(getattr(wm, "uv_island_overlay_density_tint", True))
+        if tint_on:
+            tints = density_mod.deviation_tints(densities, median,
+                                                alpha=ALPHA)
+        else:
+            tints = np.empty((count, 4))
+            tints[:, :3] = density_mod.TINT_NEUTRAL
+            tints[:, 3] = ALPHA
+        tints = np.ascontiguousarray(tints, dtype=np.float32)
+        colors = np.ascontiguousarray(np.repeat(tints[tri_isl], 3, axis=0),
+                                      dtype=np.float32)
+        return coords, colors, uvs, count, densities, median, False
+    finally:
+        if owned:
+            bm.free()
+
+
+# ---------------------------------------------------------------------------
 # Live SEAM-mode refresh (debounce is pure — live.py; this is the thin
 # bpy.app.timers driver plus the checksum gate)
 # ---------------------------------------------------------------------------
@@ -416,6 +668,7 @@ def _live_tick(now):
     the timer. Takes the clock as an argument so tests can drive it with
     fake time (app timers never fire in --background)."""
     if not _state.enabled or _state.source != 'SEAM' \
+            or _state.mode != 'ISLANDS' \
             or not _state.debounce.pending:
         _state.debounce.reset()
         return None
@@ -475,6 +728,9 @@ def enable(context):
     source = getattr(wm, "uv_island_overlay_source", None)
     if source in {'UV', 'SEAM'}:
         _state.source = source
+    mode = getattr(wm, "uv_island_overlay_mode", None)
+    if mode in {'ISLANDS', 'DENSITY'}:
+        _state.mode = mode
     refresh(context)
     if _state.handle is None:
         try:
@@ -505,6 +761,10 @@ def disable():
     _state.island_count = 0
     _state.coords = None
     _state.colors = None
+    _state.uvs = None
+    _state.densities = None
+    _state.median_density = None
+    _state.no_uvs = False
     _state.batch = None
     _state.last_draw_error = None
     _tag_redraw_view3d()
@@ -522,12 +782,22 @@ def refresh(context):
             _state.island_count = 0
             _state.coords = None
             _state.colors = None
+            _state.uvs = None
+            _state.densities = None
+            _state.median_density = None
+            _state.no_uvs = False
             _state.batch = None
             return False
         _state.object_name = obj.name
     _state.last_draw_error = None    # give drawing a fresh chance to log
     try:
-        coords, colors, count, checksum = _build(obj, _state.source)
+        if _state.mode == 'DENSITY':
+            coords, colors, uvs, count, densities, median, no_uvs = \
+                _build_density(obj)
+            checksum = None
+        else:
+            coords, colors, count, checksum = _build(obj, _state.source)
+            uvs, densities, median, no_uvs = None, None, None, False
     except Exception:
         # refresh() is user/handler triggered (never per-frame), so a
         # failure here can afford to be loud every time.
@@ -535,8 +805,13 @@ def refresh(context):
               % _state.object_name)
         traceback.print_exc()
         coords, colors, count, checksum = None, None, 0, None
+        uvs, densities, median, no_uvs = None, None, None, False
     _state.coords = coords
     _state.colors = colors
+    _state.uvs = uvs
+    _state.densities = densities
+    _state.median_density = median
+    _state.no_uvs = no_uvs
     _state.island_count = count
     _state.seam_checksum = checksum
     _state.batch = None      # rebuild from the new data at next draw
@@ -597,6 +872,35 @@ def _create_shader():
     return gpu.shader.create_from_info(_shader_create_info())
 
 
+def _density_shader_create_info():
+    """Create-info descriptor for the DENSITY checker shader (v1.3.0):
+    the ISLANDS descriptor plus a per-loop vec2 "uv" attribute and a
+    FLOAT "checker_res" push constant (probed on 5.1.2: FLOAT push
+    constants are accepted by GPUShaderCreateInfo, so checker-size
+    changes are a uniform update, never a rebuild). Builds headless,
+    same as _shader_create_info."""
+    iface = gpu.types.GPUStageInterfaceInfo("uv_island_density_iface")
+    iface.smooth('VEC4', "finalColor")
+    iface.smooth('VEC2', "uvInterp")
+    info = gpu.types.GPUShaderCreateInfo()
+    info.push_constant('MAT4', "ModelViewProjectionMatrix")
+    info.push_constant('FLOAT', "checker_res")
+    info.vertex_in(0, 'VEC3', "pos")
+    info.vertex_in(1, 'VEC4', "color")
+    info.vertex_in(2, 'VEC2', "uv")
+    info.vertex_out(iface)
+    info.fragment_out(0, 'VEC4', "fragColor")
+    info.vertex_source(DENSITY_VERT_SHADER_SRC)
+    info.fragment_source(DENSITY_FRAG_SHADER_SRC)
+    return info
+
+
+def _create_density_shader():
+    """Compile the DENSITY checker shader — GPU work, draw time only,
+    behind the error latch (same contract as _create_shader)."""
+    return gpu.shader.create_from_info(_density_shader_create_info())
+
+
 @contextmanager
 def _gpu_state_restored():
     """Save global gpu state, run the draw block, ALWAYS restore.
@@ -637,7 +941,17 @@ def _draw():
             return
 
         if _state.dirty:
-            if _state.source == 'SEAM':
+            if _state.mode == 'DENSITY':
+                # DENSITY reads via bmesh (Edit Mode) or Mesh arrays
+                # (Object Mode) — no datablock snapshot, so rebuilding
+                # here is as safe as the UV path below.
+                (_state.coords, _state.colors, _state.uvs,
+                 _state.island_count, _state.densities,
+                 _state.median_density, _state.no_uvs) = \
+                    _build_density(obj)
+                _state.batch = None
+                _state.dirty = False
+            elif _state.source == 'SEAM':
                 # SEAM rebuilds snapshot into a datablock, which must not
                 # happen inside a draw callback — hand off to the live
                 # timer (main loop) and keep drawing the cached batch.
@@ -652,23 +966,40 @@ def _draw():
                 _state.dirty = False
 
         # NOTE: explicit None/len test — coords may be a numpy array,
-        # whose truth value is ambiguous.
+        # whose truth value is ambiguous. A DENSITY-mode mesh with no
+        # UV layer lands here too (coords is None): draw nothing, no
+        # error latch — the panel shows the "Mesh has no UVs" hint.
         if _state.coords is None or len(_state.coords) == 0:
             return
 
-        if _state.shader is None:
-            # Custom depth-bias shader (v1.2.0): geometry sits exactly ON
-            # the surface, the vertex shader pulls it toward the viewer in
-            # clip space (see CLIP_DEPTH_BIAS). Compiled lazily here so a
-            # failure (headless SystemError, or a GLSL error in the GUI)
-            # lands in the outer guard's loud latch.
-            _state.shader = _create_shader()
+        if _state.mode == 'DENSITY':
+            if _state.density_shader is None:
+                # Same lazy-compile-behind-the-latch contract as the
+                # ISLANDS shader below.
+                _state.density_shader = _create_density_shader()
+            shader = _state.density_shader
+        else:
+            if _state.shader is None:
+                # Custom depth-bias shader (v1.2.0): geometry sits
+                # exactly ON the surface, the vertex shader pulls it
+                # toward the viewer in clip space (see CLIP_DEPTH_BIAS).
+                # Compiled lazily here so a failure (headless
+                # SystemError, or a GLSL error in the GUI) lands in the
+                # outer guard's loud latch.
+                _state.shader = _create_shader()
+            shader = _state.shader
 
         if _state.batch is None:
             from gpu_extras.batch import batch_for_shader
-            _state.batch = batch_for_shader(
-                _state.shader, 'TRIS',
-                {"pos": _state.coords, "color": _state.colors})
+            if _state.mode == 'DENSITY':
+                _state.batch = batch_for_shader(
+                    shader, 'TRIS',
+                    {"pos": _state.coords, "color": _state.colors,
+                     "uv": _state.uvs})
+            else:
+                _state.batch = batch_for_shader(
+                    shader, 'TRIS',
+                    {"pos": _state.coords, "color": _state.colors})
 
         # All state mutations live inside the guard: the priors are
         # captured first and restored in its finally-clause, so even an
@@ -680,7 +1011,7 @@ def _draw():
             gpu.state.face_culling_set('NONE')
             with gpu.matrix.push_pop():
                 gpu.matrix.multiply_matrix(obj.matrix_world)
-                _state.shader.bind()
+                shader.bind()
                 # Explicit MVP from gpu.matrix state (projection @
                 # view @ object world, thanks to the multiply above).
                 # The push-constant name also matches Blender's builtin
@@ -689,9 +1020,18 @@ def _draw():
                 # that implicit behavior.
                 mvp = (gpu.matrix.get_projection_matrix()
                        @ gpu.matrix.get_model_view_matrix())
-                _state.shader.uniform_float(
+                shader.uniform_float(
                     "ModelViewProjectionMatrix", mvp)
-                _state.batch.draw(_state.shader)
+                if _state.mode == 'DENSITY':
+                    # Checker resolution: read fresh from the property
+                    # every draw — it is a push constant, so changing
+                    # it needs nothing but a redraw.
+                    wm = bpy.context.window_manager
+                    res = float(getattr(wm,
+                                        "uv_island_overlay_checker_size",
+                                        DEFAULT_CHECKER_SIZE))
+                    shader.uniform_float("checker_res", res)
+                _state.batch.draw(shader)
     except Exception:
         # Never let a draw-time error take down the viewport callback —
         # but never hide it either: latch it, print the traceback ONCE,

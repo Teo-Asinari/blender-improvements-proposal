@@ -105,10 +105,13 @@ def main():
     import uv_island_overlay
     from uv_island_overlay import overlay, islands  # noqa: F401
 
-    # Purity check: islands.py source must not import bpy or gpu.
+    # Purity check: islands.py / density.py must not import bpy or gpu.
     src = open(os.path.join(_ADDON_DIR, "islands.py")).read()
     check("islands.py imports neither bpy nor gpu",
           "import bpy" not in src and "import gpu" not in src)
+    src_d = open(os.path.join(_ADDON_DIR, "density.py")).read()
+    check("density.py imports neither bpy nor gpu",
+          "import bpy" not in src_d and "import gpu" not in src_d)
 
     # --- register -----------------------------------------------------------
     uv_island_overlay.register()
@@ -552,6 +555,211 @@ def main():
           all(c in vert_set for c in soup))
     wm.uv_island_overlay_source = 'SEAM'
     wm.uv_island_overlay = False
+
+    # --- v1.3.0: texel-density checkerboard mode --------------------------------
+
+    check("version bumped for the density mode",
+          uv_island_overlay.bl_info.get("version", (0,))[:3] >= (1, 3, 0))
+    mode_prop = wm.bl_rna.properties.get("uv_island_overlay_mode")
+    check("display-mode enum registered with ISLANDS+DENSITY items",
+          mode_prop is not None
+          and {i.identifier for i in mode_prop.enum_items}
+          == {'ISLANDS', 'DENSITY'})
+    check("display-mode default is ISLANDS (classic mode unchanged)",
+          mode_prop is not None and mode_prop.default == 'ISLANDS')
+    cs_prop = wm.bl_rna.properties.get("uv_island_overlay_checker_size")
+    check("checker-size property registered, power-of-two default 32 "
+          "(32 px checkers on a 1024 px texture)",
+          cs_prop is not None and cs_prop.default == 32)
+    ts_prop = wm.bl_rna.properties.get("uv_island_overlay_texture_size")
+    check("texture-size property registered, default 1024",
+          ts_prop is not None and ts_prop.default == 1024)
+    tint_prop = wm.bl_rna.properties.get("uv_island_overlay_density_tint")
+    check("deviation-tint bool registered, default on",
+          tint_prop is not None and tint_prop.default is True)
+
+    # ISLANDS-mode shader must be untouched by the new mode: no UV
+    # attribute, no checker uniform anywhere near it (its own structural
+    # checks above pin the rest).
+    check("ISLANDS shader sources untouched (no uv/checker terms)",
+          "uvInterp" not in vs and "checker" not in vs
+          and "uvInterp" not in fs and "checker" not in fs)
+    check("ISLANDS create-info declares no VEC2 attribute",
+          "'VEC2'" not in ci_src)
+
+    # Density shader: structural checks (compiling is impossible
+    # headless, same as the ISLANDS shader).
+    dvs = getattr(overlay, "DENSITY_VERT_SHADER_SRC", None)
+    dfs = getattr(overlay, "DENSITY_FRAG_SHADER_SRC", None)
+    check("density shader sources are nonempty module-level strings",
+          isinstance(dvs, str) and dvs.strip()
+          and isinstance(dfs, str) and dfs.strip())
+    check("density vertex shader keeps the MVP transform",
+          dvs is not None and "ModelViewProjectionMatrix" in dvs
+          and "gl_Position" in dvs)
+    check("density vertex shader keeps the w-scaled depth-bias term",
+          dvs is not None and "gl_Position.z -=" in dvs
+          and "* gl_Position.w" in dvs
+          and ("%r" % overlay.CLIP_DEPTH_BIAS) in dvs)
+    check("density vertex shader passes UV and tint color through",
+          dvs is not None and "uvInterp = uv" in dvs
+          and "finalColor = color" in dvs)
+    check("density fragment shader computes checker parity from "
+          "floor(uv * checker_res)",
+          dfs is not None and "floor(uvInterp * checker_res)" in dfs
+          and "mod(" in dfs)
+    check("density fragment shader multiplies the per-island tint",
+          dfs is not None and "finalColor.rgb" in dfs
+          and "finalColor.a" in dfs)
+    check("checker shades distinct and mid-toned (readable over light "
+          "and dark viewport themes)",
+          0.0 < overlay.CHECKER_DARK < overlay.CHECKER_LIGHT <= 1.0
+          and overlay.CHECKER_LIGHT - overlay.CHECKER_DARK >= 0.3)
+
+    try:
+        dinfo = overlay._density_shader_create_info()
+        dinfo_ok = dinfo is not None
+    except Exception:
+        dinfo_ok = False
+    check("density create-info descriptor builds headless", dinfo_ok)
+    dci_src = inspect.getsource(overlay._density_shader_create_info)
+    check("density create-info declares pos + color + uv attributes",
+          "'VEC3', \"pos\"" in dci_src and "'VEC4', \"color\"" in dci_src
+          and "'VEC2', \"uv\"" in dci_src)
+    check("probe: FLOAT push constant accepted on 5.1.2 -> checker_res "
+          "is a uniform (changes never rebuild)",
+          dinfo_ok and "push_constant('FLOAT', \"checker_res\")" in dci_src)
+    try:
+        overlay._create_density_shader()
+        d_compiled = True
+    except SystemError:
+        d_compiled = False
+    check("density shader compilation impossible headless (stays lazy, "
+          "draw-time, latch-guarded)", not d_compiled)
+
+    # Behavior: two disjoint quads, quad B's UVs exactly 2x quad A's.
+    dme = bpy.data.meshes.new("DensityMesh")
+    dme.from_pydata(
+        [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0),
+         (2, 0, 0), (3, 0, 0), (3, 1, 0), (2, 1, 0)],
+        [], [(0, 1, 2, 3), (4, 5, 6, 7)])
+    dme.update()
+    dlayer = dme.uv_layers.new(name="UVMap")
+    dlayer.data.foreach_set(
+        "uv", [c for uv in
+               [(0.0, 0.0), (0.25, 0.0), (0.25, 0.25), (0.0, 0.25),
+                (0.5, 0.5), (1.0, 0.5), (1.0, 1.0), (0.5, 1.0)]
+               for c in uv])
+    dobj = bpy.data.objects.new("DensityMesh", dme)
+    bpy.context.collection.objects.link(dobj)
+    bpy.context.view_layer.objects.active = dobj
+    dobj.select_set(True)
+
+    wm.uv_island_overlay_mode = 'ISLANDS'
+    wm.uv_island_overlay_source = 'UV'
+    wm.uv_island_overlay = True
+    check("enabled in ISLANDS mode on the density mesh (2 islands)",
+          overlay.is_enabled() and overlay.active_mode() == 'ISLANDS'
+          and overlay.island_count() == 2)
+    check("ISLANDS mode carries no uv soup and no density stats",
+          overlay._state.uvs is None and overlay.median_density() is None
+          and not overlay.has_no_uvs())
+    coords_islands = overlay._state.coords
+
+    # Mode switch invalidates + rebuilds, exactly like the source switch.
+    wm.uv_island_overlay_mode = 'DENSITY'
+    check("mode switch to DENSITY invalidates and rebuilds",
+          overlay.active_mode() == 'DENSITY'
+          and overlay._state.coords is not coords_islands)
+    check("DENSITY build produced a UV soup matching the position soup",
+          overlay._state.uvs is not None
+          and len(overlay._state.uvs) == len(overlay._state.coords))
+    dens = overlay._state.densities
+    check("2x-scaled-UV island reports exactly 2x density via the "
+          "full pipeline",
+          dens is not None and len(dens) == 2
+          and dens[1] == 2.0 * dens[0], "got %r" % (dens,))
+    check("median density exposed for the panel (0.375 -> 384 px/unit "
+          "at 1024)", overlay.median_density() == 0.375,
+          "got %r" % overlay.median_density())
+
+    # Checker size is a push-constant uniform read at draw time: a
+    # change must NOT invalidate or rebuild anything.
+    coords_before_cs = overlay._state.coords
+    wm.uv_island_overlay_checker_size = 64
+    check("checker-size change is uniform-only: no dirty flag, no "
+          "rebuild (probe result: FLOAT push constants supported)",
+          overlay._state.coords is coords_before_cs
+          and not overlay._state.dirty)
+    wm.uv_island_overlay_checker_size = 32
+
+    # Deviation-tint toggle rebuilds the baked color attribute.
+    cols_before = overlay._state.colors
+    wm.uv_island_overlay_density_tint = False
+    ncols = np.asarray(overlay._state.colors)
+    check("tint off rebuilds with all-neutral colors",
+          overlay._state.colors is not cols_before
+          and np.all(ncols[:, :3] == np.float32(1.0)))
+    wm.uv_island_overlay_density_tint = True
+    check("tint back on restores per-island deviation tints",
+          not np.all(np.asarray(overlay._state.colors)[:, :3]
+                     == np.float32(1.0)))
+
+    # Depsgraph routing: in DENSITY mode geometry/UV updates take the
+    # classic dirty -> rebuild-at-next-draw path, never the SEAM
+    # debounce. A pure UV edit must be caught (probed on 5.1.2:
+    # foreach_set UV writes report is_updated_geometry).
+    overlay._state.debounce.reset()
+    uvbuf = [0.0] * (len(dme.loops) * 2)
+    dlayer.data.foreach_get("uv", uvbuf)
+    dlayer.data.foreach_set("uv", [v * 2.0 for v in uvbuf])
+    dme.update_tag()
+    bpy.context.view_layer.update()
+    check("UV edit routed to the dirty/draw path in DENSITY mode",
+          overlay._state.dirty and not overlay._state.debounce.pending)
+    dens_before = overlay._state.densities
+    overlay._draw()
+    check("draw-time DENSITY rebuild consumed the dirty flag and saw "
+          "the new UVs (densities doubled)",
+          not overlay._state.dirty
+          and overlay._state.densities is not dens_before
+          and overlay._state.densities[0] == 2.0 * dens_before[0])
+    check("headless draw latched the gpu failure loudly (as in UV mode)",
+          overlay.last_draw_error() is not None)
+    result = bpy.ops.uv.island_overlay_refresh()
+    check("refresh clears the latch in DENSITY mode",
+          result == {'FINISHED'} and overlay.last_draw_error() is None)
+    wm.uv_island_overlay = False
+
+    # No-UV mesh: a hint state, not an error (no latch, nothing drawn).
+    nme = bpy.data.meshes.new("NoUVMesh")
+    nme.from_pydata([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)],
+                    [], [(0, 1, 2, 3)])
+    nme.update()
+    nobj = bpy.data.objects.new("NoUVMesh", nme)
+    bpy.context.collection.objects.link(nobj)
+    bpy.context.view_layer.objects.active = nobj
+    nobj.select_set(True)
+    wm.uv_island_overlay = True
+    check("DENSITY on a UV-less mesh: enabled but flagged no-UVs, "
+          "0 islands", overlay.is_enabled() and overlay.has_no_uvs()
+          and overlay.active_mode() == 'DENSITY'
+          and overlay.island_count() == 0)
+    check("no-UV mesh has no geometry and NO error latched",
+          overlay._state.coords is None
+          and overlay.last_draw_error() is None)
+    overlay._draw()
+    check("draw with no UVs no-ops without touching the error latch",
+          overlay.last_draw_error() is None)
+    wm.uv_island_overlay_mode = 'ISLANDS'
+    check("switching back to ISLANDS on the UV-less mesh rebuilds "
+          "(UV-source falls back to seams)",
+          overlay.active_mode() == 'ISLANDS' and not overlay.has_no_uvs()
+          and overlay.island_count() == 1
+          and overlay._state.coords is not None
+          and len(overlay._state.coords) > 0)
+    wm.uv_island_overlay = False
+    wm.uv_island_overlay_source = 'SEAM'
 
     # --- unregister -----------------------------------------------------------------
     uv_island_overlay.unregister()

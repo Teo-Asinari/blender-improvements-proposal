@@ -1,33 +1,37 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""UV Island Overlay — per-island UV coloring in the 3D viewport.
+"""UV Island Overlay — per-island UV coloring and texel-density
+checkerboard in the 3D viewport.
 
-Each UV island's faces are tinted with a distinct color drawn over the
-mesh in the 3D viewport, so island boundaries are instantly visible —
-most useful in Edit Mode right after unwrapping.
+Two display modes: each UV island's faces tinted with a distinct color
+(island boundaries at a glance), or a checkerboard mapped through the
+mesh's actual UVs (texel-density mismatches show as different checker
+scales on the surface).
 """
 
 bl_info = {
     "name": "UV Island Overlay",
     "author": "Teo Asinari",
-    "version": (1, 2, 0),
+    "version": (1, 3, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N) > UV Islands tab; also in the "
                 "Overlays popover",
-    "description": "Color each UV island distinctly in the 3D viewport "
-                   "with live seam-predicted islands",
+    "description": "Color each UV island distinctly or visualize texel "
+                   "density as a UV checkerboard in the 3D viewport",
     "category": "UV",
 }
 
 import bpy
 from bpy.app.handlers import persistent
-from bpy.props import BoolProperty, EnumProperty
+from bpy.props import BoolProperty, EnumProperty, IntProperty
 
 if "overlay" in locals():
     import importlib
+    density = importlib.reload(density)
     islands = importlib.reload(islands)
     live = importlib.reload(live)
     overlay = importlib.reload(overlay)
 else:
+    from . import density
     from . import islands
     from . import live
     from . import overlay
@@ -96,37 +100,68 @@ class UV_OT_island_overlay_refresh(bpy.types.Operator):
 # ---------------------------------------------------------------------------
 
 def _draw_overlay_controls(layout, context):
-    """Shared body: checkbox + island source + refresh button + island
-    count + a loud error row if the draw handler ever failed (see
-    overlay._draw)."""
+    """Shared body: checkbox + display mode + per-mode settings +
+    refresh button + status labels + a loud error row if the draw
+    handler ever failed (see overlay._draw)."""
     obj = context.active_object
     have_mesh = obj is not None and obj.type == 'MESH'
+    wm = context.window_manager
+    interactive = have_mesh or overlay.is_enabled()
     col = layout.column()
     row = col.row(align=True)
-    row.enabled = have_mesh or overlay.is_enabled()
-    row.prop(context.window_manager, "uv_island_overlay",
-             text="UV Island Colors")
+    row.enabled = interactive
+    row.prop(wm, "uv_island_overlay", text="UV Island Overlay")
     sub = row.row(align=True)
     sub.enabled = overlay.is_enabled()
     sub.operator(UV_OT_island_overlay_refresh.bl_idname,
                  text="", icon='FILE_REFRESH')
-    # Island source as a dropdown (full item label stays readable in the
-    # narrow Overlays popover, unlike an expanded two-button row).
-    src_row = col.row(align=True)
-    src_row.enabled = have_mesh or overlay.is_enabled()
-    src_row.prop(context.window_manager, "uv_island_overlay_source",
-                 text="Source")
+    # Display mode + island source as dropdowns (full item labels stay
+    # readable in the narrow Overlays popover, unlike expanded rows).
+    mode_row = col.row(align=True)
+    mode_row.enabled = interactive
+    mode_row.prop(wm, "uv_island_overlay_mode", text="Mode")
+    if wm.uv_island_overlay_mode == 'ISLANDS':
+        src_row = col.row(align=True)
+        src_row.enabled = interactive
+        src_row.prop(wm, "uv_island_overlay_source", text="Source")
+    else:
+        den = col.column(align=True)
+        den.enabled = interactive
+        den.prop(wm, "uv_island_overlay_checker_size")
+        den.prop(wm, "uv_island_overlay_texture_size")
+        tint_row = col.row(align=True)
+        tint_row.enabled = interactive
+        tint_row.prop(wm, "uv_island_overlay_density_tint")
     if overlay.is_enabled():
-        col.label(text="%d island%s (%s)"
-                  % (overlay.island_count(),
-                     "" if overlay.island_count() == 1 else "s",
-                     "predicted" if overlay.active_source() == 'SEAM'
-                     else "actual"))
+        if overlay.active_mode() == 'DENSITY':
+            if overlay.has_no_uvs():
+                # A state, not an error: DENSITY needs a UV layer.
+                col.label(text="Mesh has no UVs", icon='INFO')
+            else:
+                col.label(text="%d island%s (actual UVs)"
+                          % (overlay.island_count(),
+                             "" if overlay.island_count() == 1 else "s"))
+                med = overlay.median_density()
+                if med is not None:
+                    tex = wm.uv_island_overlay_texture_size
+                    col.label(text="Median: %.1f px/unit @ %d px"
+                              % (med * tex, tex))
+                else:
+                    col.label(text="Median: undefined (degenerate UVs)")
+        else:
+            col.label(text="%d island%s (%s)"
+                      % (overlay.island_count(),
+                         "" if overlay.island_count() == 1 else "s",
+                         "predicted" if overlay.active_source() == 'SEAM'
+                         else "actual"))
         if overlay.last_draw_error() is not None:
             col.label(text="Draw failed - see system console",
                       icon='ERROR')
     elif not have_mesh:
         col.label(text="Select a mesh object", icon='INFO')
+    elif wm.uv_island_overlay_mode == 'DENSITY' \
+            and not getattr(obj.data, "uv_layers", None):
+        col.label(text="Mesh has no UVs", icon='INFO')
 
 
 def _overlay_popover_draw(self, context):
@@ -144,7 +179,7 @@ class VIEW3D_PT_uv_island_overlay(bpy.types.Panel):
     """Sidebar home for the overlay controls (always visible, so the
     feature is discoverable without knowing about the Overlays popover)"""
     bl_idname = "VIEW3D_PT_uv_island_overlay"
-    bl_label = "UV Island Colors"
+    bl_label = "UV Islands"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = "UV Islands"
@@ -183,15 +218,36 @@ def _on_source_update(self, context):
     overlay.set_source(self.uv_island_overlay_source, context)
 
 
+def _on_mode_update(self, context):
+    """Display mode changed: invalidate and rebuild, exactly like the
+    source switch (overlay.set_mode is a no-op when unchanged)."""
+    overlay.set_mode(self.uv_island_overlay_mode, context)
+
+
+def _on_checker_size_update(self, context):
+    """Checker resolution is a shader push constant read at draw time
+    (probed on 5.1.2: FLOAT push constants are supported), so a change
+    only needs a repaint — never a rebuild."""
+    overlay.on_checker_size_changed()
+
+
+def _on_density_tint_update(self, context):
+    """The deviation tint is baked into the per-vertex color attribute,
+    so toggling it rebuilds (DENSITY mode only; no-op otherwise)."""
+    overlay.on_density_tint_changed(context)
+
+
 @persistent
 def _on_depsgraph_update(scene, depsgraph):
     """Cheap auto-refresh: when the overlaid object's geometry changes
     (mesh edits, seam marking, mode switches), notify the overlay. In UV
-    mode that marks it dirty (recompute once at the next draw — never per
-    frame); in SEAM mode it feeds the debounced live pipeline (O(1) here;
-    checksum + rebuild happen after a quiet period, off the hot path).
-    Probed on 5.1.2: seam-flag-only edits DO report is_updated_geometry,
-    selection-only changes do NOT — exactly the filter we want."""
+    source and DENSITY mode that marks it dirty (recompute once at the
+    next draw — never per frame); in SEAM source it feeds the debounced
+    live pipeline (O(1) here; checksum + rebuild happen after a quiet
+    period, off the hot path). Probed on 5.1.2: seam-flag-only edits AND
+    UV edits (foreach_set, edit-bmesh writes, uv.unwrap) DO report
+    is_updated_geometry, selection-only changes do NOT — exactly the
+    filter we want, and it means DENSITY mode catches re-unwraps."""
     if not overlay.is_enabled():
         return
     name = overlay.tracked_object_name()
@@ -281,6 +337,50 @@ def register():
         update=_on_source_update,
     )
 
+    # Default 'ISLANDS': the classic colored mode, unchanged from
+    # earlier versions. 'DENSITY' visualizes texel density instead.
+    bpy.types.WindowManager.uv_island_overlay_mode = EnumProperty(
+        name="Display Mode",
+        description="What the overlay visualizes",
+        items=(
+            ('ISLANDS', "Island Colors",
+             "Tint each UV island with a distinct color — island "
+             "boundaries at a glance"),
+            ('DENSITY', "Texel Density",
+             "Checkerboard mapped through the mesh's actual UVs — "
+             "islands with mismatched texel density show different "
+             "checker scales on the surface, tinted blue/red below/"
+             "above the mesh's median density (needs a UV layer)"),
+        ),
+        default='ISLANDS',
+        update=_on_mode_update,
+    )
+
+    bpy.types.WindowManager.uv_island_overlay_checker_size = IntProperty(
+        name="Checker Size",
+        description="Checkerboard resolution in checkers per UV unit: "
+                    "at 32, each checker covers 32 px of a 1024 px "
+                    "texture. Applied live (shader uniform, no rebuild)",
+        default=32, min=1, soft_max=512,
+        update=_on_checker_size_update,
+    )
+
+    bpy.types.WindowManager.uv_island_overlay_texture_size = IntProperty(
+        name="Texture Size",
+        description="Assumed square texture edge in pixels, used only "
+                    "to express the median density in px/unit",
+        default=1024, min=1, soft_max=16384,
+    )
+
+    bpy.types.WindowManager.uv_island_overlay_density_tint = BoolProperty(
+        name="Deviation Tint",
+        description="Tint the checker per island by log2 deviation from "
+                    "the mesh's median density: blue below the median, "
+                    "neutral at it, red above (clamped at +/-2 octaves)",
+        default=True,
+        update=_on_density_tint_update,
+    )
+
     if hasattr(bpy.types, "VIEW3D_PT_overlay"):
         bpy.types.VIEW3D_PT_overlay.append(_overlay_popover_draw)
     for menu_name in _MENUS:
@@ -315,6 +415,10 @@ def unregister():
         except Exception:
             pass
 
+    del bpy.types.WindowManager.uv_island_overlay_density_tint
+    del bpy.types.WindowManager.uv_island_overlay_texture_size
+    del bpy.types.WindowManager.uv_island_overlay_checker_size
+    del bpy.types.WindowManager.uv_island_overlay_mode
     del bpy.types.WindowManager.uv_island_overlay_source
     del bpy.types.WindowManager.uv_island_overlay
 
