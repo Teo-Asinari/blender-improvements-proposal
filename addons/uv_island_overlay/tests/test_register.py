@@ -1,0 +1,389 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+"""Headless registration + operator lifecycle test (run inside
+`blender --background --python`).
+
+Loads the add-on from source, registers it, toggles the overlay on a real
+mesh (gpu drawing must no-op gracefully in background), refreshes,
+toggles off, unregisters cleanly and survives a re-register cycle.
+
+Prints REGISTER_TESTS_PASSED on success.
+"""
+
+import os
+import sys
+import traceback
+
+import bpy
+
+_ADDON_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_ADDONS_ROOT = os.path.dirname(_ADDON_DIR)
+if _ADDONS_ROOT not in sys.path:
+    sys.path.insert(0, _ADDONS_ROOT)
+
+FAILURES = []
+
+
+def check(name, cond, detail=""):
+    if cond:
+        print("  ok  %s" % name)
+    else:
+        print("  FAIL %s  %s" % (name, detail))
+        FAILURES.append(name)
+
+
+def main():
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+
+    import uv_island_overlay
+    from uv_island_overlay import overlay, islands  # noqa: F401
+
+    # Purity check: islands.py source must not import bpy or gpu.
+    src = open(os.path.join(_ADDON_DIR, "islands.py")).read()
+    check("islands.py imports neither bpy nor gpu",
+          "import bpy" not in src and "import gpu" not in src)
+
+    # --- register -----------------------------------------------------------
+    uv_island_overlay.register()
+    check("bl_info present",
+          isinstance(uv_island_overlay.bl_info, dict)
+          and uv_island_overlay.bl_info.get("name") == "UV Island Overlay")
+    check("operator uv.island_overlay_toggle registered",
+          hasattr(bpy.ops.uv, "island_overlay_toggle")
+          and bpy.ops.uv.island_overlay_toggle.idname_py()
+          == "uv.island_overlay_toggle")
+    check("operator uv.island_overlay_refresh registered",
+          hasattr(bpy.ops.uv, "island_overlay_refresh"))
+    check("WindowManager property registered",
+          hasattr(bpy.context.window_manager, "uv_island_overlay"))
+    src_prop = bpy.context.window_manager.bl_rna.properties.get(
+        "uv_island_overlay_source")
+    check("island-source enum registered with SEAM+UV items",
+          src_prop is not None
+          and {i.identifier for i in src_prop.enum_items} == {'SEAM', 'UV'})
+    check("island-source default is SEAM (primary workflow: seam marking)",
+          src_prop is not None and src_prop.default == 'SEAM')
+    check("Overlays popover panel exists on this Blender (5.1 probe)",
+          hasattr(bpy.types, "VIEW3D_PT_overlay"))
+    check("depsgraph handler installed",
+          any(h.__name__ == "_on_depsgraph_update"
+              for h in bpy.app.handlers.depsgraph_update_post))
+
+    # --- build a mesh with 2 islands -----------------------------------------
+    bpy.ops.mesh.primitive_grid_add(x_subdivisions=4, y_subdivisions=4,
+                                    size=2.0)
+    obj = bpy.context.active_object
+    bpy.ops.object.mode_set(mode='EDIT')
+    import bmesh
+    bm = bmesh.from_edit_mesh(obj.data)
+    for e in bm.edges:
+        if all(abs(v.co.x) < 1e-6 for v in e.verts):
+            e.seam = True
+    bmesh.update_edit_mesh(obj.data)
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.uv.unwrap(method='ANGLE_BASED', margin=0.02)
+
+    # --- toggle ON in edit mode (primary use case) ----------------------------
+    check("toggle poll passes", bpy.ops.uv.island_overlay_toggle.poll())
+    result = bpy.ops.uv.island_overlay_toggle()
+    check("toggle-on returned FINISHED", result == {'FINISHED'},
+          "got %r" % (result,))
+    check("overlay reports enabled", overlay.is_enabled())
+    check("property flipped true",
+          bpy.context.window_manager.uv_island_overlay is True)
+    check("island count computed on toggle-on (2 islands)",
+          overlay.island_count() == 2,
+          "got %d" % overlay.island_count())
+    check("overlay tracks the active object",
+          overlay.tracked_object_name() == obj.name)
+
+    # Geometry cache built headlessly (pure path) even though gpu batch
+    # creation is impossible in --background.
+    check("geometry extracted headlessly",
+          overlay._state.coords is not None
+          and len(overlay._state.coords) > 0
+          and len(overlay._state.coords) == len(overlay._state.colors))
+
+    # Draw callback must no-op gracefully with no GPU context.
+    try:
+        overlay._draw()
+        drew = True
+    except Exception:
+        drew = False
+    check("draw callback no-ops headlessly", drew)
+
+    # --- refresh operator ------------------------------------------------------
+    check("refresh poll passes while enabled",
+          bpy.ops.uv.island_overlay_refresh.poll())
+    result = bpy.ops.uv.island_overlay_refresh()
+    check("refresh returned FINISHED", result == {'FINISHED'})
+    check("island count stable after refresh", overlay.island_count() == 2)
+
+    # --- object mode also works -------------------------------------------------
+    bpy.ops.object.mode_set(mode='OBJECT')
+    result = bpy.ops.uv.island_overlay_refresh()
+    check("refresh works in object mode", result == {'FINISHED'}
+          and overlay.island_count() == 2)
+
+    # --- toggle OFF ---------------------------------------------------------------
+    result = bpy.ops.uv.island_overlay_toggle()
+    check("toggle-off returned FINISHED", result == {'FINISHED'})
+    check("overlay disabled", not overlay.is_enabled())
+    check("refresh poll fails while disabled",
+          not bpy.ops.uv.island_overlay_refresh.poll())
+
+    # --- direct property path (what the popover checkbox drives) ------------------
+    bpy.context.window_manager.uv_island_overlay = True
+    check("property=True enables overlay", overlay.is_enabled())
+    bpy.context.window_manager.uv_island_overlay = False
+    check("property=False disables overlay", not overlay.is_enabled())
+
+    # --- v1.0.1 regressions ---------------------------------------------------
+
+    # Discoverable sidebar N-panel, registered in its own tab.
+    check("N-panel registered",
+          hasattr(bpy.types, "VIEW3D_PT_uv_island_overlay"))
+    pnl = bpy.types.VIEW3D_PT_uv_island_overlay
+    check("N-panel lives in the View3D sidebar",
+          pnl.bl_space_type == 'VIEW_3D' and pnl.bl_region_type == 'UI')
+    check("N-panel category is 'UV Islands'",
+          pnl.bl_category == "UV Islands")
+
+    # Menu entries (F3 search only finds operators that live in menus).
+    def menu_has_toggle(menu):
+        try:
+            return any(getattr(f, "__name__", "") == "_menu_draw"
+                       for f in menu._dyn_ui_initialize())
+        except Exception:
+            return False
+    check("View menu has the toggle entry",
+          menu_has_toggle(bpy.types.VIEW3D_MT_view))
+    check("Edit Mode UV menu has the toggle entry",
+          menu_has_toggle(bpy.types.VIEW3D_MT_uv_map))
+    try:
+        popover_appended = any(
+            getattr(f, "__name__", "") == "_overlay_popover_draw"
+            for f in bpy.types.VIEW3D_PT_overlay._dyn_ui_initialize())
+    except Exception:
+        popover_appended = False
+    check("Overlays popover draw appended", popover_appended)
+
+    # Enable attempt with NO active mesh (popover-like sparse context):
+    # must fail AND revert the checkbox. Blender 5.0 removed idprop
+    # access to bpy.props storage, so the old self["..."] = False revert
+    # silently stopped working — this locks in the real-assignment fix.
+    bpy.context.view_layer.objects.active = None
+    bpy.context.window_manager.uv_island_overlay = True
+    check("enable without active mesh stays disabled",
+          not overlay.is_enabled())
+    check("checkbox property reverts to False (checkbox never lies)",
+          bpy.context.window_manager.uv_island_overlay is False)
+    bpy.context.view_layer.objects.active = obj
+
+    # Dirty-flag lifecycle across a re-unwrap while enabled, and the
+    # loud-once draw-error latch (in background the gpu section MUST
+    # fail; it must be recorded once and cleared by refresh). This is
+    # UV-mode behavior: SEAM mode routes updates through the debounced
+    # live pipeline instead (tested further down), so pin the source.
+    bpy.context.window_manager.uv_island_overlay = True
+    check("re-enabled on the grid",
+          overlay.is_enabled() and overlay.island_count() == 2)
+    bpy.context.window_manager.uv_island_overlay_source = 'UV'
+    check("UV source also sees the 2 unwrapped islands",
+          overlay.island_count() == 2 and overlay.active_source() == 'UV')
+    check("no draw error recorded before drawing",
+          overlay.last_draw_error() is None)
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.uv.smart_project(angle_limit=1.15192, island_margin=0.02)
+    check("depsgraph hook marked overlay dirty after re-unwrap",
+          overlay._state.dirty)
+    overlay._draw()   # pure rebuild runs before the first gpu call
+    check("draw-time rebuild consumed the dirty flag",
+          not overlay._state.dirty)
+    check("draw-time rebuild kept geometry",
+          overlay._state.coords is not None
+          and len(overlay._state.coords) > 0)
+    check("draw error latched loudly (background gpu failure recorded)",
+          overlay.last_draw_error() is not None
+          and "background" in overlay.last_draw_error())
+    err_before = overlay.last_draw_error()
+    overlay._draw()
+    check("second draw holds the latch (no per-frame spam)",
+          overlay.last_draw_error() is err_before)
+    result = bpy.ops.uv.island_overlay_refresh()
+    check("refresh clears the draw-error latch",
+          result == {'FINISHED'} and overlay.last_draw_error() is None)
+    bpy.ops.object.mode_set(mode='OBJECT')
+    bpy.context.window_manager.uv_island_overlay = False
+
+    # --- v1.1.0: seam-predicted islands + live refresh --------------------------
+
+    wm = bpy.context.window_manager
+    wm.uv_island_overlay_source = 'SEAM'
+
+    # Cube with stale UVs: the primitive auto-generates a single-chart UV
+    # layout; marking every edge as a seam does NOT touch the UVs. SEAM
+    # mode must predict the 6 post-unwrap islands; UV mode must keep
+    # reporting the stale single island.
+    bpy.ops.mesh.primitive_cube_add(size=2.0)
+    cube = bpy.context.active_object
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.mesh.mark_seam()
+
+    wm.uv_island_overlay = True
+    check("SEAM mode predicts 6 islands on all-seam cube (no unwrap!)",
+          overlay.is_enabled() and overlay.island_count() == 6,
+          "got %d" % overlay.island_count())
+    check("overlay reports SEAM as the active source",
+          overlay.active_source() == 'SEAM')
+    check("refresh stored a SEAM-state checksum",
+          overlay._state.seam_checksum is not None)
+    coords_seam = overlay._state.coords
+
+    wm.uv_island_overlay_source = 'UV'
+    check("enum switch to UV invalidates + rebuilds: stale UVs, 1 island",
+          overlay.island_count() == 1,
+          "got %d" % overlay.island_count())
+    check("enum switch replaced the cached geometry",
+          overlay._state.coords is not coords_seam)
+    wm.uv_island_overlay_source = 'SEAM'
+    check("enum switch back to SEAM rebuilds: 6 predicted islands again",
+          overlay.island_count() == 6)
+
+    # Checksum: detects seam add/remove and vertex moves, ignores no-ops.
+    ck0 = overlay.seam_state_checksum(cube)
+    check("checksum is deterministic",
+          overlay.seam_state_checksum(cube) == ck0)
+    bpy.ops.mesh.select_all(action='DESELECT')
+    check("selection-only change leaves the checksum alone",
+          overlay.seam_state_checksum(cube) == ck0)
+    bm = bmesh.from_edit_mesh(cube.data)
+    bm.edges.ensure_lookup_table()
+    bm.edges[0].seam = False
+    bmesh.update_edit_mesh(cube.data)
+    ck1 = overlay.seam_state_checksum(cube)
+    check("removing a seam changes the checksum", ck1 != ck0)
+    bm.edges[0].seam = True
+    bmesh.update_edit_mesh(cube.data)
+    check("restoring the seam restores the checksum",
+          overlay.seam_state_checksum(cube) == ck0)
+    bm.edges[0].seam = True     # "mark" an already-marked seam
+    bmesh.update_edit_mesh(cube.data)
+    check("re-marking an existing seam is a checksum no-op",
+          overlay.seam_state_checksum(cube) == ck0)
+    bm.verts.ensure_lookup_table()
+    bm.verts[0].co.x += 0.25
+    bmesh.update_edit_mesh(cube.data)
+    check("moving a vertex changes the checksum",
+          overlay.seam_state_checksum(cube) != ck0)
+    bm.verts[0].co.x -= 0.25
+    bmesh.update_edit_mesh(cube.data)
+
+    # Depsgraph routing: in SEAM mode geometry updates feed the debounce,
+    # never the dirty/draw path (rebuilds must not happen in a draw
+    # callback because the SEAM path snapshots into a datablock).
+    overlay.refresh(bpy.context)             # clean baseline
+    overlay._state.debounce.reset()
+    check("baseline is 6 islands", overlay.island_count() == 6)
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.mesh.mark_seam(clear=True)       # a real seam change
+    check("geometry update routed to the debounce in SEAM mode",
+          overlay._state.debounce.pending)
+    check("SEAM mode never marks the draw path dirty",
+          not overlay._state.dirty)
+    check("live timer registered by activity",
+          bpy.app.timers.is_registered(overlay._live_timer_cb))
+    check("overlay NOT yet recomputed (debounced)",
+          overlay.island_count() == 6)
+
+    # Drive the debounce with a fake clock (app timers never fire in
+    # --background — probed; the timer is only a thin driver of
+    # _live_tick, which takes the clock as an argument).
+    coords_before = overlay._state.coords
+    t0 = 1000.0
+    overlay._state.debounce.note_change(t0)          # burst...
+    overlay._state.debounce.note_change(t0 + 0.10)
+    overlay._state.debounce.note_change(t0 + 0.20)
+    r = overlay._live_tick(t0 + 0.35)   # 0.15s of quiet: not yet
+    check("tick during burst keeps polling without rebuilding",
+          r == overlay.LIVE_POLL_S
+          and overlay._state.coords is coords_before)
+    r = overlay._live_tick(t0 + 0.55)   # quiet period elapsed
+    check("one debounced rebuild after the burst goes quiet",
+          r is None and overlay._state.coords is not coords_before)
+    check("live rebuild saw the cleared seams (1 island)",
+          overlay.island_count() == 1,
+          "got %d" % overlay.island_count())
+
+    # A no-op burst (nothing actually changed) is stopped by the checksum.
+    coords_after = overlay._state.coords
+    overlay.note_activity(now=2000.0)
+    r = overlay._live_tick(2000.5)
+    check("no-op activity fires the debounce but skips the rebuild",
+          r is None and overlay._state.coords is coords_after
+          and overlay.island_count() == 1)
+
+    # Manual Refresh stays available as the escape hatch in SEAM mode.
+    result = bpy.ops.uv.island_overlay_refresh()
+    check("manual refresh works in SEAM mode",
+          result == {'FINISHED'} and overlay.island_count() == 1)
+
+    # Hidden faces are dropped from the soup by the fast path too.
+    soup_before = len(overlay._state.coords)
+    bm = bmesh.from_edit_mesh(cube.data)
+    bm.faces.ensure_lookup_table()
+    bm.faces[0].hide = True
+    bmesh.update_edit_mesh(cube.data)
+    overlay.refresh(bpy.context)
+    check("hidden face dropped from the fast-path soup (2 tris = 6 verts)",
+          len(overlay._state.coords) == soup_before - 6,
+          "before %d after %d" % (soup_before,
+                                  len(overlay._state.coords)))
+
+    bpy.ops.object.mode_set(mode='OBJECT')
+    wm.uv_island_overlay = False
+    check("live timer stopped on disable",
+          not bpy.app.timers.is_registered(overlay._live_timer_cb))
+    check("snapshot scratch mesh removed on disable",
+          bpy.data.meshes.get(overlay._SCRATCH_NAME) is None)
+
+    # --- unregister -----------------------------------------------------------------
+    uv_island_overlay.unregister()
+    check("depsgraph handler removed",
+          not any(h.__name__ == "_on_depsgraph_update"
+                  for h in bpy.app.handlers.depsgraph_update_post))
+    check("WindowManager property removed",
+          not hasattr(bpy.types.WindowManager, "uv_island_overlay")
+          or "uv_island_overlay"
+          not in bpy.types.WindowManager.bl_rna.properties)
+    check("island-source property removed",
+          "uv_island_overlay_source"
+          not in bpy.types.WindowManager.bl_rna.properties)
+
+    # --- re-register cycle (idempotent lifecycle) -------------------------------------
+    uv_island_overlay.register()
+    result = bpy.ops.uv.island_overlay_toggle()
+    check("toggle works after re-register", result == {'FINISHED'}
+          and overlay.is_enabled())
+    uv_island_overlay.unregister()
+    check("unregister while overlay enabled is clean",
+          not overlay.is_enabled())
+    uv_island_overlay.register()
+    uv_island_overlay.unregister()
+    check("register/unregister cycle clean", True)
+
+
+try:
+    main()
+except Exception:
+    traceback.print_exc()
+    FAILURES.append("unhandled exception")
+
+sys.stdout.flush()
+if FAILURES:
+    print("REGISTER_TESTS_FAILED: %d failure(s): %s"
+          % (len(FAILURES), ", ".join(FAILURES)))
+else:
+    print("REGISTER_TESTS_PASSED")
+sys.stdout.flush()
