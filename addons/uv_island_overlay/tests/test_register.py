@@ -451,6 +451,108 @@ def main():
         check("gpu state guard fails closed in background "
               "(reads priors before mutating anything)", not body_ran)
 
+    # --- v1.2.0: crack-free overlay (zero geometric offset + shader bias) -------
+    # The old per-face-normal offset pushed adjacent faces apart at every
+    # non-flat edge (visible gaps). Now the soup positions must be
+    # BIT-IDENTICAL to the mesh's vertex coordinates, and z-fighting is
+    # handled by a clip-space depth bias in a custom create-info shader.
+    import numpy as np
+
+    check("version bumped for the crack-free overlay",
+          uv_island_overlay.bl_info.get("version", (0,))[:3] >= (1, 2, 0))
+    check("normal-offset constants removed",
+          not hasattr(overlay, "NORMAL_OFFSET_FACTOR")
+          and not hasattr(overlay, "NORMAL_OFFSET_MIN"))
+
+    # Shader sources: module-level constants, structurally sane (they
+    # cannot be compiled headless — create_from_info raises SystemError
+    # in --background, probed on 5.1.2 — so this is the strongest
+    # headless check available; the GUI surfaces a real GLSL error via
+    # the draw-error latch tested above).
+    vs = getattr(overlay, "VERT_SHADER_SRC", None)
+    fs = getattr(overlay, "FRAG_SHADER_SRC", None)
+    check("shader sources are nonempty module-level strings",
+          isinstance(vs, str) and vs.strip()
+          and isinstance(fs, str) and fs.strip())
+    check("vertex shader transforms by ModelViewProjectionMatrix",
+          vs is not None and "ModelViewProjectionMatrix" in vs
+          and "gl_Position" in vs)
+    check("vertex shader has the w-scaled depth-bias term",
+          vs is not None and "gl_Position.z -=" in vs
+          and "* gl_Position.w" in vs
+          and ("%r" % overlay.CLIP_DEPTH_BIAS) in vs)
+    check("depth bias is small and pulls toward the viewer",
+          0.0 < overlay.CLIP_DEPTH_BIAS <= 1e-3)
+    check("vertex shader passes per-vertex color through",
+          vs is not None and "finalColor = color" in vs)
+    check("fragment shader writes the interpolated color",
+          fs is not None and "fragColor = finalColor" in fs)
+
+    # The create-info DESCRIPTOR must build headless (only compilation
+    # needs a GPU), and must declare the attributes the batch supplies.
+    try:
+        info = overlay._shader_create_info()
+        info_ok = info is not None
+    except Exception:
+        info_ok = False
+    check("shader create-info descriptor builds headless", info_ok)
+    ci_src = inspect.getsource(overlay._shader_create_info)
+    check("create-info declares pos + color vertex attributes",
+          "'VEC3', \"pos\"" in ci_src and "'VEC4', \"color\"" in ci_src)
+    check("create-info declares the MVP push constant",
+          "push_constant('MAT4', \"ModelViewProjectionMatrix\")" in ci_src)
+    # Compilation itself must stay draw-time-only (headless it raises —
+    # exactly what routes GUI GLSL errors into the loud latch).
+    try:
+        overlay._create_shader()
+        compiled_headless = True
+    except SystemError:
+        compiled_headless = False
+    check("shader compilation is impossible headless (stays lazy, "
+          "draw-time, latch-guarded)", not compiled_headless)
+
+    # Geometry: fast SEAM path — soup positions bit-equal mesh coords.
+    bpy.context.view_layer.objects.active = cube
+    cube.select_set(True)
+    wm.uv_island_overlay_source = 'SEAM'
+    wm.uv_island_overlay = True
+    check("re-enabled on the cube for geometry checks",
+          overlay.is_enabled()
+          and overlay.tracked_object_name() == cube.name)
+    me = cube.data
+    vco = np.empty(len(me.vertices) * 3, dtype=np.float32)
+    me.vertices.foreach_get("co", vco)
+    vco = vco.reshape(-1, 3)
+    tris = me.loop_triangles
+    tv = np.empty(len(tris) * 3, dtype=np.int32)
+    tris.foreach_get("vertices", tv)
+    tp = np.empty(len(tris), dtype=np.int32)
+    tris.foreach_get("polygon_index", tp)
+    hide = np.empty(len(me.polygons), dtype=bool)
+    me.polygons.foreach_get("hide", hide)
+    tv = tv.reshape(-1, 3)[~hide[tp]]
+    expected = vco[tv.ravel()]
+    got = np.asarray(overlay._state.coords, dtype=np.float32)
+    check("fast-path soup positions are BIT-identical to mesh coords "
+          "(no offset)", got.shape == expected.shape
+          and np.array_equal(got, expected),
+          "shapes %r vs %r" % (got.shape, expected.shape))
+    check("fast-path colors still one RGBA per soup vertex",
+          len(overlay._state.colors) == len(overlay._state.coords))
+
+    # Geometry: bmesh path (UV source) — every soup vertex must be an
+    # exact mesh vertex coordinate (no displacement off the surface).
+    wm.uv_island_overlay_source = 'UV'
+    check("UV-source rebuild produced geometry",
+          overlay._state.coords is not None
+          and len(overlay._state.coords) > 0)
+    vert_set = {tuple(v) for v in vco}
+    soup = [tuple(np.float32(x) for x in c) for c in overlay._state.coords]
+    check("bmesh-path soup positions are exact mesh vertex coords",
+          all(c in vert_set for c in soup))
+    wm.uv_island_overlay_source = 'SEAM'
+    wm.uv_island_overlay = False
+
     # --- unregister -----------------------------------------------------------------
     uv_island_overlay.unregister()
     check("depsgraph handler removed",

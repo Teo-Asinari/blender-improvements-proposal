@@ -5,7 +5,10 @@ UV island of the active mesh is tinted with its own distinct color, drawn
 translucently over the surface, so island boundaries are instantly visible
 — no round-trip to the UV editor needed. Since v1.1.0 the overlay updates
 **live while you mark seams**: islands are predicted
-from seam topology, no Unwrap required.
+from seam topology, no Unwrap required. Since v1.2.0 the overlay is
+**crack-free**: faces are drawn exactly on the surface (shader depth
+bias) instead of being pushed apart along their normals, so no more
+gaps between adjacent faces.
 
 *(No screenshots included — see the GUI checklist below to see it live in
 under a minute.)*
@@ -113,6 +116,40 @@ traceback **once** to the system console (`Window > Toggle System
 Console` on Windows), and both panels show a *"Draw failed — see system
 console"* error row. Hitting **Refresh** clears the error and retries.
 
+## How it draws (v1.2.0: crack-free depth-biased overlay)
+
+The overlay is a triangle soup whose vertex positions are **bit-identical
+to the mesh's own vertex coordinates** — no geometric offset at all — so
+adjacent faces share edge vertices exactly and the colored shell is
+perfectly connected. Earlier versions pushed each triangle slightly along
+its *face* normal to avoid z-fighting; that displaced the two copies of a
+shared vertex in different directions wherever faces meet at an angle,
+visibly cracking the overlay apart at every non-flat edge.
+
+Z-fighting is instead resolved in a custom shader
+(`gpu.types.GPUShaderCreateInfo` + `gpu.shader.create_from_info` — the
+legacy raw-GLSL `gpu.types.GPUShader(vert, frag)` constructor cannot be
+instantiated on 5.1.2): the vertex stage transforms by the
+ModelViewProjectionMatrix and then pulls the result toward the viewer in
+*clip space*:
+
+```glsl
+gl_Position = ModelViewProjectionMatrix * vec4(pos, 1.0);
+gl_Position.z -= 0.0001 * gl_Position.w;
+```
+
+Scaling the bias by `w` makes the post-perspective-divide depth offset a
+constant fraction (`CLIP_DEPTH_BIAS = 1e-4`) of the NDC depth range at
+any distance, so it is robust across zoom levels: a few hundred steps of
+a 24-bit depth buffer — comfortably above z-fighting noise, far too small
+to make the overlay bleed through foreground geometry around silhouette
+edges. Face color still arrives as a plain per-vertex attribute (all
+three corners of a triangle carry the same RGBA), and alpha blending,
+draw-error latching and GPU-state restoration are unchanged. The GLSL
+lives in module-level constants (`overlay.VERT_SHADER_SRC` /
+`FRAG_SHADER_SRC`) and compilation stays lazy at draw time, so a shader
+error surfaces through the loud *"Draw failed"* row, never silently.
+
 ## How islands are detected
 
 `islands.py` implements both sources, pure and bpy-free:
@@ -142,9 +179,15 @@ mesh-area ratios and tint islands by density instead of by id. Keep
 ## Limitations
 
 - Overlays **one object at a time** (the active mesh when toggled on).
-- The tint is pushed slightly along each face normal to avoid z-fighting;
-  from the *back side* of single-sided geometry the overlay is therefore
-  hidden by the surface (by design — it never bleeds through walls).
+- The tint sits exactly *on* the surface and wins the depth test by a
+  tiny viewer-ward bias (see *How it draws*). Consequence: on
+  single-sided geometry viewed from the **back side**, the overlay's
+  back faces depth-pass the surface they sit on, so the tint is visible
+  from inside/behind an open shell (culling is off). This is expected
+  with the crack-free v1.2.0 approach — the pre-1.2.0 normal offset hid
+  the overlay from the back at the cost of visible gaps between faces.
+  The bias is far too small for the overlay to show through *other*
+  geometry in front of it.
 - UV-editor-only edits may not trigger the auto-refresh hook; use the
   manual **Refresh** button after re-unwrapping if in doubt.
 - SEAM source can only see seams: charts split by Smart UV Project or
@@ -156,6 +199,11 @@ mesh-area ratios and tint islands by density instead of by id. Keep
   disabled.
 - The overlay draws the mesh *without* modifier results in Object Mode
   (it reads the base mesh, matching what unwrapping operates on).
+- In Edit Mode, Blender's own edit-cage overlays (wireframe, seam and
+  selection highlights) draw in their own overlay pass and are expected
+  to stay readable over the tint. This is a GUI-only behavior — the
+  headless suite cannot exercise real drawing — so check it visually
+  after installing (see the checklist in the tests section notes).
 - Colors are distinct but unlabeled; with hundreds of islands, adjacent
   hues can get close (value is cycled to compensate).
 
@@ -172,9 +220,32 @@ Blender exits 0 even when a `--python` script raises, so each test prints
 a sentinel (`ISLANDS_TESTS_PASSED`, `REGISTER_TESTS_PASSED`) and the
 wrapper greps for them, printing `ALL_TESTS_PASSED` / `TESTS_FAILED` and
 setting the exit code. GPU shader/batch creation is impossible in
-`--background` (raises `SystemError` on 5.1.2), so all gpu work is
-deferred to draw time and exception-guarded; the register test verifies
-the draw callback no-ops gracefully headlessly.
+`--background` (`gpu.shader.create_from_info` raises `SystemError` on
+5.1.2; building the `GPUShaderCreateInfo` *descriptor* works headless —
+probed), so all gpu work is deferred to draw time and exception-guarded;
+the register test verifies the draw callback no-ops gracefully
+headlessly, checks the GLSL constants structurally (MVP transform,
+w-scaled depth-bias term, color passthrough), and asserts the soup
+positions are bit-identical to the mesh's vertex coordinates on both
+build paths (the crack-free guarantee). The shader's actual compile/draw
+can only be confirmed in the GUI.
+
+### GUI checklist (v1.2.0 drawing — not coverable headless)
+
+1. Enable the overlay on a curved mesh (e.g. a UV sphere or Suzanne with
+   a few seams): the colored faces must be **seamlessly connected** — no
+   hairline gaps at edges between faces, at any zoom level.
+2. Orbit and zoom in/out: the tint must stay stable — **no z-fighting
+   shimmer** against the surface, near or far.
+3. Look along a silhouette edge: the overlay must **not bleed** around
+   the mesh's outline onto the background or geometry behind it.
+4. View an open (single-sided) mesh from the back: the tint of the far
+   walls shows through — expected v1.2.0 behavior (see Limitations).
+5. In Edit Mode, wireframe/seam/selection cage overlays must stay
+   readable on top of the tint.
+6. If the shader ever failed to compile, both panels would show the
+   *"Draw failed — see system console"* row instead of drawing nothing
+   silently.
 
 ## Credits
 

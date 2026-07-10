@@ -10,6 +10,11 @@ Design (mirrors seam_path_tool/preview.py):
   either eagerly (refresh operator / enable) or lazily at the next draw
   after something marks the overlay dirty. Never per-frame: a clean
   overlay redraws from the cached batch.
+- Drawing (v1.2.0) uses a custom create-info shader whose vertex stage
+  applies a clip-space depth bias (CLIP_DEPTH_BIAS): soup positions are
+  bit-identical to the mesh's, so adjacent faces share vertices exactly
+  and the shell never cracks; z-fighting is resolved in the shader, not
+  by displacing geometry.
 
 Island sources (v1.1.0):
 - 'UV'   — true UV-space connectivity (the actual current unwrap).
@@ -33,15 +38,48 @@ from contextlib import contextmanager
 import bpy
 import gpu
 
-# Overall tint strength. Baked into the vertex colors so the shader stays
-# a stock builtin.
+# Overall tint strength. Baked into the vertex colors so the geometry
+# stays a plain (pos, color) soup.
 ALPHA = 0.4
 
-# Fraction of the mesh bounding-box diagonal each triangle is pushed along
-# its face normal, to sit just in front of the surface (avoids z-fighting
-# while still being occluded correctly by nearer geometry).
-NORMAL_OFFSET_FACTOR = 1.5e-3
-NORMAL_OFFSET_MIN = 1e-5
+# Clip-space depth bias (v1.2.0). The soup's positions are BIT-IDENTICAL
+# to the mesh's own vertex coordinates — no geometric offset. The old
+# per-FACE-normal offset cracked the shell apart at every non-flat edge
+# (two faces meeting at an angle pushed their copies of a shared vertex
+# in different directions -> visible gaps between the colored faces).
+# Z-fighting is instead beaten in the vertex shader by pulling
+# gl_Position.z toward the viewer by CLIP_DEPTH_BIAS * gl_Position.w:
+# scaling by w makes the bias a constant fraction of the NDC depth range
+# regardless of distance/zoom, so it is robust across depth ranges.
+# 1e-4 of the range is a few hundred steps of a 24-bit depth buffer —
+# comfortably above z-fighting noise, far too small to bleed the overlay
+# through foreground geometry around silhouette edges.
+CLIP_DEPTH_BIAS = 1e-4
+
+# GLSL for the custom depth-bias shader, as module-level constants so the
+# headless suite can sanity-check them structurally (compiling is
+# impossible in --background). Interface/attribute declarations live in
+# _shader_create_info(); these are the bare stage bodies the create-info
+# API expects. ModelViewProjectionMatrix is set explicitly at draw time
+# from gpu.matrix state (it also matches the name Blender's own matrix
+# binding uses, so either mechanism yields the same value).
+VERT_SHADER_SRC = """
+void main()
+{
+    gl_Position = ModelViewProjectionMatrix * vec4(pos, 1.0);
+    /* Depth bias: pull toward the viewer in clip space. Scaled by w so
+     * the post-divide NDC offset is distance-independent. */
+    gl_Position.z -= %r * gl_Position.w;
+    finalColor = color;
+}
+""" % CLIP_DEPTH_BIAS
+
+FRAG_SHADER_SRC = """
+void main()
+{
+    fragColor = finalColor;
+}
+"""
 
 # Live SEAM-mode refresh: recompute only after this much quiet since the
 # last geometry update (a whole seam-marking burst costs ONE recompute),
@@ -243,12 +281,6 @@ def _build_seam_arrays(obj):
                          dtype=np.float32).reshape(count, 4)
 
     co = co.reshape(-1, 3)
-    diag = float(np.linalg.norm(co.max(axis=0) - co.min(axis=0)))
-    offset = max(diag * NORMAL_OFFSET_FACTOR, NORMAL_OFFSET_MIN)
-
-    normals = np.empty(n_faces * 3, dtype=np.float32)
-    me.polygons.foreach_get("normal", normals)
-    normals = normals.reshape(-1, 3)
     hide = np.empty(n_faces, dtype=bool)
     me.polygons.foreach_get("hide", hide)
 
@@ -268,8 +300,10 @@ def _build_seam_arrays(obj):
     tri_verts = tri_verts[visible]
     tri_polys = tri_polys[visible]
 
-    coords = co[tri_verts.ravel()] \
-        + np.repeat(normals[tri_polys] * offset, 3, axis=0)
+    # Positions bit-identical to the mesh's own vertex coordinates (no
+    # geometric offset — the shader's clip-space depth bias handles
+    # z-fighting), so adjacent faces stay perfectly connected.
+    coords = co[tri_verts.ravel()]
     colors = np.repeat(palette[face_to_island[tri_polys]], 3, axis=0)
     return (np.ascontiguousarray(coords, dtype=np.float32),
             np.ascontiguousarray(colors, dtype=np.float32),
@@ -279,12 +313,13 @@ def _build_seam_arrays(obj):
 def _build_bmesh(obj, force_seam=False):
     """bmesh-path build: (coords, colors, island_count) for a mesh object.
 
-    coords: object-space loop-triangle soup, each vertex pushed slightly
-    along its face normal. colors: matching per-vertex RGBA (flat per
-    face). Uses the edit bmesh in Edit Mode so the overlay tracks live
-    edits, a throwaway bmesh otherwise. force_seam=True computes
-    seam-predicted islands even when a UV layer exists (SEAM-mode
-    fallback path).
+    coords: object-space loop-triangle soup, positions bit-identical to
+    the mesh's own vertex coordinates (z-fighting is handled by the
+    shader's clip-space depth bias, not by displacing geometry). colors:
+    matching per-vertex RGBA (flat per face). Uses the edit bmesh in
+    Edit Mode so the overlay tracks live edits, a throwaway bmesh
+    otherwise. force_seam=True computes seam-predicted islands even when
+    a UV layer exists (SEAM-mode fallback path).
     """
     import bmesh
     from . import islands as islands_mod
@@ -315,10 +350,6 @@ def _build_bmesh(obj, force_seam=False):
         palette = islands_mod.island_colors(len(isl), alpha=ALPHA)
         face_to_island = islands_mod.face_index_to_island(isl)
 
-        # Normal offset scaled to the mesh so it works at any scene scale.
-        diag = _bbox_diagonal(bm)
-        offset = max(diag * NORMAL_OFFSET_FACTOR, NORMAL_OFFSET_MIN)
-
         coords = []
         colors = []
         for tri in bm.calc_loop_triangles():
@@ -326,35 +357,16 @@ def _build_bmesh(obj, force_seam=False):
             if face.hide:
                 continue
             color = palette[face_to_island[face.index]]
-            normal = face.normal
             for loop in tri:
-                co = loop.vert.co + normal * offset
+                # Vertex position used verbatim (bit-identical to the
+                # mesh) — see CLIP_DEPTH_BIAS for why no offset is added.
+                co = loop.vert.co
                 coords.append((co.x, co.y, co.z))
                 colors.append(color)
         return coords, colors, len(isl)
     finally:
         if owned:
             bm.free()
-
-
-def _bbox_diagonal(bm):
-    it = iter(bm.verts)
-    try:
-        first = next(it).co
-    except StopIteration:
-        return 0.0
-    lo = [first.x, first.y, first.z]
-    hi = list(lo)
-    for v in it:
-        co = v.co
-        for k in range(3):
-            c = co[k]
-            if c < lo[k]:
-                lo[k] = c
-            elif c > hi[k]:
-                hi[k] = c
-    return ((hi[0] - lo[0]) ** 2 + (hi[1] - lo[1]) ** 2
-            + (hi[2] - lo[2]) ** 2) ** 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -550,6 +562,41 @@ def _tag_redraw_view3d():
 # Drawing (viewport only; every gpu call guarded)
 # ---------------------------------------------------------------------------
 
+def _shader_create_info():
+    """GPUShaderCreateInfo descriptor for the depth-bias shader.
+
+    Descriptor construction/population is pure bookkeeping and works in
+    --background (probed on 5.1.2) — only gpu.shader.create_from_info
+    actually touches the GPU and raises SystemError headless — so the
+    test suite can build (and structurally check) this without a GPU.
+    Attributes match the batch content: "pos" (vec3) + per-vertex
+    "color" (vec4, flat per face because all three corners of a triangle
+    carry the same value).
+    """
+    iface = gpu.types.GPUStageInterfaceInfo("uv_island_overlay_iface")
+    iface.smooth('VEC4', "finalColor")
+    info = gpu.types.GPUShaderCreateInfo()
+    info.push_constant('MAT4', "ModelViewProjectionMatrix")
+    info.vertex_in(0, 'VEC3', "pos")
+    info.vertex_in(1, 'VEC4', "color")
+    info.vertex_out(iface)
+    info.fragment_out(0, 'VEC4', "fragColor")
+    info.vertex_source(VERT_SHADER_SRC)
+    info.fragment_source(FRAG_SHADER_SRC)
+    return info
+
+
+def _create_shader():
+    """Compile the depth-bias shader. GPU work — draw time only, behind
+    the error latch: headless this raises SystemError, and a GLSL error
+    in the GUI surfaces once via the loud "Draw failed" row instead of
+    silently. The legacy raw-GLSL constructor is NOT an option here:
+    probed on 5.1.2, gpu.types.GPUShader(vert, frag) raises TypeError
+    ("cannot create 'GPUShader' instances"); create_from_info is the
+    supported API."""
+    return gpu.shader.create_from_info(_shader_create_info())
+
+
 @contextmanager
 def _gpu_state_restored():
     """Save global gpu state, run the draw block, ALWAYS restore.
@@ -610,17 +657,12 @@ def _draw():
             return
 
         if _state.shader is None:
-            # SMOOTH_COLOR (pos + per-vertex color) exists on 4.x/5.x —
-            # verified against the 5.0/5.1 release notes: no builtin
-            # color shaders were removed. Identical colors per face give
-            # the flat look we want. FLAT_COLOR (used by Blender 5.1's
-            # own bundled scripts) is the belt-and-braces fallback.
-            try:
-                _state.shader = gpu.shader.from_builtin('SMOOTH_COLOR')
-            except SystemError:
-                raise            # background mode: bail via outer guard
-            except Exception:
-                _state.shader = gpu.shader.from_builtin('FLAT_COLOR')
+            # Custom depth-bias shader (v1.2.0): geometry sits exactly ON
+            # the surface, the vertex shader pulls it toward the viewer in
+            # clip space (see CLIP_DEPTH_BIAS). Compiled lazily here so a
+            # failure (headless SystemError, or a GLSL error in the GUI)
+            # lands in the outer guard's loud latch.
+            _state.shader = _create_shader()
 
         if _state.batch is None:
             from gpu_extras.batch import batch_for_shader
@@ -639,6 +681,16 @@ def _draw():
             with gpu.matrix.push_pop():
                 gpu.matrix.multiply_matrix(obj.matrix_world)
                 _state.shader.bind()
+                # Explicit MVP from gpu.matrix state (projection @
+                # view @ object world, thanks to the multiply above).
+                # The push-constant name also matches Blender's builtin
+                # matrix binding, so batch.draw would feed the same
+                # value; setting it explicitly removes the reliance on
+                # that implicit behavior.
+                mvp = (gpu.matrix.get_projection_matrix()
+                       @ gpu.matrix.get_model_view_matrix())
+                _state.shader.uniform_float(
+                    "ModelViewProjectionMatrix", mvp)
                 _state.batch.draw(_state.shader)
     except Exception:
         # Never let a draw-time error take down the viewport callback —

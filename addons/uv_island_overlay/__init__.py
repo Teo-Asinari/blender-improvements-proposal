@@ -9,7 +9,7 @@ most useful in Edit Mode right after unwrapping.
 bl_info = {
     "name": "UV Island Overlay",
     "author": "Teo Asinari",
-    "version": (1, 1, 1),
+    "version": (1, 2, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N) > UV Islands tab; also in the "
                 "Overlays popover",
