@@ -279,6 +279,46 @@ def main():
     timeit("hover fallback: astar far, diagonal (worst)",
            lambda: core.astar_path(bm, far, corner, mode='LENGTH'))
 
+    # --- 1.4.0 array backends ------------------------------------------------
+    # What replaces the ~0.7 s background fill on meshes this size: one
+    # per-session numpy extraction, then one C-speed solve per anchor.
+    print("1.4.0 array backends:")
+    cache = {}
+    (_g, _t) = timeit("core.GraphArrays build (ONCE per session)",
+                      lambda: cache.setdefault('graph',
+                                               core.GraphArrays(bm)))
+    (_s, _t) = timeit("seam-flag extraction (once, lazy)",
+                      lambda: cache['graph'].seam_array(bm))
+    if core.scipy_available():
+        import scipy  # noqa: F401 — warm the one-off import (~0.7 s)
+
+        def scipy_tree(prefer=False, mode='LENGTH'):
+            t = core.ArrayTree(bm, corner, mode=mode, prefer_seams=prefer,
+                               backend='SCIPY', cache=cache)
+            t.compute()
+            return t
+        (t_sp, _t) = timeit("ArrayTree SCIPY LENGTH solve (per anchor)",
+                            lambda: scipy_tree(), repeat=2)
+        timeit("ArrayTree SCIPY LENGTH prefer_seams",
+               lambda: scipy_tree(prefer=True), repeat=2)
+        timeit("ArrayTree SCIPY TOPOLOGY",
+               lambda: scipy_tree(mode='TOPOLOGY'), repeat=2)
+        d_far = t_sp.distance(far)
+        print("      scipy far dist == slicer far dist: %r"
+              % (abs(d_far - dist_full[far]) <= 1e-9 * dist_full[far]))
+    else:
+        print("      (scipy not importable: SCIPY backend skipped)")
+
+    def bfs_tree(prefer=False):
+        t = core.ArrayTree(bm, corner, mode='TOPOLOGY', prefer_seams=prefer,
+                           backend='BFS', cache=cache)
+        t.compute()
+        return t
+    timeit("ArrayTree BFS TOPOLOGY solve (per anchor)",
+           lambda: bfs_tree(), repeat=2)
+    timeit("ArrayTree BFS TOPOLOGY prefer_seams (two-tier)",
+           lambda: bfs_tree(prefer=True), repeat=2)
+
     # --- AUDIT: wrapper identity across calls and across undo_push ----------
     print("audit:")
     bm_a = bmesh.from_edit_mesh(me)

@@ -22,9 +22,17 @@ and exception-guarded, since GPU drawing is unavailable in `--background`
 mode (gpu.shader.from_builtin raises SystemError there — verified on
 5.1.2). The pure helpers (`compose_help_lines`, `circle_points_2d`) have
 no gpu dependency and are covered by the headless tests.
+
+GPU state hygiene (1.3.1): both draw callbacks wrap all gpu.state
+mutations in `_gpu_state_restored`, which snapshots the prior state and
+restores it in a finally-clause — a mid-draw exception can no longer
+leak point size / line width / blend / depth into Blender's own drawing
+(a leaked point size showed up as black circles around UV-editor
+vertices).
 """
 
 import math
+from contextlib import contextmanager
 
 import bpy
 import gpu
@@ -91,6 +99,48 @@ def _ui_scale():
     except Exception:
         scale = 1.0
     return scale if scale and scale > 0.0 else 1.0
+
+
+# ---------------------------------------------------------------------------
+# GPU state hygiene
+# ---------------------------------------------------------------------------
+
+# gpu.state has NO point_size_get() on Blender 5.1.2 (probed: getters
+# exist only for blend, depth_test, depth_mask, line_width, scissor and
+# viewport), so the prior point size cannot be captured. Restore the
+# GL/Blender default of 1.0 instead. A leaked point size is global GPU
+# state: Blender's own point drawing (e.g. UV-editor vertices) inherits
+# it, which showed up as big dark circles around UV vertices.
+_DEFAULT_POINT_SIZE = 1.0
+
+
+@contextmanager
+def _gpu_state_restored(points=False):
+    """Save global gpu state, run the draw block, ALWAYS restore.
+
+    Draw callbacks share global GPU state with all of Blender's own
+    drawing; any state set here and not restored leaks into other
+    editors' subsequent draws. The finally-clause guarantees restoration
+    even when the wrapped block raises mid-draw (the callbacks'
+    try/except guards would otherwise silently skip the restore calls).
+
+    Getters probed on 5.1.2: blend_get / depth_test_get / line_width_get
+    exist, so the actual prior values are restored. point_size_get does
+    NOT exist; when ``points`` is True the default (1.0) is restored
+    instead (see _DEFAULT_POINT_SIZE above).
+    """
+    prior_blend = gpu.state.blend_get()
+    prior_depth_test = gpu.state.depth_test_get()
+    prior_line_width = gpu.state.line_width_get()
+    try:
+        yield
+    finally:
+        gpu.state.blend_set(prior_blend)
+        gpu.state.depth_test_set(prior_depth_test)
+        gpu.state.line_width_set(prior_line_width)
+        if points:
+            # No getter exists for point size (5.1.2): restore default.
+            gpu.state.point_size_set(_DEFAULT_POINT_SIZE)
 
 
 # ---------------------------------------------------------------------------
@@ -188,61 +238,60 @@ class PathPreview:
                     "viewportSize", (region.width, region.height))
             shader.uniform_float("lineWidth", width)
         else:
+            # Restored by the enclosing _gpu_state_restored() guard.
             gpu.state.line_width_set(width)
         shader.uniform_float("color", color)
         batch.draw(shader)
-        if not self._polyline:
-            gpu.state.line_width_set(1.0)
 
     def _draw_points(self, coords, color, size):
         from gpu_extras.batch import batch_for_shader
         shader = gpu.shader.from_builtin('UNIFORM_COLOR')
         batch = batch_for_shader(shader, 'POINTS', {"pos": coords})
+        # Restored by the enclosing _gpu_state_restored(points=True)
+        # guard — even if batch.draw() raises.
         gpu.state.point_size_set(size)
         shader.bind()
         shader.uniform_float("color", color)
         batch.draw(shader)
-        gpu.state.point_size_set(1.0)
 
     def _draw_3d(self):
         if (not self.path_coords and not self.anchor_coords
                 and not self.committed_segments and self.snap_coord is None):
             return
         try:
-            scale = _ui_scale()
-            gpu.state.blend_set('ALPHA')
-            # Draw on top of the mesh so the overlays are always visible.
-            gpu.state.depth_test_set('NONE')
+            with _gpu_state_restored(points=True):
+                scale = _ui_scale()
+                gpu.state.blend_set('ALPHA')
+                # Draw on top of the mesh so overlays are always visible.
+                gpu.state.depth_test_set('NONE')
 
-            line_shader = self._get_line_shader()
+                line_shader = self._get_line_shader()
 
-            # Committed segments of this session (under the live preview).
-            for coords, is_erase in self.committed_segments:
-                if len(coords) >= 2:
-                    color = COLOR_ERASED if is_erase else COLOR_COMMITTED
-                    self._draw_polyline(line_shader, coords, color,
-                                        LINE_WIDTH * scale)
+                # Committed segments of this session (under the preview).
+                for coords, is_erase in self.committed_segments:
+                    if len(coords) >= 2:
+                        color = COLOR_ERASED if is_erase else COLOR_COMMITTED
+                        self._draw_polyline(line_shader, coords, color,
+                                            LINE_WIDTH * scale)
 
-            # Live candidate path.
-            if len(self.path_coords) >= 2:
-                self._draw_polyline(line_shader, self.path_coords,
-                                    COLOR_PREVIEW, LINE_WIDTH * scale)
+                # Live candidate path.
+                if len(self.path_coords) >= 2:
+                    self._draw_polyline(line_shader, self.path_coords,
+                                        COLOR_PREVIEW, LINE_WIDTH * scale)
 
-            # Anchors: dark outline point under a green point.
-            if self.anchor_coords:
-                self._draw_points(self.anchor_coords, COLOR_ANCHOR_OUTLINE,
-                                  (ANCHOR_POINT_SIZE
-                                   + ANCHOR_OUTLINE_EXTRA) * scale)
-                self._draw_points(self.anchor_coords, COLOR_ANCHOR,
-                                  ANCHOR_POINT_SIZE * scale)
+                # Anchors: dark outline point under a green point.
+                if self.anchor_coords:
+                    self._draw_points(self.anchor_coords,
+                                      COLOR_ANCHOR_OUTLINE,
+                                      (ANCHOR_POINT_SIZE
+                                       + ANCHOR_OUTLINE_EXTRA) * scale)
+                    self._draw_points(self.anchor_coords, COLOR_ANCHOR,
+                                      ANCHOR_POINT_SIZE * scale)
 
-            # Snap-target core dot (the cyan ring is drawn in POST_PIXEL).
-            if self.snap_coord is not None:
-                self._draw_points([self.snap_coord], COLOR_SNAP_CORE,
-                                  SNAP_POINT_SIZE * scale)
-
-            gpu.state.depth_test_set('LESS_EQUAL')
-            gpu.state.blend_set('NONE')
+                # Snap-target core dot (cyan ring is drawn in POST_PIXEL).
+                if self.snap_coord is not None:
+                    self._draw_points([self.snap_coord], COLOR_SNAP_CORE,
+                                      SNAP_POINT_SIZE * scale)
         except Exception:
             # Never let a draw-time error take down the viewport callback
             # (and keep headless/background runs harmless).
@@ -261,27 +310,27 @@ class PathPreview:
             scale = _ui_scale()
             shader = gpu.shader.from_builtin('UNIFORM_COLOR')
 
-            gpu.state.blend_set('ALPHA')
+            with _gpu_state_restored():
+                gpu.state.blend_set('ALPHA')
 
-            # Snap ring: constant pixel size around the projected snap vert.
-            if self.snap_coord is not None and rv3d is not None:
-                from bpy_extras import view3d_utils
-                co2d = view3d_utils.location_3d_to_region_2d(
-                    region, rv3d, self.snap_coord)
-                if co2d is not None:
-                    ring = circle_points_2d(
-                        (co2d.x, co2d.y), SNAP_RING_RADIUS * scale)
-                    batch = batch_for_shader(
-                        shader, 'LINE_STRIP', {"pos": ring})
-                    gpu.state.line_width_set(SNAP_RING_WIDTH * scale)
-                    shader.bind()
-                    shader.uniform_float("color", COLOR_SNAP_RING)
-                    batch.draw(shader)
-                    gpu.state.line_width_set(1.0)
+                # Snap ring: constant pixel size around the snap vert.
+                if self.snap_coord is not None and rv3d is not None:
+                    from bpy_extras import view3d_utils
+                    co2d = view3d_utils.location_3d_to_region_2d(
+                        region, rv3d, self.snap_coord)
+                    if co2d is not None:
+                        ring = circle_points_2d(
+                            (co2d.x, co2d.y), SNAP_RING_RADIUS * scale)
+                        batch = batch_for_shader(
+                            shader, 'LINE_STRIP', {"pos": ring})
+                        # Restored by _gpu_state_restored().
+                        gpu.state.line_width_set(SNAP_RING_WIDTH * scale)
+                        shader.bind()
+                        shader.uniform_float("color", COLOR_SNAP_RING)
+                        batch.draw(shader)
 
-            self._draw_help_panel(region, shader, batch_for_shader, scale)
-
-            gpu.state.blend_set('NONE')
+                self._draw_help_panel(region, shader, batch_for_shader,
+                                      scale)
         except Exception:
             pass
 

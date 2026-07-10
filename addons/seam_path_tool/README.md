@@ -56,6 +56,36 @@ Packaging as a 4.2+ *extension* (`blender_manifest.toml`) is future work;
 the legacy path was chosen because it registers cleanly on 5.1.2 and keeps
 the repo layout simple.
 
+## Optional dependency: scipy
+
+Everything works without scipy. Installing it makes the per-click path
+tree on large meshes a single C-speed solve (`scipy.sparse.csgraph.dijkstra`):
+measured on a 300k-vert grid, ~45 ms per click instead of ~0.8 s of
+background fill — during which a far hover no longer has to fall back to
+a (sometimes slow) A* query. Without scipy, `Topology` mode still gets a
+C-speed tree from a vectorized numpy BFS (numpy ships with Blender);
+`Length` mode falls back to the incremental pure-Python fill, i.e. exactly
+the 1.3.0 behaviour. Small meshes (< 25k verts) always use the
+pure-Python fill — it already completes within the first couple of
+timer slices there, so scipy buys nothing.
+
+Blender's bundled Python does **not** ship scipy, and a plain
+`pip install scipy` puts it in the Windows *user* site-packages, which
+Blender deliberately ignores. Install it into Blender's user
+`addons/modules` directory (on Blender's `sys.path`, no admin rights
+needed) — Windows `cmd`/PowerShell, adjust the version numbers to yours:
+
+```
+"C:\Program Files\Blender Foundation\Blender 5.1\5.1\python\bin\python.exe" -m pip install --target "%APPDATA%\Blender Foundation\Blender\5.1\scripts\addons\modules" scipy
+```
+
+(From WSL, the same command works with the `/mnt/c/...` path to
+`python.exe` and the expanded `C:\Users\<you>\AppData\Roaming\...` target;
+verified against Blender 5.1.2 / scipy 1.18.0.) The add-on probes for
+scipy lazily — no restart-time cost, and the one-off `import scipy`
+(~0.7 s) happens in the background on the first click's timer tick, never
+inside a click.
+
 ## Usage
 
 Both operators live in **Edit Mode > Edge menu** (Ctrl+E):
@@ -132,21 +162,46 @@ Measured on a 300k-vert grid, Blender 5.1.2 (see
   ~28 ms of which is Blender's own undo push). The click commits exactly
   the edge list the preview already computed — no pathfinding happens in
   the click handler.
-- **The next anchor's path tree fills in the background.** A full
-  single-source Dijkstra tree costs ~0.7–0.9 s in pure Python at this
-  size; instead of paying that inside the click (the pre-1.3.0 hitch), a
+- **The next anchor's path tree is solved at C speed when possible
+  (1.4.0).** Above ~25k verts the tree is built in one call on the best
+  available backend: `scipy.sparse.csgraph.dijkstra` if scipy is
+  installed (see *Optional dependency* — ~45 ms at 300k verts, both path
+  modes), else a vectorized numpy BFS for `Topology` mode (~80–95 ms at
+  300k verts). Cheap solves (< ~30 ms estimated) run inside the commit
+  click; bigger ones run on the first timer tick ~20 ms later, so the
+  click itself never hitches. The flat edge-graph arrays behind these
+  backends cost ~0.6 s of pure-Python extraction at 600k edges, so they
+  are built **once per tool session** (topology, hide state, and vertex
+  positions cannot change while the tool runs) and only the seam flags —
+  which the erase tie-break weighting reads — are patched incrementally
+  after each commit/undo.
+- **The pure-Python incremental fill remains** for small meshes (< 25k
+  verts, where it finishes within the first couple of slices anyway),
+  for `Length` mode without scipy, and as the universal fallback. A full
+  single-source Dijkstra tree costs ~0.7–0.9 s in pure Python at 300k
+  verts; instead of paying that inside the click (the pre-1.3.0 hitch), a
   small ~15 ms slice runs at commit time and the rest fills in ~12 ms
   slices on modal timer events (fully filled after roughly a second),
   so the viewport never blocks.
-- **Hover previews** read the partial tree wherever the hovered vertex is
-  already settled (identical result to the full tree) — which covers the
-  region around the last click immediately. Hovering *far* from the new
-  anchor within the first second after a click falls back to a one-off
-  early-exit A*/Dijkstra query for that vertex: usually fast, but on
-  tie-rich meshes a worst-case far hover can briefly cost what one full
-  tree does (never more than the old per-click hitch, and only until the
-  background fill completes). The fallback result is cached per hovered
-  vertex.
+- **Hover previews** read the tree wherever the hovered vertex is already
+  settled (identical result to the full tree). Hovering *far* from the
+  new anchor before the tree is ready falls back to a one-off early-exit
+  A*/Dijkstra query for that vertex: usually fast, but on tie-rich
+  meshes a worst-case far hover can briefly cost what one full tree does
+  (never more than the old per-click hitch). With a C-speed backend that
+  vulnerable window shrinks from ~a second to at most one timer tick
+  (except right after the *first* click of a session, which also pays
+  the one-off array build on its first tick). The fallback result is
+  cached per hovered vertex.
+- **Backends agree where it matters.** Path *costs* are identical across
+  slicer/scipy/BFS everywhere (the array weights are built from the same
+  `calc_length` values and the same seam-discount multiply); among
+  *equal-cost* paths a backend may pick a different tie-break — exactly
+  the latitude the A* fallback always had, and harmless because a commit
+  reuses the previewed edge list verbatim. Seam-preferring erase paths
+  are *strict* optima by construction, so every backend retraces a
+  marked segment exactly (verified per backend in
+  `tests/test_backends.py`).
 - The occlusion-picking BVH (~0.5 s to build at 300k faces) is built
   once per tool session, on the first mousemove — geometry cannot change
   while the tool runs, so it is never rebuilt on commits.
@@ -180,8 +235,10 @@ Measured on a 300k-vert grid, Blender 5.1.2 (see
   (`DijkstraSlicer`, with optional seam-preferring tie-breaking for erase
   paths; `dijkstra_tree` is the one-shot form), tree-walk path extraction
   (`path_from_tree`), early-exit two-point queries (`astar_path`),
-  `shortest_path`, `mark_seam_path`, `apply_seams`. No UI imports; fully
-  headless-testable.
+  `shortest_path`, `mark_seam_path`, `apply_seams`; plus the 1.4.0 array
+  backends (`GraphArrays` per-session edge arrays, `ArrayTree`
+  scipy/numpy-BFS whole-tree solves, `make_tree` /
+  `select_tree_backend`). No UI imports; fully headless-testable.
 - `session.py` — pure session state for the modal tool: anchors,
   committed segments (edges + prior seam states + mark/erase flag),
   `commit_segment` / `undo_last`, and the derived overlay model. Fully
@@ -210,13 +267,19 @@ procedural meshes), `test_incremental.py` (the 1.3.0 resumable/early-exit
 path machinery: sliced fills identical to one-shot trees, early-exit
 paths identical to full-tree paths incl. tie-breaking, partial-tree +
 A* fallback consistency, and settled-count performance sanity),
-`test_session.py` (the modal tool's commit / erase / undo bookkeeping and
-overlay model, including the erase regression, plus the pure
-occlusion-picking logic against a constructed BVH), and
-`test_register.py` (register/unregister lifecycle + the non-modal
-operator end-to-end) in `--background`, greps for the `*_TESTS_PASSED`
-sentinels (Blender exits 0 even when a `--python` script raises), and
-exits nonzero on any failure. `tests/profile_commit.py` is a separate
+`test_backends.py` (the 1.4.0 scipy / vectorized-BFS tree backends:
+cross-backend cost parity with the slicer, exact seam-preferring erase
+retraces per backend, hidden-element exclusion, backend selection and
+the graceful no-scipy fallback — scipy cases skip cleanly when scipy is
+absent, and setting `SEAM_PATH_NO_SCIPY=1` — from WSL:
+`SEAM_PATH_NO_SCIPY=1 WSLENV=SEAM_PATH_NO_SCIPY` — runs the file as if
+scipy were not installed), `test_session.py` (the modal tool's commit /
+erase / undo bookkeeping and overlay model, including the erase
+regression, plus the pure occlusion-picking logic against a constructed
+BVH), and `test_register.py` (register/unregister lifecycle + the
+non-modal operator end-to-end) in `--background`, greps for the
+`*_TESTS_PASSED` sentinels (Blender exits 0 even when a `--python`
+script raises), and exits nonzero on any failure. `tests/profile_commit.py` is a separate
 profiling harness (not run by the wrapper) that measures the commit-click
 cost breakdown on a ~300k-vert grid. Only the modal event plumbing and
 GPU preview cannot run headlessly; they need a quick manual check in the

@@ -14,12 +14,28 @@ Hovers inside the settled region read the partial tree (identical to the
 full tree there); hovers beyond it fall back to an early-exit A* /
 Dijkstra query (core.astar_path). The pick BVH is built once per tool
 session (geometry cannot change while the modal runs).
+
+Array backends (1.4.0, see core.py): on meshes above
+core.ARRAY_BACKEND_MIN_VERTS the tree is instead solved in ONE C-speed
+call — scipy.sparse.csgraph.dijkstra when scipy is importable (optional
+dependency, see README), or a vectorized-numpy BFS for TOPOLOGY mode
+without scipy. core.make_tree picks the backend and returns an object
+with the slicer's driving interface, so the modal code below is backend
+agnostic: sliceable trees (the pure-Python slicer) keep the 1.3.0
+slice-on-TIMER behaviour; one-shot trees solve synchronously at commit
+when their estimated cost is small (TREE_SYNC_BUDGET) and otherwise on
+the FIRST TIMER tick, ~20 ms after the click, so the click itself never
+hitches. The graph arrays behind the fast backends are built once per
+session (self.tree_cache) — hide/reveal and topology cannot change while
+the modal runs (it swallows all edit keys) — and their cached seam flags
+are patched incrementally after every commit/undo (_note_seam_change),
+which the erase tie-break weighting depends on.
 """
 
 bl_info = {
     "name": "Seam Path Tool",
     "author": "Teo Asinari",
-    "version": (1, 3, 0),
+    "version": (1, 4, 0),
     "blender": (4, 2, 0),
     "location": "Edit Mode > Edge menu > Seam Path",
     "description": "Interactive shortest-path UV seam marking with live preview",
@@ -61,6 +77,14 @@ TREE_FILL_INITIAL_BUDGET = 0.015  # synchronous slice right after a commit
 TREE_FILL_SLICE_BUDGET = 0.012    # per TIMER tick while filling
 TREE_FILL_HOVER_BOOST = 0.008     # extra slice when an unsettled vert is hovered
 TREE_FILL_TIMER_STEP = 0.02       # TIMER period while a fill is pending
+
+# One-shot (non-sliceable) backends only: solve synchronously inside the
+# commit click when the estimated cost fits this budget, else defer the
+# whole solve to the first TIMER tick (~20 ms later) so the click stays
+# fast. Measured (300k-vert grid, Blender 5.1.2): scipy solve ~45 ms —
+# above this budget, so the biggest meshes take their one bounded solve
+# on a TIMER tick; a ~60k-vert mesh estimates ~19 ms and solves in-click.
+TREE_SYNC_BUDGET = 0.03
 
 
 # ---------------------------------------------------------------------------
@@ -323,16 +347,21 @@ class MESH_OT_seam_path_interactive(bpy.types.Operator):
         return cands[0][1] if cands else None
 
     def _reset_tree(self, context, bm, prefer_seams):
-        """Start an INCREMENTAL single-source Dijkstra from the current
-        anchor. Called once per committed anchor / in-tool undo (and on
-        mark/erase toggles, which change the tie-break weighting).
+        """Start the single-source shortest-path tree from the current
+        anchor on the best available backend (core.make_tree). Called
+        once per committed anchor / in-tool undo (and on mark/erase
+        toggles, which change the tie-break weighting).
 
-        Only a small synchronous slice runs here (TREE_FILL_INITIAL_BUDGET,
-        enough to settle the anchor's neighbourhood); the rest fills in
-        ~12 ms slices on modal TIMER ticks, so a commit click returns
-        immediately instead of paying the full ~0.7 s tree (300k verts) up
-        front. Mousemove previews read the partial tree where settled and
-        fall back to core.astar_path elsewhere (see _preview_edges)."""
+        Sliceable backend (pure-Python DijkstraSlicer): only a small
+        synchronous slice runs here (TREE_FILL_INITIAL_BUDGET, enough to
+        settle the anchor's neighbourhood); the rest fills in ~12 ms
+        slices on modal TIMER ticks. One-shot backends (scipy / BFS
+        arrays): the whole solve runs here only if its estimate fits
+        TREE_SYNC_BUDGET, else on the first TIMER tick. Either way the
+        commit click returns immediately instead of paying the full
+        ~0.7 s pure-Python tree (300k verts) up front. Mousemove previews
+        read the tree where settled and fall back to core.astar_path
+        elsewhere (see _preview_edges)."""
         # Anchor / weighting changed: any cached hover path is stale.
         self.hover_edges = None
         self.hover_key = None
@@ -345,9 +374,12 @@ class MESH_OT_seam_path_interactive(bpy.types.Operator):
             return
         self.tree_root = bm.verts[anchor]
         self.tree_prefers_seams = prefer_seams
-        self.tree = core.DijkstraSlicer(bm, self.tree_root, mode=self.mode,
-                                        prefer_seams=prefer_seams)
-        if self.tree.advance(time_budget=TREE_FILL_INITIAL_BUDGET):
+        self.tree = core.make_tree(bm, self.tree_root, mode=self.mode,
+                                   prefer_seams=prefer_seams,
+                                   cache=self.tree_cache)
+        budget = (TREE_FILL_INITIAL_BUDGET if self.tree.sliceable
+                  else TREE_SYNC_BUDGET)
+        if self.tree.advance(time_budget=budget):
             self._stop_fill_timer(context)
         else:
             self._ensure_fill_timer(context)
@@ -366,12 +398,26 @@ class MESH_OT_seam_path_interactive(bpy.types.Operator):
             self._fill_timer = None
 
     def _advance_fill(self, context):
-        """One background slice of the pending tree fill (TIMER handler)."""
+        """Background tree work (TIMER handler): one ~12 ms slice for the
+        sliceable pure-Python backend, or the single bounded C-speed
+        solve for a one-shot array backend (whose estimate exceeded
+        TREE_SYNC_BUDGET at commit time — e.g. ~45 ms + the one-off
+        graph-array build on the largest meshes)."""
         if self.tree is None or self.tree.done:
             self._stop_fill_timer(context)
             return
-        if self.tree.advance(time_budget=TREE_FILL_SLICE_BUDGET):
+        budget = TREE_FILL_SLICE_BUDGET if self.tree.sliceable else None
+        if self.tree.advance(time_budget=budget):
             self._stop_fill_timer(context)
+
+    def _note_seam_change(self, bm, edge_indices):
+        """Keep the session graph arrays' cached seam flags current after
+        a commit/undo changed edge.seam — the prefer_seams (erase) weight
+        encoding reads them, and stale flags would break exact retracing.
+        """
+        graph = self.tree_cache.get('graph')
+        if graph is not None:
+            graph.update_seams(bm, edge_indices)
 
     def _preview_edges(self, context, bm, v_target, clearing):
         """Candidate path from the current anchor to v_target. This exact
@@ -478,6 +524,9 @@ class MESH_OT_seam_path_interactive(bpy.types.Operator):
             return
         v_anchor = bm.verts[self.session.current_anchor]
         self.session.commit_segment(v_anchor, edges, clearing)
+        # Seam flags changed along the path; patch the cached graph
+        # weights BEFORE the new tree (which may prefer seams) is built.
+        self._note_seam_change(bm, [e.index for e in edges])
         self._reset_tree(context, bm, clearing)
         self._refresh_committed_overlays(context, bm)
 
@@ -490,8 +539,12 @@ class MESH_OT_seam_path_interactive(bpy.types.Operator):
     def _undo_segment(self, context, event):
         bm = self._bm(context)
         had_segments = bool(self.session.segments)
+        undone_edges = (list(self.session.segments[-1].edge_indices)
+                        if self.session.segments else [])
         if not self.session.undo_last(bm):
             return
+        # undo_last restored those edges' prior seam flags.
+        self._note_seam_change(bm, undone_edges)
         self._reset_tree(context, bm, self.erase != event.ctrl)
         self._refresh_committed_overlays(context, bm)
         if had_segments:
@@ -525,9 +578,10 @@ class MESH_OT_seam_path_interactive(bpy.types.Operator):
 
         self.session = session.SeamSession()  # commit/erase/undo bookkeeping
         self.hover_index = None
-        self.tree = None                  # incremental single-source Dijkstra
-        self.tree_root = None             # BMVert the slicer is rooted at
-        self.tree_prefers_seams = False   # tie-break weighting the slicer uses
+        self.tree = None                  # single-source shortest-path tree
+        self.tree_root = None             # BMVert the tree is rooted at
+        self.tree_prefers_seams = False   # tie-break weighting the tree uses
+        self.tree_cache = {}              # per-session GraphArrays (core.make_tree)
         self.hover_edges = None           # last previewed path (commit reuses it)
         self.hover_key = None             # (anchor, target, clearing) it belongs to
         self._fill_timer = None           # TIMER driving the background fill

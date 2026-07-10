@@ -40,6 +40,7 @@ run_one() {
 status=0
 run_one "$TESTS_DIR/test_core.py" "CORE_TESTS_PASSED" || status=1
 run_one "$TESTS_DIR/test_incremental.py" "INCREMENTAL_TESTS_PASSED" || status=1
+run_one "$TESTS_DIR/test_backends.py" "BACKEND_TESTS_PASSED" || status=1
 run_one "$TESTS_DIR/test_session.py" "SESSION_TESTS_PASSED" || status=1
 run_one "$TESTS_DIR/test_register.py" "REGISTER_TESTS_PASSED" || status=1
 

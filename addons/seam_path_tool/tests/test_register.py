@@ -9,6 +9,8 @@ seams, then unregisters cleanly.
 Prints REGISTER_TESTS_PASSED on success.
 """
 
+import ast
+import inspect
 import math
 import os
 import sys
@@ -32,6 +34,72 @@ def check(name, cond, detail=""):
     else:
         print("  FAIL %s  %s" % (name, detail))
         FAILURES.append(name)
+
+
+def gpu_state_guard_audit(module, guard_name="_gpu_state_restored"):
+    """(guard_spans, offenders) for a drawing module.
+
+    GPU state set/get raises SystemError in --background (probed on
+    5.1.2), so restoration cannot be tested behaviorally headless.
+    Instead this audits the module's AST: every ``gpu.state.*_set(...)``
+    call must sit (a) inside a ``with <guard_name>(...):`` block, (b)
+    inside the guard helper itself, or (c) inside a helper function
+    whose every call site sits inside a guarded block.
+    """
+    tree = ast.parse(inspect.getsource(module))
+
+    def span(node):
+        return (node.lineno, node.end_lineno)
+
+    guard_spans = []   # `with _gpu_state_restored(...)` blocks
+    allowed = []       # spans where raw gpu.state sets are permitted
+    funcs = {}         # function name -> span
+    call_sites = {}    # callee name -> [line, ...]
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            funcs[node.name] = span(node)
+            if node.name == guard_name:
+                allowed.append(span(node))
+        elif isinstance(node, ast.With):
+            for item in node.items:
+                ctx = item.context_expr
+                f = ctx.func if isinstance(ctx, ast.Call) else None
+                name = getattr(f, "id", None) or getattr(f, "attr", None)
+                if name == guard_name:
+                    guard_spans.append(span(node))
+                    allowed.append(span(node))
+        if isinstance(node, ast.Call):
+            f = node.func
+            name = getattr(f, "id", None) or getattr(f, "attr", None)
+            call_sites.setdefault(name, []).append(node.lineno)
+
+    def is_allowed(line):
+        return any(a <= line <= b for a, b in allowed)
+
+    offenders = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr.endswith("_set")
+                and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "state"
+                and getattr(node.func.value.value, "id", None) == "gpu"):
+            continue
+        line = node.lineno
+        if is_allowed(line):
+            continue
+        # Innermost enclosing function; OK if all ITS call sites are
+        # inside guarded blocks (e.g. _draw_points/_draw_polyline).
+        owner, owner_size = None, None
+        for fname, (a, b) in funcs.items():
+            if a <= line <= b and fname != guard_name:
+                if owner is None or (b - a) < owner_size:
+                    owner, owner_size = fname, b - a
+        sites = call_sites.get(owner, []) if owner else []
+        if owner and sites and all(is_allowed(ln) for ln in sites):
+            continue
+        offenders.append("%s at line %d" % (node.func.attr, line))
+    return guard_spans, offenders
 
 
 def vert_at(bm, co, tol=1e-5):
@@ -180,6 +248,44 @@ def main():
           and not p.committed_segments and p.snap_coord is None)
     p.stop()  # idempotent
     check("stop is idempotent", True)
+
+    # --- GPU state hygiene (v1.3.1: leaked point size drew black circles
+    # around UV-editor vertices) -------------------------------------------
+    # gpu.state setters AND getters raise SystemError in --background
+    # (probed on 5.1.2), so restoration is audited structurally: every
+    # gpu.state.*_set in the draw module must route through the
+    # _gpu_state_restored guard, which restores in a finally-clause.
+    guard_spans, offenders = gpu_state_guard_audit(pv)
+    check("every gpu.state set in preview.py is guard-covered",
+          not offenders, "unguarded: %s" % ", ".join(offenders))
+    check("both draw callbacks use the state guard (3D and 2D)",
+          len(guard_spans) >= 2, "got %d guard blocks" % len(guard_spans))
+    check("state guard restores in a finally-clause",
+          "finally:" in inspect.getsource(pv._gpu_state_restored))
+    for cb in (pv.PathPreview._draw_3d, pv.PathPreview._draw_2d):
+        check("%s routes through the state guard" % cb.__name__,
+              "_gpu_state_restored" in inspect.getsource(cb))
+    # point_size has no getter on 5.1.2 — the guard must restore the
+    # default explicitly (this exact leak caused the UV-editor artifact).
+    import gpu
+    check("probe: gpu.state.point_size_get still absent on this build "
+          "(guard restores the default instead)",
+          not hasattr(gpu.state, "point_size_get"))
+    check("guard restores default point size 1.0",
+          pv._DEFAULT_POINT_SIZE == 1.0)
+    check("guard-relied getters exist on this build",
+          all(hasattr(gpu.state, g) for g in
+              ("blend_get", "depth_test_get", "line_width_get")))
+    # Fail-closed: headless, the guard must raise while READING priors —
+    # before its body (or any state mutation) can run.
+    body_ran = False
+    try:
+        with pv._gpu_state_restored(points=True):
+            body_ran = True
+        check("gpu state guard usable (GPU available)", True)
+    except SystemError:
+        check("gpu state guard fails closed in background "
+              "(reads priors before mutating anything)", not body_ran)
 
     # --- unregister ------------------------------------------------------------
     seam_path_tool.unregister()
