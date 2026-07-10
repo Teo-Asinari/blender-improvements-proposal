@@ -28,6 +28,7 @@ fires no depsgraph events (probed) and costs ~27 ms at 300k verts.
 
 import time
 import traceback
+from contextlib import contextmanager
 
 import bpy
 import gpu
@@ -549,6 +550,33 @@ def _tag_redraw_view3d():
 # Drawing (viewport only; every gpu call guarded)
 # ---------------------------------------------------------------------------
 
+@contextmanager
+def _gpu_state_restored():
+    """Save global gpu state, run the draw block, ALWAYS restore.
+
+    Draw callbacks share global GPU state with all of Blender's own
+    drawing; any state set here and not restored leaks into other
+    editors' subsequent draws (a past leak of depth_test LESS_EQUAL from
+    this very overlay corrupted other overlays). The finally-clause
+    guarantees restoration even when the wrapped block raises mid-draw —
+    the callback's try/except guard alone would silently skip restore
+    calls placed after the draw.
+
+    Getters probed on 5.1.2: blend_get and depth_test_get exist, so the
+    actual prior values are restored. face_culling_get does NOT exist;
+    Blender's default ('NONE') is restored instead.
+    """
+    prior_blend = gpu.state.blend_get()
+    prior_depth_test = gpu.state.depth_test_get()
+    try:
+        yield
+    finally:
+        gpu.state.blend_set(prior_blend)
+        gpu.state.depth_test_set(prior_depth_test)
+        # No face_culling_get on 5.1.2: restore the documented default.
+        gpu.state.face_culling_set('NONE')
+
+
 def _draw():
     if not _state.enabled or _state.object_name is None:
         return
@@ -600,30 +628,28 @@ def _draw():
                 _state.shader, 'TRIS',
                 {"pos": _state.coords, "color": _state.colors})
 
-        gpu.state.blend_set('ALPHA')
-        gpu.state.depth_test_set('LESS_EQUAL')
-        gpu.state.face_culling_set('NONE')
-        with gpu.matrix.push_pop():
-            gpu.matrix.multiply_matrix(obj.matrix_world)
-            _state.shader.bind()
-            _state.batch.draw(_state.shader)
-        # Restore the state POST_VIEW callbacks start from (depth test
-        # OFF) — leaving LESS_EQUAL on can corrupt other overlays.
-        gpu.state.blend_set('NONE')
-        gpu.state.depth_test_set('NONE')
+        # All state mutations live inside the guard: the priors are
+        # captured first and restored in its finally-clause, so even an
+        # exception mid-draw cannot leak blend/depth/culling state into
+        # Blender's own subsequent drawing.
+        with _gpu_state_restored():
+            gpu.state.blend_set('ALPHA')
+            gpu.state.depth_test_set('LESS_EQUAL')
+            gpu.state.face_culling_set('NONE')
+            with gpu.matrix.push_pop():
+                gpu.matrix.multiply_matrix(obj.matrix_world)
+                _state.shader.bind()
+                _state.batch.draw(_state.shader)
     except Exception:
         # Never let a draw-time error take down the viewport callback —
         # but never hide it either: latch it, print the traceback ONCE,
         # and let the UI panels show an error row (background test runs
-        # latch quietly; there is no viewport to fix there).
+        # latch quietly; there is no viewport to fix there). GPU state
+        # needs no cleanup here: _gpu_state_restored() already restored
+        # it on the way out.
         _state.last_draw_error = traceback.format_exc()
         if not bpy.app.background:
             print("[uv_island_overlay] viewport draw failed; overlay "
                   "suspended for %r until Refresh. Traceback:"
                   % _state.object_name)
             print(_state.last_draw_error)
-        try:
-            gpu.state.blend_set('NONE')
-            gpu.state.depth_test_set('NONE')
-        except Exception:
-            pass

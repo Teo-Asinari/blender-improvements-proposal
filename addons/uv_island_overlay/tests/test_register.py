@@ -9,6 +9,8 @@ toggles off, unregisters cleanly and survives a re-register cycle.
 Prints REGISTER_TESTS_PASSED on success.
 """
 
+import ast
+import inspect
 import os
 import sys
 import traceback
@@ -29,6 +31,72 @@ def check(name, cond, detail=""):
     else:
         print("  FAIL %s  %s" % (name, detail))
         FAILURES.append(name)
+
+
+def gpu_state_guard_audit(module, guard_name="_gpu_state_restored"):
+    """(guard_spans, offenders) for a drawing module.
+
+    GPU state set/get raises SystemError in --background (probed on
+    5.1.2), so restoration cannot be tested behaviorally headless.
+    Instead this audits the module's AST: every ``gpu.state.*_set(...)``
+    call must sit (a) inside a ``with <guard_name>(...):`` block, (b)
+    inside the guard helper itself, or (c) inside a helper function
+    whose every call site sits inside a guarded block.
+    """
+    tree = ast.parse(inspect.getsource(module))
+
+    def span(node):
+        return (node.lineno, node.end_lineno)
+
+    guard_spans = []   # `with _gpu_state_restored(...)` blocks
+    allowed = []       # spans where raw gpu.state sets are permitted
+    funcs = {}         # function name -> span
+    call_sites = {}    # callee name -> [line, ...]
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            funcs[node.name] = span(node)
+            if node.name == guard_name:
+                allowed.append(span(node))
+        elif isinstance(node, ast.With):
+            for item in node.items:
+                ctx = item.context_expr
+                f = ctx.func if isinstance(ctx, ast.Call) else None
+                name = getattr(f, "id", None) or getattr(f, "attr", None)
+                if name == guard_name:
+                    guard_spans.append(span(node))
+                    allowed.append(span(node))
+        if isinstance(node, ast.Call):
+            f = node.func
+            name = getattr(f, "id", None) or getattr(f, "attr", None)
+            call_sites.setdefault(name, []).append(node.lineno)
+
+    def is_allowed(line):
+        return any(a <= line <= b for a, b in allowed)
+
+    offenders = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr.endswith("_set")
+                and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "state"
+                and getattr(node.func.value.value, "id", None) == "gpu"):
+            continue
+        line = node.lineno
+        if is_allowed(line):
+            continue
+        # Innermost enclosing function; OK if all ITS call sites are
+        # inside guarded blocks.
+        owner, owner_size = None, None
+        for fname, (a, b) in funcs.items():
+            if a <= line <= b and fname != guard_name:
+                if owner is None or (b - a) < owner_size:
+                    owner, owner_size = fname, b - a
+        sites = call_sites.get(owner, []) if owner else []
+        if owner and sites and all(is_allowed(ln) for ln in sites):
+            continue
+        offenders.append("%s at line %d" % (node.func.attr, line))
+    return guard_spans, offenders
 
 
 def main():
@@ -347,6 +415,41 @@ def main():
           not bpy.app.timers.is_registered(overlay._live_timer_cb))
     check("snapshot scratch mesh removed on disable",
           bpy.data.meshes.get(overlay._SCRATCH_NAME) is None)
+
+    # --- v1.1.1: GPU state hygiene ---------------------------------------------
+    # gpu.state setters AND getters raise SystemError in --background
+    # (probed on 5.1.2), so restoration is audited structurally: every
+    # gpu.state.*_set in overlay.py must route through the
+    # _gpu_state_restored guard, which restores in a finally-clause
+    # (an exception mid-draw must not leak blend/depth/culling into
+    # Blender's own drawing — the old depth_test LESS_EQUAL leak).
+    guard_spans, offenders = gpu_state_guard_audit(overlay)
+    check("every gpu.state set in overlay.py is guard-covered",
+          not offenders, "unguarded: %s" % ", ".join(offenders))
+    check("the draw callback uses the state guard",
+          len(guard_spans) >= 1
+          and "_gpu_state_restored" in inspect.getsource(overlay._draw))
+    check("state guard restores in a finally-clause",
+          "finally:" in inspect.getsource(overlay._gpu_state_restored))
+    import gpu
+    check("guard-relied getters exist on this build",
+          all(hasattr(gpu.state, g)
+              for g in ("blend_get", "depth_test_get")))
+    check("probe: gpu.state.face_culling_get still absent on this build "
+          "(guard restores the default 'NONE' instead)",
+          not hasattr(gpu.state, "face_culling_get"))
+    check("version bumped for the state-hygiene fix",
+          uv_island_overlay.bl_info.get("version", (0,))[:3] >= (1, 1, 1))
+    # Fail-closed: headless, the guard must raise while READING priors —
+    # before its body (or any state mutation) can run.
+    body_ran = False
+    try:
+        with overlay._gpu_state_restored():
+            body_ran = True
+        check("gpu state guard usable (GPU available)", True)
+    except SystemError:
+        check("gpu state guard fails closed in background "
+              "(reads priors before mutating anything)", not body_ran)
 
     # --- unregister -----------------------------------------------------------------
     uv_island_overlay.unregister()
