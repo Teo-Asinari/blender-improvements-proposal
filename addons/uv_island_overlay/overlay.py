@@ -39,6 +39,16 @@ Display modes (v1.3.0):
   An optional per-island tint (blue below / red above the mesh's median
   density) rides the same per-vertex color attribute ISLANDS mode uses.
 
+Opacity + culling (v1.3.1):
+- Per-mode opacity properties feed a FLOAT "overlay_opacity" push
+  constant (the fragment stages ignore the baked vertex alpha), so the
+  sliders are live with zero rebuild. Defaults: ISLANDS 0.4 (color
+  wash), DENSITY 0.9 (near-opaque paint).
+- Both modes draw with back-face culling ('BACK'): the overlay paints
+  only camera-facing surfaces, so back faces of open/thin geometry no
+  longer bleed through. Flipped-normal faces vanish from the overlay —
+  a deliberate diagnostic (those faces misbehave in baking too).
+
 The SEAM live path deliberately never calls Object.update_from_editmode():
 probed on 5.1.2, that tags the depsgraph and would make the refresh loop
 self-triggering. Instead, edit-mode state is snapshotted with
@@ -53,9 +63,23 @@ from contextlib import contextmanager
 import bpy
 import gpu
 
-# Overall tint strength. Baked into the vertex colors so the geometry
-# stays a plain (pos, color) soup.
-ALPHA = 0.4
+# Per-mode default overlay opacity (v1.3.1). Opacity is a FLOAT push
+# constant read fresh from the WindowManager properties at draw time
+# (same probed-on-5.1.2 mechanism as checker_res), so dragging the
+# sliders is live — never a geometry or batch rebuild. Two separate
+# properties (ISLANDS "Tint Opacity" / DENSITY "Checker Opacity")
+# because the right defaults differ by an order of intent: the island
+# tint is a translucent color WASH over the shaded surface (0.4), while
+# the density checker should read like near-opaque PAINT (0.9) — one
+# shared slider would drag the wrong value into the other mode on every
+# mode switch.
+#
+# ALPHA is still baked into the per-vertex color alpha so the (pos,
+# color) soup layout and the pure color helpers stay unchanged, but the
+# fragment stages IGNORE that channel since v1.3.1 — the push constant
+# wins.
+ALPHA = 0.4                      # ISLANDS default: translucent wash
+DEFAULT_DENSITY_OPACITY = 0.9    # DENSITY default: near-opaque paint
 
 # Clip-space depth bias (v1.2.0). The soup's positions are BIT-IDENTICAL
 # to the mesh's own vertex coordinates — no geometric offset. The old
@@ -92,16 +116,25 @@ void main()
 FRAG_SHADER_SRC = """
 void main()
 {
-    fragColor = finalColor;
+    /* Alpha comes from the overlay_opacity push constant (v1.3.1), NOT
+     * from the vertex color: opacity changes are a uniform update — no
+     * geometry or batch rebuild, the slider is live. */
+    fragColor = vec4(finalColor.rgb, overlay_opacity);
 }
 """
 
 # --- DENSITY mode (v1.3.0) --------------------------------------------------
 # Checker shades, multiplied by the per-island tint in the fragment
 # stage. Mid-tone grays 0.5 apart: over a dark viewport theme the light
-# squares carry the contrast, over a light theme the dark ones do, and
-# at ALPHA 0.4 the two stay clearly distinguishable from each other in
-# both while the mesh still reads through.
+# squares carry the contrast, over a light theme the dark ones do. At
+# the near-opaque default opacity (0.9, v1.3.1) they still work: both
+# sit off the extremes, so neither square crushes to black or blows to
+# white, the 0.5 separation keeps the parity obvious, and the residual
+# 0.1 surface show-through plus the deviation tint keep the underlying
+# shading readable. We deliberately cannot blend the checker over the
+# framebuffer's shaded result in the shader (no framebuffer access from
+# a POST_VIEW draw callback), so plain alpha blending at 0.9 is the
+# whole mechanism.
 CHECKER_DARK = 0.35
 CHECKER_LIGHT = 0.85
 
@@ -131,7 +164,10 @@ void main()
     vec2 cell = floor(uvInterp * checker_res);
     float parity = mod(cell.x + cell.y, 2.0);
     float shade = mix(%r, %r, parity);
-    fragColor = vec4(finalColor.rgb * shade, finalColor.a);
+    /* Alpha from the overlay_opacity push constant (v1.3.1), same
+     * live-uniform mechanism as checker_res — the baked vertex alpha
+     * is ignored. */
+    fragColor = vec4(finalColor.rgb * shade, overlay_opacity);
 }
 """ % (CHECKER_DARK, CHECKER_LIGHT)
 
@@ -249,6 +285,15 @@ def on_checker_size_changed():
     """Checker resolution changed: it is a push constant read at draw
     time (probed on 5.1.2 — FLOAT push constants are supported), so no
     rebuild of geometry or batch is needed; just repaint."""
+    if _state.enabled:
+        _tag_redraw_view3d()
+
+
+def on_opacity_changed():
+    """Overlay opacity changed (either mode's property): it is a FLOAT
+    push constant read at draw time (same probed mechanism as
+    checker_res), so no rebuild of geometry or batch is needed; just
+    repaint."""
     if _state.enabled:
         _tag_redraw_view3d()
 
@@ -846,12 +891,16 @@ def _shader_create_info():
     test suite can build (and structurally check) this without a GPU.
     Attributes match the batch content: "pos" (vec3) + per-vertex
     "color" (vec4, flat per face because all three corners of a triangle
-    carry the same value).
+    carry the same value). The FLOAT "overlay_opacity" push constant
+    (v1.3.1) supplies the fragment alpha — same probed-on-5.1.2
+    mechanism as the density shader's checker_res, so opacity changes
+    are a uniform update, never a rebuild.
     """
     iface = gpu.types.GPUStageInterfaceInfo("uv_island_overlay_iface")
     iface.smooth('VEC4', "finalColor")
     info = gpu.types.GPUShaderCreateInfo()
     info.push_constant('MAT4', "ModelViewProjectionMatrix")
+    info.push_constant('FLOAT', "overlay_opacity")
     info.vertex_in(0, 'VEC3', "pos")
     info.vertex_in(1, 'VEC4', "color")
     info.vertex_out(iface)
@@ -885,6 +934,7 @@ def _density_shader_create_info():
     info = gpu.types.GPUShaderCreateInfo()
     info.push_constant('MAT4', "ModelViewProjectionMatrix")
     info.push_constant('FLOAT', "checker_res")
+    info.push_constant('FLOAT', "overlay_opacity")
     info.vertex_in(0, 'VEC3', "pos")
     info.vertex_in(1, 'VEC4', "color")
     info.vertex_in(2, 'VEC2', "uv")
@@ -1008,7 +1058,19 @@ def _draw():
         with _gpu_state_restored():
             gpu.state.blend_set('ALPHA')
             gpu.state.depth_test_set('LESS_EQUAL')
-            gpu.state.face_culling_set('NONE')
+            # Back-face culling (v1.3.1, both modes): the soup's
+            # triangle winding follows the mesh's loop order, which is
+            # consistent with the face normals, so 'BACK' keeps exactly
+            # the camera-facing side of every normal-consistent face.
+            # Without it, back faces of open/thin geometry depth-pass
+            # their own front faces (the shader's viewer-ward bias) and
+            # bleed through, making the overlay look translucent even
+            # at high opacity. Side effect, doubling as a diagnostic: a
+            # flipped-normal face disappears from the overlay — the
+            # same faces that misbehave in baking/export. The guard's
+            # finally-clause restores the documented default 'NONE'
+            # (no face_culling_get exists on 5.1.2).
+            gpu.state.face_culling_set('BACK')
             with gpu.matrix.push_pop():
                 gpu.matrix.multiply_matrix(obj.matrix_world)
                 shader.bind()
@@ -1022,15 +1084,23 @@ def _draw():
                        @ gpu.matrix.get_model_view_matrix())
                 shader.uniform_float(
                     "ModelViewProjectionMatrix", mvp)
+                # Opacity (and in DENSITY mode the checker resolution):
+                # read fresh from the properties every draw — both are
+                # push constants, so changing them needs nothing but a
+                # redraw (dragging the sliders is live, zero rebuild).
+                wm = bpy.context.window_manager
                 if _state.mode == 'DENSITY':
-                    # Checker resolution: read fresh from the property
-                    # every draw — it is a push constant, so changing
-                    # it needs nothing but a redraw.
-                    wm = bpy.context.window_manager
                     res = float(getattr(wm,
                                         "uv_island_overlay_checker_size",
                                         DEFAULT_CHECKER_SIZE))
                     shader.uniform_float("checker_res", res)
+                    opacity = float(getattr(
+                        wm, "uv_island_overlay_density_opacity",
+                        DEFAULT_DENSITY_OPACITY))
+                else:
+                    opacity = float(getattr(
+                        wm, "uv_island_overlay_opacity", ALPHA))
+                shader.uniform_float("overlay_opacity", opacity)
                 _state.batch.draw(shader)
     except Exception:
         # Never let a draw-time error take down the viewport callback —

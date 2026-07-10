@@ -209,7 +209,11 @@ def test_build_density_object_mode():
           and a_rows[0][2] > a_rows[0][0]
           and b_rows[0][0] > b_rows[0][2],
           "a %r b %r" % (a_rows[:1], b_rows[:1]))
-    check("tint alpha matches the overlay ALPHA",
+    # Since v1.3.1 the fragment stage ignores the baked vertex alpha
+    # (opacity is a push constant), but the bake itself must stay
+    # stable: the soup layout and the pure color helpers are unchanged.
+    check("tint alpha still baked as the overlay ALPHA (vestigial but "
+          "layout-stable since v1.3.1)",
           np.all(cols[:, 3] == np.float32(overlay.ALPHA)))
 
 

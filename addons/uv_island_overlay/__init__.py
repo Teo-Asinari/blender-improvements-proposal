@@ -11,7 +11,7 @@ scales on the surface).
 bl_info = {
     "name": "UV Island Overlay",
     "author": "Teo Asinari",
-    "version": (1, 3, 0),
+    "version": (1, 3, 1),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N) > UV Islands tab; also in the "
                 "Overlays popover",
@@ -22,7 +22,8 @@ bl_info = {
 
 import bpy
 from bpy.app.handlers import persistent
-from bpy.props import BoolProperty, EnumProperty, IntProperty
+from bpy.props import (BoolProperty, EnumProperty, FloatProperty,
+                       IntProperty)
 
 if "overlay" in locals():
     import importlib
@@ -124,10 +125,14 @@ def _draw_overlay_controls(layout, context):
         src_row = col.row(align=True)
         src_row.enabled = interactive
         src_row.prop(wm, "uv_island_overlay_source", text="Source")
+        op_row = col.row(align=True)
+        op_row.enabled = interactive
+        op_row.prop(wm, "uv_island_overlay_opacity")
     else:
         den = col.column(align=True)
         den.enabled = interactive
         den.prop(wm, "uv_island_overlay_checker_size")
+        den.prop(wm, "uv_island_overlay_density_opacity")
         den.prop(wm, "uv_island_overlay_texture_size")
         tint_row = col.row(align=True)
         tint_row.enabled = interactive
@@ -229,6 +234,13 @@ def _on_checker_size_update(self, context):
     (probed on 5.1.2: FLOAT push constants are supported), so a change
     only needs a repaint — never a rebuild."""
     overlay.on_checker_size_changed()
+
+
+def _on_opacity_update(self, context):
+    """Overlay opacity (either mode's property) is a shader push
+    constant read at draw time — same mechanism as the checker size, so
+    dragging the slider only repaints, never rebuilds."""
+    overlay.on_opacity_changed()
 
 
 def _on_density_tint_update(self, context):
@@ -365,6 +377,33 @@ def register():
         update=_on_checker_size_update,
     )
 
+    # Two opacity properties, not one (v1.3.1): the right defaults
+    # differ per mode — the island tint is a translucent color wash
+    # (0.4) while the density checker should read like near-opaque
+    # paint (0.9) — and separate properties mean switching modes never
+    # drags one mode's slider value into the other. Both feed a FLOAT
+    # push constant read at draw time (probed on 5.1.2, same mechanism
+    # as the checker size), so dragging is live with zero rebuild.
+    bpy.types.WindowManager.uv_island_overlay_opacity = FloatProperty(
+        name="Tint Opacity",
+        description="Opacity of the island-color tint in Island Colors "
+                    "mode. Applied live (shader uniform, no rebuild)",
+        default=overlay.ALPHA, min=0.0, max=1.0, subtype='FACTOR',
+        update=_on_opacity_update,
+    )
+
+    bpy.types.WindowManager.uv_island_overlay_density_opacity = \
+        FloatProperty(
+            name="Checker Opacity",
+            description="Opacity of the texel-density checker in Texel "
+                        "Density mode; near-opaque by default so the "
+                        "checker reads like paint on the surface. "
+                        "Applied live (shader uniform, no rebuild)",
+            default=overlay.DEFAULT_DENSITY_OPACITY, min=0.0, max=1.0,
+            subtype='FACTOR',
+            update=_on_opacity_update,
+        )
+
     bpy.types.WindowManager.uv_island_overlay_texture_size = IntProperty(
         name="Texture Size",
         description="Assumed square texture edge in pixels, used only "
@@ -417,6 +456,8 @@ def unregister():
 
     del bpy.types.WindowManager.uv_island_overlay_density_tint
     del bpy.types.WindowManager.uv_island_overlay_texture_size
+    del bpy.types.WindowManager.uv_island_overlay_density_opacity
+    del bpy.types.WindowManager.uv_island_overlay_opacity
     del bpy.types.WindowManager.uv_island_overlay_checker_size
     del bpy.types.WindowManager.uv_island_overlay_mode
     del bpy.types.WindowManager.uv_island_overlay_source

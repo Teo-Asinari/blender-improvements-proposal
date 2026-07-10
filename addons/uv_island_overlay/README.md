@@ -12,7 +12,11 @@ gaps between adjacent faces. Since v1.3.0 a second display mode
 visualizes **texel density as a checkerboard** mapped through the mesh's
 actual UVs — islands with mismatched density show visibly different
 checker scales on the surface, optionally tinted by how far each island
-deviates from the mesh's median density.
+deviates from the mesh's median density. Since v1.3.1 each mode has a
+live **opacity slider** (the density checker is near-opaque by default,
+so it reads like paint instead of a translucent film) and the overlay
+draws with **back-face culling** in both modes: only camera-facing
+surfaces are painted, so nothing bleeds through open or thin geometry.
 
 *(No screenshots included — see the GUI checklist below to see it live in
 under a minute.)*
@@ -151,6 +155,13 @@ Properties (in both panels, DENSITY mode only):
   (probed on 5.1.2: `FLOAT` push constants work with
   `GPUShaderCreateInfo`), so dragging it updates live — no geometry or
   batch rebuild ever happens for this property.
+- **Checker Opacity** (v1.3.1) — opacity of the checker, default
+  **0.9**: a texel checker should read like near-opaque paint on the
+  surface, not a translucent film (the 0.35/0.85 checker grays sit off
+  the extremes, so at 0.9 the parity stays obvious in both viewport
+  themes while the residual 10% show-through plus the deviation tint
+  keep the underlying shading readable). Same push-constant mechanism
+  as Checker Size: dragging is live, zero rebuild.
 - **Texture Size** — only converts the median readout to px/unit;
   changing it recomputes nothing.
 - **Deviation Tint** (default on) — multiplies the checker with a subtle
@@ -185,6 +196,39 @@ extraction 0.35 s on the Object-Mode numpy `foreach_get` fast path vs
 *required* in Edit Mode: while the edit bmesh owns the mesh, the Mesh
 `uv_layers` data arrays are empty — probed on 5.1.2); area + density
 statistics 0.10 s.
+
+## Opacity and back-face culling (v1.3.1)
+
+Both modes have an **opacity slider** (in both panels): **Tint
+Opacity** in Island Colors mode (default 0.4 — the classic translucent
+color wash, unchanged) and **Checker Opacity** in Texel Density mode
+(default 0.9 — near-opaque paint). They are deliberately **two separate
+properties** rather than one shared slider: the right default differs
+by an order of intent (a color wash must let the shading through; a
+texel checker should cover it), and separate properties mean switching
+modes never drags one mode's setting into the other. Both feed a
+`FLOAT overlay_opacity` **push constant** read at draw time (the same
+probed-on-5.1.2 mechanism as Checker Size), so dragging either slider
+updates live — no geometry or batch rebuild, ever. The fragment stages
+take alpha from this uniform and ignore the baked per-vertex alpha.
+
+The overlay also draws with **back-face culling**
+(`gpu.state.face_culling_set('BACK')`, inside the state-restore guard)
+in **both modes**: only camera-facing surfaces are painted. Previously
+culling was off, and because the overlay depth-passes its own surface
+by a tiny viewer-ward bias, the *back* faces of open or thin geometry
+showed through the front — which made density mode look translucent
+even at high opacity, and gave the island tint a confusing
+through-shell look on open meshes. The soup's triangle winding follows
+the mesh's loop order, which is consistent with the face normals, so on
+a normal-consistent mesh exactly the front side of every face is drawn.
+
+**Flipped-normals note:** a face whose normal points away from the
+camera-facing side — i.e. flipped relative to its neighbors — is culled
+and **vanishes from the overlay**. That is expected, and useful as a
+diagnostic: those are the same faces that misbehave in baking and
+export. Use *Mesh > Normals > Recalculate Outside* (or Face
+Orientation overlay) to fix them.
 
 ## How it draws (v1.2.0: crack-free depth-biased overlay)
 
@@ -226,10 +270,13 @@ compiled lazily behind the same latch, same depth-bias term): it adds a
 per-loop `vec2 uv` vertex attribute and a `float checker_res` push
 constant, and the fragment stage derives checker parity from
 `floor(uv * checker_res)`, mixing two mid-tone gray shades (0.35 /
-0.85 — distinguishable over both light and dark viewport themes at the
-overlay's 0.4 alpha) multiplied by the per-island deviation tint. The
-Island Colors shader and its attributes are untouched — the test suite
-pins that structurally.
+0.85 — off the extremes, so they stay distinguishable over both light
+and dark viewport themes even at the near-opaque v1.3.1 default
+opacity) multiplied by the per-island deviation tint. Since v1.3.1 both
+fragment stages take alpha from the `overlay_opacity` push constant
+(see *Opacity and back-face culling*). The Island Colors shader's
+attributes are otherwise untouched — the test suite pins that
+structurally.
 
 ## How islands are detected
 
@@ -264,14 +311,14 @@ pins that structurally.
 
 - Overlays **one object at a time** (the active mesh when toggled on).
 - The tint sits exactly *on* the surface and wins the depth test by a
-  tiny viewer-ward bias (see *How it draws*). Consequence: on
-  single-sided geometry viewed from the **back side**, the overlay's
-  back faces depth-pass the surface they sit on, so the tint is visible
-  from inside/behind an open shell (culling is off). This is expected
-  with the crack-free v1.2.0 approach — the pre-1.2.0 normal offset hid
-  the overlay from the back at the cost of visible gaps between faces.
-  The bias is far too small for the overlay to show through *other*
-  geometry in front of it.
+  tiny viewer-ward bias (see *How it draws*); the bias is far too small
+  for the overlay to show through *other* geometry in front of it.
+  Since v1.3.1 the overlay draws with back-face culling in both modes,
+  so it paints **only camera-facing surfaces**: viewed from inside or
+  behind an open shell you see no overlay at all, and a
+  **flipped-normal face vanishes** from the overlay in both modes —
+  expected, and a useful diagnostic (the same faces misbehave in
+  baking; see *Opacity and back-face culling*).
 - UV-editor-only edits may not trigger the auto-refresh hook; use the
   manual **Refresh** button after re-unwrapping if in doubt.
 - SEAM source can only see seams: charts split by Smart UV Project or
@@ -331,8 +378,15 @@ meshes with known ratios (a 2x-scaled-UV island must report *exactly*
 sign/clamp/neutral cases, no-UV behavior, and Object-Mode-numpy vs
 Edit-Mode-bmesh extraction equivalence; the register test additionally
 covers mode-switch invalidation, DENSITY depsgraph routing, and that a
-checker-size change never rebuilds. The shaders' actual compile/draw
-can only be confirmed in the GUI.
+checker-size change never rebuilds. For v1.3.1 it additionally pins the
+two opacity properties (0..1 factors, defaults 0.4/0.9), the
+`overlay_opacity` push constant in both create-infos and fragment
+stages, that an opacity change is uniform-only (no dirty flag, no
+rebuild — same assertion style as the checker-size test), and — via the
+AST guard audit plus a targeted span check — that the unconditional
+`face_culling_set('BACK')` call sits inside the `_gpu_state_restored`
+guard, whose finally-clause restores the documented default `'NONE'`.
+The shaders' actual compile/draw can only be confirmed in the GUI.
 
 ### GUI checklist (drawing — not coverable headless)
 
@@ -345,8 +399,9 @@ v1.2.0 (Island Colors mode):
    shimmer** against the surface, near or far.
 3. Look along a silhouette edge: the overlay must **not bleed** around
    the mesh's outline onto the background or geometry behind it.
-4. View an open (single-sided) mesh from the back: the tint of the far
-   walls shows through — expected v1.2.0 behavior (see Limitations).
+4. View an open (single-sided) mesh from the back: since v1.3.1 the
+   overlay is back-face culled, so you must see **no tint at all** from
+   inside/behind the shell (see Limitations).
 5. In Edit Mode, wireframe/seam/selection cage overlays must stay
    readable on top of the tint.
 6. If the shader ever failed to compile, both panels would show the
@@ -370,10 +425,32 @@ v1.3.0 (Texel Density mode):
    must NOT change (checker size does not affect density).
 10. On a mesh with no UV layer, DENSITY mode must draw nothing and show
     *"Mesh has no UVs"* in the panel — no error row.
-11. Switch back to **Island Colors**: it must look exactly as it did
-    before v1.3.0 (same colors, same crack-free shell).
+11. Switch back to **Island Colors**: same colors, same crack-free
+    shell as before v1.3.0 (from the front; the back side is culled
+    since v1.3.1).
 12. Check both a light and a dark viewport theme: the two checker
     shades must stay clearly distinguishable in each.
+
+v1.3.1 (opacity + culling):
+
+13. In **Texel Density** mode at the default Checker Opacity (0.9) the
+    checker must read like **near-opaque paint** on the surface — no
+    see-through, ghosted look — while the surface shading still reads
+    through the residual transparency and the deviation tint.
+14. Drag **Checker Opacity** (density mode) and **Tint Opacity**
+    (islands mode): both must update **live while dragging** with no
+    rebuild hitch (they are push-constant uniforms, like Checker Size),
+    from fully invisible at 0 to fully opaque at 1.
+15. On an **open mesh** (e.g. a plane or an open cylinder) in density
+    mode, orbit around it: the checker must never bleed through from
+    the far/interior walls — from the back side of an open shell the
+    overlay vanishes entirely (both modes).
+16. Flip one face's normals (*Mesh > Normals > Flip* on a selected
+    face): that face must **disappear from the overlay** in both modes
+    while the rest keeps drawing — the documented flipped-normals
+    diagnostic. Recalculate Outside brings it back.
+17. Islands mode at the default Tint Opacity (0.4) must look exactly
+    like v1.3.0 from the front.
 
 ## Credits
 

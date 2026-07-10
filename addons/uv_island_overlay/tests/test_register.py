@@ -488,8 +488,10 @@ def main():
           0.0 < overlay.CLIP_DEPTH_BIAS <= 1e-3)
     check("vertex shader passes per-vertex color through",
           vs is not None and "finalColor = color" in vs)
-    check("fragment shader writes the interpolated color",
-          fs is not None and "fragColor = finalColor" in fs)
+    check("fragment shader writes the interpolated color at the "
+          "opacity uniform (v1.3.1: vertex alpha ignored)",
+          fs is not None
+          and "vec4(finalColor.rgb, overlay_opacity)" in fs)
 
     # The create-info DESCRIPTOR must build headless (only compilation
     # needs a GPU), and must declare the attributes the batch supplies.
@@ -608,9 +610,10 @@ def main():
           "floor(uv * checker_res)",
           dfs is not None and "floor(uvInterp * checker_res)" in dfs
           and "mod(" in dfs)
-    check("density fragment shader multiplies the per-island tint",
-          dfs is not None and "finalColor.rgb" in dfs
-          and "finalColor.a" in dfs)
+    check("density fragment shader multiplies the per-island tint and "
+          "takes alpha from the opacity uniform (v1.3.1)",
+          dfs is not None and "finalColor.rgb * shade" in dfs
+          and "overlay_opacity" in dfs)
     check("checker shades distinct and mid-toned (readable over light "
           "and dark viewport themes)",
           0.0 < overlay.CHECKER_DARK < overlay.CHECKER_LIGHT <= 1.0
@@ -761,6 +764,94 @@ def main():
     wm.uv_island_overlay = False
     wm.uv_island_overlay_source = 'SEAM'
 
+    # --- v1.3.1: per-mode opacity + back-face culling ---------------------------
+
+    check("version bumped for the opacity/culling fix",
+          uv_island_overlay.bl_info.get("version", (0,))[:3] >= (1, 3, 1))
+    op_prop = wm.bl_rna.properties.get("uv_island_overlay_opacity")
+    check("tint-opacity float registered: 0..1 factor, ISLANDS default "
+          "0.4 (the classic translucent wash, unchanged by default)",
+          op_prop is not None and op_prop.subtype == 'FACTOR'
+          and op_prop.hard_min == 0.0 and op_prop.hard_max == 1.0
+          and abs(op_prop.default - overlay.ALPHA) < 1e-6)
+    dop_prop = wm.bl_rna.properties.get(
+        "uv_island_overlay_density_opacity")
+    check("checker-opacity float registered: 0..1 factor, DENSITY "
+          "default 0.9 (near-opaque paint)",
+          dop_prop is not None and dop_prop.subtype == 'FACTOR'
+          and dop_prop.hard_min == 0.0 and dop_prop.hard_max == 1.0
+          and abs(dop_prop.default - 0.9) < 1e-6
+          and overlay.DEFAULT_DENSITY_OPACITY == 0.9)
+
+    # Opacity rides a FLOAT push constant in BOTH shaders (probed
+    # mechanism, same as checker_res): declared in both create-infos,
+    # consumed by both fragment stages, fed per-mode at draw time.
+    check("both create-infos declare the FLOAT overlay_opacity push "
+          "constant",
+          "push_constant('FLOAT', \"overlay_opacity\")" in ci_src
+          and "push_constant('FLOAT', \"overlay_opacity\")" in dci_src)
+    check("neither fragment stage reads the baked vertex alpha anymore",
+          "finalColor.a" not in fs and "finalColor.a" not in dfs
+          and "overlay_opacity" in fs and "overlay_opacity" in dfs)
+    draw_src = inspect.getsource(overlay._draw)
+    check("draw feeds the opacity uniform from the per-mode property",
+          "uniform_float(\"overlay_opacity\"" in draw_src
+          and "uv_island_overlay_opacity" in draw_src
+          and "uv_island_overlay_density_opacity" in draw_src)
+
+    # Back-face culling: unconditional 'BACK' for every overlay draw
+    # (both modes) — the overlay paints only camera-facing surfaces, so
+    # back faces of open/thin geometry no longer bleed through, and a
+    # flipped-normal face vanishes (deliberate diagnostic). The call
+    # must sit INSIDE the state guard: the guard audit above already
+    # fails on any unguarded gpu.state set; this additionally pins the
+    # specific call, its unconditional argument, and its guard span.
+    check("draw sets unconditional BACK culling (no mode-conditional "
+          "'NONE' left in the draw path)",
+          "face_culling_set('BACK')" in draw_src
+          and "face_culling_set('NONE')" not in draw_src)
+    mod_lines = inspect.getsource(overlay).splitlines()
+    cull_lines = [i + 1 for i, ln in enumerate(mod_lines)
+                  if "face_culling_set('BACK')" in ln]
+    check("the culling call sits inside a _gpu_state_restored block",
+          len(cull_lines) == 1
+          and any(a <= cull_lines[0] <= b for a, b in guard_spans))
+    check("guard still restores the documented culling default 'NONE' "
+          "(no face_culling_get exists on 5.1.2)",
+          "face_culling_set('NONE')"
+          in inspect.getsource(overlay._gpu_state_restored))
+
+    # Behavior: an opacity change must be uniform-only — no dirty flag,
+    # no geometry/batch rebuild — exactly like the checker-size test.
+    bpy.context.view_layer.objects.active = dobj
+    dobj.select_set(True)
+    wm.uv_island_overlay_mode = 'DENSITY'
+    wm.uv_island_overlay = True
+    check("re-enabled in DENSITY mode for the opacity checks",
+          overlay.is_enabled() and overlay.active_mode() == 'DENSITY'
+          and not overlay.has_no_uvs())
+    coords_before_op = overlay._state.coords
+    colors_before_op = overlay._state.colors
+    wm.uv_island_overlay_density_opacity = 0.5
+    check("checker-opacity change is uniform-only: no dirty flag, no "
+          "rebuild (FLOAT push constant, probed on 5.1.2)",
+          overlay._state.coords is coords_before_op
+          and overlay._state.colors is colors_before_op
+          and not overlay._state.dirty)
+    wm.uv_island_overlay_density_opacity = 0.9
+
+    wm.uv_island_overlay_mode = 'ISLANDS'
+    check("switched to ISLANDS for the tint-opacity check",
+          overlay.active_mode() == 'ISLANDS')
+    coords_before_op = overlay._state.coords
+    wm.uv_island_overlay_opacity = 0.75
+    check("tint-opacity change is uniform-only: no dirty flag, no "
+          "rebuild",
+          overlay._state.coords is coords_before_op
+          and not overlay._state.dirty)
+    wm.uv_island_overlay_opacity = overlay.ALPHA
+    wm.uv_island_overlay = False
+
     # --- unregister -----------------------------------------------------------------
     uv_island_overlay.unregister()
     check("depsgraph handler removed",
@@ -772,6 +863,11 @@ def main():
           not in bpy.types.WindowManager.bl_rna.properties)
     check("island-source property removed",
           "uv_island_overlay_source"
+          not in bpy.types.WindowManager.bl_rna.properties)
+    check("opacity properties removed",
+          "uv_island_overlay_opacity"
+          not in bpy.types.WindowManager.bl_rna.properties
+          and "uv_island_overlay_density_opacity"
           not in bpy.types.WindowManager.bl_rna.properties)
 
     # --- re-register cycle (idempotent lifecycle) -------------------------------------
