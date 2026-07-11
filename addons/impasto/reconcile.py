@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Flapjack reconciler: GraphSpec -> minimal node-tree deltas.
+"""Impasto reconciler: GraphSpec -> minimal node-tree deltas.
 
 The ONLY module that writes shader node trees (design §4.5). Every step
 compares before writing, so a no-op pass performs zero datablock
@@ -186,7 +186,7 @@ def _diff_nodes(tree_spec, tree, deltas):
                 if squatter is not None and squatter != node:
                     squatter.name = name + ".displaced"
                 node.name = name
-            node.label = "Flapjack (generated)"
+            node.label = "Impasto (generated)"
             deltas.nodes_created += 1
             for key, value in nspec.props:
                 _prop_apply(node, key, value, deltas)

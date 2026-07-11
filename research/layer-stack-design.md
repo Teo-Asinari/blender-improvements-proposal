@@ -97,7 +97,7 @@ class StackState(bpy.types.PropertyGroup):
     active_layer_uid: StringProperty()
     # NO halt/batch flags here — batching is runtime-only (§4.7)
 
-bpy.types.ShaderNodeTree.pbrstack = PointerProperty(type=StackState)
+bpy.types.ShaderNodeTree.impasto = PointerProperty(type=StackState)
 ```
 
 Consequences (all inherited free):
@@ -125,7 +125,7 @@ index-corruption class from the autopsy impossible:
 1. **`PropertyGroup.name` IS the uid.** Collection items are keyed by
    `name`, so `layers["c3a91f02"]` works, and — critically — animation
    F-Curve `data_path`s written against these properties use the *string
-   key* form (`pbrstack.layers["c3a91f02"].opacity`), which **survives
+   key* form (`impasto.layers["c3a91f02"].opacity`), which **survives
    reorder with zero rewriting**. No `remap_layer_fcurves` regex surgery,
    ever. The user-facing name is a separate `label: StringProperty`.
 2. **Indices are presentation order only.** The `layers` collection order is
@@ -359,7 +359,7 @@ Blender's socket renames in a given version), not indices.
 ### 4.3 What compile() emits
 
 **Per-layer tree** (`key = layer.uid`, realized as node group
-`.PBRStack Layer <uid>`) — only for layers that need one (PAINT layers and
+`.Impasto Layer <uid>`) — only for layers that need one (PAINT layers and
 any layer with masks; a bare FILL layer with constant bindings compiles to
 *no* layer tree, its constants go straight into root-chain blend inputs):
 
@@ -378,7 +378,7 @@ height fan-out, no ` Group`-suffixed re-export — this is A2's narrow
 protocol and the direct fix for the autopsy's ">20 sockets per layer"
 multiplier.
 
-**Root tree** (`key = "root"`, the tree carrying `pbrstack`) — one **linear
+**Root tree** (`key = "root"`, the tree carrying `impasto`) — one **linear
 chain per enabled channel**:
 
 ```

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Flapjack pure-core tests: registry sanity, compiler golden specs,
+"""Impasto pure-core tests: registry sanity, compiler golden specs,
 determinism/locality/uniform invariants, grace semantics, group
 pass-through, and the two-tier debounce (fake clock).
 
@@ -8,7 +8,7 @@ Runs under plain python3 (fast path) AND inside
 directly from file so the package __init__ (which imports bpy) is never
 executed here.
 
-Prints MODEL_TESTS_PASSED on success. Set FLAPJACK_REGEN_GOLDEN=1 to
+Prints MODEL_TESTS_PASSED on success. Set IMPASTO_REGEN_GOLDEN=1 to
 rewrite tests/golden/*.json from the current compiler (still asserts).
 """
 
@@ -25,7 +25,7 @@ _GOLDEN_DIR = os.path.join(_TESTS_DIR, "golden")
 
 def _load(name):
     path = os.path.join(_ADDON_DIR, name + ".py")
-    spec = importlib.util.spec_from_file_location("flapjack_" + name, path)
+    spec = importlib.util.spec_from_file_location("impasto_" + name, path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -119,7 +119,7 @@ def test_registry():
 def fx_fill():
     """Single fill layer, base_color COLOR + roughness VALUE."""
     return model.StackModel(
-        root_tree_name="Flapjack Stack (Mat)",
+        root_tree_name="Impasto Stack (Mat)",
         channels=("base_color", "roughness"),
         layers=(
             model.LayerModel(
@@ -140,7 +140,7 @@ def fx_paint_mask():
     """Paint layer (2 shared channels) with one inverted mask, above a
     fill layer."""
     return model.StackModel(
-        root_tree_name="Flapjack Stack (Mat)",
+        root_tree_name="Impasto Stack (Mat)",
         channels=("base_color", "roughness"),
         layers=(
             model.LayerModel(
@@ -169,7 +169,7 @@ def fx_paint_mask():
 def fx_group():
     """3 layers: paint inside a half-opacity group, fill at the bottom."""
     return model.StackModel(
-        root_tree_name="Flapjack Stack (Mat)",
+        root_tree_name="Impasto Stack (Mat)",
         channels=("base_color", "roughness", "height"),
         layers=(
             model.LayerModel(uid="dddd0001", label="Detail group",
@@ -200,7 +200,7 @@ GOLDENS = {
 
 
 def test_goldens():
-    regen = bool(os.environ.get("FLAPJACK_REGEN_GOLDEN"))
+    regen = bool(os.environ.get("IMPASTO_REGEN_GOLDEN"))
     if regen and not os.path.isdir(_GOLDEN_DIR):
         os.makedirs(_GOLDEN_DIR)
     for fname, fx in GOLDENS.items():
@@ -216,7 +216,7 @@ def test_goldens():
         want = json.load(open(path))
         check("golden %s matches compile output" % fname,
               json.loads(json.dumps(got, sort_keys=True)) == want,
-              "spec drifted — inspect a diff via FLAPJACK_REGEN_GOLDEN=1")
+              "spec drifted — inspect a diff via IMPASTO_REGEN_GOLDEN=1")
 
 
 def test_determinism():

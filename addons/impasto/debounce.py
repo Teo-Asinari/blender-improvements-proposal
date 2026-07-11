@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Flapjack two-tier debounce — pure, fake-clock-testable (design §4.6).
+"""Impasto two-tier debounce — pure, fake-clock-testable (design §4.6).
 
 No bpy imports (enforced by tests). The bpy.app.timers driver in
 engine.py is a thin shell around :meth:`DebounceState.due`; every test

@@ -86,6 +86,33 @@ General improvements to viewport navigation, tool switching, and overall workflo
 
 ---
 
+### 5. Scale-Aware Remesh Preview and Safety
+
+Voxel remeshing can launch an unexpectedly expensive operation when the current voxel size is badly mismatched with the mesh. A value such as `0.1 m` may be reasonable for one object but imply a prohibitively large voxel domain for another. The numeric value alone does not communicate the resulting resolution, cost, or memory risk.
+
+Before executing a voxel remesh, Blender should provide an interactive, mesh-relative sizing step.
+
+#### Proposed Interaction
+
+- Show the voxel size together with estimated voxel counts along the mesh bounding-box axes, approximate domain size, and a coarse cost or memory-risk indicator.
+- Let the user adjust voxel size interactively in the viewport before computation begins.
+- Draw a bounded visual aid: a voxel-sized sample box, a sparse 3D grid clipped to the object bounds, or representative grid slices that avoid drawing every voxel.
+- Clearly flag both extremes: voxels too coarse to preserve the form and voxel counts likely to cause excessive computation or memory use.
+- Offer a mesh-relative suggested size and require confirmation above a configurable safety threshold. Warnings should not impose a hard limit.
+- Preserve a fast path for experienced users who intentionally repeat the last settings.
+
+The control should cover every relevant voxel-remesh entry point. Exact integration may differ between sculpt-mode Voxel Remesh and modifier-based workflows, but neither should begin an expensive default operation before communicating its scale.
+
+#### Design Constraints
+
+- Estimation and preview must be cheap and must not construct the full voxel grid.
+- Object transforms and dimensions must be handled consistently, with a warning when unapplied scale would produce a surprising result.
+- The aid must remain legible across very small and very large scenes.
+
+**Research needed:** identify voxel-remesh entry points and defaults; derive useful cost estimates from object bounds, voxel size, and the voxel domain; prototype the viewport preview; and test warning thresholds across meshes at widely different physical scales.
+
+---
+
 ## Implementation Strategy
 
 The implementation path is under investigation. Possible approaches:
@@ -111,6 +138,7 @@ Some features (brush gesture control, basic layer UI) may be achievable as add-o
 - [ ] Blender Foundation contribution process and coding standards
 - [ ] Substance Painter's PBR channel workflow for reference
 - [ ] 3DCoat's brush size/intensity gesture implementation details
+- [ ] Voxel-remesh entry points, defaults, cost estimation, and viewport preview APIs
 
 ---
 

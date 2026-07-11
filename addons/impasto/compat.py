@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Flapjack Blender-API compatibility choke point (design §12.4).
+"""Impasto Blender-API compatibility choke point (design §12.4).
 
 Every probe-don't-version-check helper lives here so API churn across
 Blender releases is absorbed in one file. Target: Blender 5.1.2.

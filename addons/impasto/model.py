@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Flapjack pure core: channel registry, stack model, and the compiler.
+"""Impasto pure core: channel registry, stack model, and the compiler.
 
 This module must never depend on Blender's ``bpy`` API (enforced by the
 test suite). It defines:
@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 SCHEMA_VERSION = 1
 
 NODE_PREFIX = "ps:"
-LAYER_TREE_PREFIX = ".PBRStack Layer "
+LAYER_TREE_PREFIX = ".Impasto Layer "
 
 # Phase-1 blend set. All values are ShaderNodeMix.blend_type identifiers
 # (probed on Blender 5.1.2); blending happens in scene-linear, full stop

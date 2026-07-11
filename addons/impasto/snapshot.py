@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Flapjack snapshot: PropertyGroups -> StackModel (read-only walk).
+"""Impasto snapshot: PropertyGroups -> StackModel (read-only walk).
 
 The only module boundary between the stored stack state and the pure
 compiler. Imports bpy-adjacent state but performs ZERO writes.
@@ -56,7 +56,7 @@ def snapshot(root_tree, material=None):
     """Walk the stack state stored on ``root_tree`` into a frozen
     StackModel. ``material``, when given, contributes the Principled
     node name so the compiler can emit the material TreeSpec."""
-    state = root_tree.pbrstack
+    state = root_tree.impasto
     mat_model = None
     if material is not None and material.node_tree is not None:
         principled = compat.find_principled(material.node_tree)
