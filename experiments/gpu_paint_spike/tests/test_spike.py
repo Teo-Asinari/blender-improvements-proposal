@@ -88,6 +88,87 @@ def main():
     check("dab spacing factor",
           engine.dab_spacing(100.0) == 100.0 * engine.DAB_SPACING_FACTOR)
 
+    # -- Buffer->numpy conversion ladder (pure logic; a real gpu Buffer
+    #    needs a GPU context, so stand-ins exercise each rung: ndarray
+    #    has __array_interface__, bytearray exports the C buffer
+    #    protocol, ToListOnly mimics a protocol-less Buffer) ------------
+    import numpy as np
+
+    names = [n for n, _f in engine.BUFFER_TO_NUMPY_LADDER]
+    check("ladder rung order",
+          names == ["asarray", "frombuffer", "memoryview",
+                    "to_list_fallback"], str(names))
+    check("ladder ends in always-correct fallback",
+          engine.BUFFER_TO_NUMPY_LADDER[-1][1] is engine._conv_to_list)
+
+    ref = np.arange(16, dtype=np.float32)
+
+    class ToListOnly:
+        """Stand-in for a gpu Buffer with no fast conversion path."""
+        def to_list(self):
+            return ref.reshape(4, 4).tolist()
+
+    out = engine.buffer_to_numpy(ToListOnly(), "to_list_fallback")
+    check("to_list rung converts",
+          out.dtype == np.float32 and np.array_equal(out, ref), str(out))
+    out = engine.buffer_to_numpy(ToListOnly(), "asarray")
+    check("failing rung falls back to to_list", np.array_equal(out, ref))
+    out = engine.buffer_to_numpy(ToListOnly(), "not_a_rung")
+    check("unknown rung falls back to to_list", np.array_equal(out, ref))
+
+    check("asarray rung gated on __array_interface__: ndarray passes",
+          np.array_equal(engine._conv_asarray(ref), ref))
+    try:
+        engine._conv_asarray(bytearray(ref.tobytes()))
+        check("asarray rung gated on __array_interface__: bytes rejected",
+              False, "converted?!")
+    except TypeError:
+        check("asarray rung gated on __array_interface__: bytes rejected",
+              True)
+    raw = bytearray(ref.tobytes())
+    check("frombuffer rung converts raw bytes",
+          np.array_equal(engine._conv_frombuffer(raw), ref))
+    check("memoryview rung converts raw bytes",
+          np.array_equal(engine._conv_memoryview(raw), ref))
+
+    check("probe picks asarray for array-interface objects",
+          engine.probe_buffer_to_numpy_path(ref.copy(), ref) == "asarray")
+    check("probe picks frombuffer for buffer-protocol objects",
+          engine.probe_buffer_to_numpy_path(raw, ref) == "frombuffer")
+    check("probe falls back for protocol-less objects",
+          engine.probe_buffer_to_numpy_path(ToListOnly(), ref)
+          == "to_list_fallback")
+    check("probe rejects wrong values",
+          engine.probe_buffer_to_numpy_path(
+              np.zeros(16, dtype=np.float32), ref) == "to_list_fallback")
+
+    # Probe results are GUI-only; headless the latches must hold the
+    # safe defaults (never consulted headless — finalize needs a draw).
+    check("headless readback latches at safe defaults",
+          engine._buffer_numpy_path == "to_list_fallback"
+          and engine._read_into_numpy is False)
+
+    # -- finalize structure: ONE production read, A/B behind the flag ----
+    check("DEBUG_COMPARE_READS off by default",
+          engine.DEBUG_COMPARE_READS is False)
+    fin_src = inspect.getsource(engine._finalize_stroke_gpu)
+    check("tex.read gated behind DEBUG_COMPARE_READS",
+          "if DEBUG_COMPARE_READS" in fin_src
+          and fin_src.count("paint_tex.read") == 1)
+    check("finalize prefers read-into-numpy",
+          "if _read_into_numpy" in fin_src
+          and "read_into_numpy" in fin_src)
+    check("finalize converts via probed ladder rung",
+          "buffer_to_numpy(buf, _buffer_numpy_path)" in fin_src)
+    check("finalize no bare np.asarray on the readback buffer",
+          "np.asarray(buf" not in fin_src, "0.1.0 slow path resurfaced")
+    check("stats layout reports readback_path",
+          any(k == "readback_path" for k, _l, _f in engine.STATS_LAYOUT))
+    sync_src = inspect.getsource(engine.record_sync_stats)
+    check("syncback_total keeps semantics (drain+read+conv+write+update)",
+          all(key in sync_src for key in
+              ("drain_ms", "fb_read_ms", "to_numpy_ms")))
+
     # -- mesh soup extraction (default cube has a UV layer) ------------------
     cube = bpy.data.objects.get("Cube")
     check("factory cube present", cube is not None)
@@ -164,6 +245,9 @@ def main():
           str(offenders))
 
     # -- registration lifecycle ----------------------------------------------
+    check("version 0.2.0",
+          gpu_paint_spike.bl_info["version"] == (0, 2, 0),
+          str(gpu_paint_spike.bl_info["version"]))
     gpu_paint_spike.register()
     check("operator registered",
           hasattr(bpy.types, "OBJECT_OT_gpu_paint_spike"))

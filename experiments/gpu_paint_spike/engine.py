@@ -48,18 +48,28 @@ convention minefield the spike routes around; noted in FINDINGS.md.
 
 Sync-back
 ---------
-On stroke end the paint framebuffer is read back once
-(fb.read_color(..., 'FLOAT') -> gpu.types.Buffer -> numpy) and the
-modal operator writes it into the Image datablock with
-``image.pixels.foreach_set`` (measured ~4x faster than slice
-assignment; see FINDINGS.md). CPU cost is paid ONCE per stroke.
+On stroke end the paint framebuffer is read back ONCE. Preferred path
+(probed at session start): ``fb.read_color(..., data=Buffer)`` where
+the Buffer wraps pre-allocated numpy memory — the pixels land directly
+in the array ``image.pixels.foreach_set`` consumes, so the
+Buffer->numpy conversion step disappears entirely. Otherwise the
+returned ``gpu.types.Buffer`` is converted through the fastest probed
+rung of BUFFER_TO_NUMPY_LADDER (asarray / frombuffer / memoryview /
+to_list fallback; the ``buffer_to_numpy_path=`` probe line names the
+winner). The naive ``np.asarray(buf)`` this replaces was measured at
+~1.05 s for one 4K readback — numpy silently degrading to element-wise
+sequence iteration over 16.7M Python floats (see FINDINGS.md). CPU
+cost is paid ONCE per stroke.
 
 Instrumentation is the point: every stage is timed with
 time.perf_counter and reported in a blf overlay, the N-panel, and one
 machine-readable ``GPU_PAINT_SPIKE_STROKE ...`` console line per stroke.
 NOTE: per-dab times measured on the CPU are SUBMISSION times (the GPU
 runs asynchronously); the stroke-end 1x1 "drain" read forces completion
-of everything queued, bounding the true GPU cost per stroke.
+of everything queued, bounding the true GPU cost per stroke. Set
+DEBUG_COMPARE_READS = True to restore the 0.1.0 A/B probe that timed
+GPUTexture.read() next to fb.read_color (a second full transfer per
+stroke; off in the production path).
 """
 
 import math
@@ -89,6 +99,14 @@ DEPTH_EPSILON = 2e-3
 DAB_SPACING_FACTOR = 0.25
 MIN_DAB_SPACING_PX = 2.0
 MAX_DABS_PER_EVENT = 256
+
+# When True, the stroke-end finalize ALSO times GPUTexture.read() next
+# to the production fb.read_color — the 0.1.0 A/B probe that produced
+# the FINDINGS numbers (they measured ~equal: ~100 vs ~105 ms at 4K on
+# OpenGL/Quadro RTX 5000). It costs a second full GPU->CPU transfer per
+# stroke, so it is OFF in the production path; the tex_read_ms stat
+# only appears when this is enabled.
+DEBUG_COMPARE_READS = False
 
 # ---------------------------------------------------------------------------
 # GLSL (module-level constants so the headless suite can check them
@@ -266,6 +284,110 @@ def build_mesh_soup(obj):
 
 
 # ---------------------------------------------------------------------------
+# Buffer -> numpy conversion ladder (stroke-end readback)
+#
+# The 0.1.0 sync-back converted the readback Buffer with a bare
+# np.asarray(buf) and measured ~1050 ms at 4K (GUI, Quadro RTX 5000):
+# when the exporter offers neither __array_interface__ nor a usable
+# C buffer protocol, numpy silently degrades to element-wise sequence
+# iteration over 16.7M Python floats. The ladder below tries the
+# zero-copy mechanisms EXPLICITLY (so a "works but slow" path can never
+# be selected) and falls back to the always-correct to_list. Which rung
+# a given Blender build/backend supports is unknowable headless (Buffer
+# creation needs a GPU context), so probe_buffer_to_numpy_path picks
+# the rung at session start on a small real Buffer with known contents,
+# and the choice is logged as GPU_PAINT_SPIKE_PROBE
+# buffer_to_numpy_path=<rung>. The rung functions themselves are pure
+# and headless-testable with stand-in objects.
+# ---------------------------------------------------------------------------
+
+
+def _conv_asarray(buf):
+    """Zero-copy via numpy's __array_interface__. Gated on the
+    attribute: a bare np.asarray(buf) would silently 'succeed' through
+    the element-wise sequence protocol on objects without it — the
+    exact ~1 s/stroke trap measured at 4K."""
+    import numpy as np
+    if not hasattr(buf, "__array_interface__"):
+        raise TypeError("no __array_interface__")
+    return np.asarray(buf)
+
+
+def _conv_frombuffer(buf):
+    """Zero-copy via the C buffer protocol (PEP 3118). Raises if the
+    object is not a buffer exporter. float32 by contract: the readback
+    is always fb.read_color(..., 'FLOAT')."""
+    import numpy as np
+    return np.frombuffer(buf, dtype=np.float32)
+
+
+def _conv_memoryview(buf):
+    """Zero-copy via an explicit memoryview flattened to bytes; can
+    succeed where np.frombuffer's stricter buffer request fails (e.g.
+    exporters that only serve multi-dimensional views)."""
+    import numpy as np
+    return np.frombuffer(memoryview(buf).cast('B'), dtype=np.float32)
+
+
+def _conv_to_list(buf):
+    """Always-correct fallback: element-wise Python conversion. SLOW —
+    order of 1-2 s for a 4K RGBA float buffer (measured: 1858 ms for a
+    16.7M-element list -> np.asarray, headless, this machine)."""
+    import numpy as np
+    return np.asarray(buf.to_list(), dtype=np.float32)
+
+
+# Fastest first; the last rung must be the always-correct fallback.
+BUFFER_TO_NUMPY_LADDER = (
+    ("asarray", _conv_asarray),
+    ("frombuffer", _conv_frombuffer),
+    ("memoryview", _conv_memoryview),
+    ("to_list_fallback", _conv_to_list),
+)
+
+
+def probe_buffer_to_numpy_path(buf, reference):
+    """Name of the first BUFFER_TO_NUMPY_LADDER rung that converts
+    ``buf`` into values matching ``reference`` (flat float32). Meant to
+    run ONCE per session on a small Buffer whose contents are known
+    (reference comes from the trusted-but-slow to_list). Pure logic —
+    headless tests exercise it with stand-in objects."""
+    import numpy as np
+    ref = np.asarray(reference, dtype=np.float32).ravel()
+    for name, conv in BUFFER_TO_NUMPY_LADDER:
+        try:
+            arr = np.asarray(conv(buf), dtype=np.float32).ravel()
+        except Exception:
+            continue
+        if arr.size == ref.size and np.allclose(arr, ref, atol=1e-3):
+            return name
+    return "to_list_fallback"
+
+
+def buffer_to_numpy(buf, path="to_list_fallback"):
+    """Flat float32 numpy array from a float Buffer, converted through
+    the ladder rung named ``path`` (as chosen by
+    probe_buffer_to_numpy_path). Unknown names or a failing rung fall
+    back to the always-correct to_list — slow but never wrong."""
+    import numpy as np
+    conv = dict(BUFFER_TO_NUMPY_LADDER).get(path)
+    if conv is not None:
+        try:
+            return np.asarray(conv(buf), dtype=np.float32).ravel()
+        except Exception:
+            pass
+    return _conv_to_list(buf).ravel()
+
+
+# Latched by _probe_capabilities (GUI only; headless-safe defaults):
+# which conversion rung _finalize_stroke_gpu uses, and whether
+# fb.read_color can fill a Buffer wrapping numpy memory directly
+# (which makes the conversion step disappear entirely).
+_buffer_numpy_path = "to_list_fallback"
+_read_into_numpy = False
+
+
+# ---------------------------------------------------------------------------
 # Shader create-infos (descriptor population is pure bookkeeping and
 # works in --background — probed on 5.1.2; only create_from_info touches
 # the GPU. The headless suite builds these structurally.)
@@ -409,7 +531,8 @@ STATS_LAYOUT = (
     ("prepass_ms", "Depth prepass", "%.2f ms"),
     ("drain_ms", "GPU drain (1px read)", "%.2f ms"),
     ("fb_read_ms", "FB readback (full)", "%.2f ms"),
-    ("tex_read_ms", "tex.read() (probe)", "%.2f ms"),
+    ("readback_path", "Readback path", "%s"),
+    ("tex_read_ms", "tex.read() (debug A/B)", "%.2f ms"),
     ("to_numpy_ms", "Buffer -> numpy", "%.2f ms"),
     ("pixels_write_ms", "pixels.foreach_set", "%.2f ms"),
     ("image_update_ms", "image.update()", "%.2f ms"),
@@ -785,13 +908,58 @@ def _probe_capabilities():
     except Exception as e:
         lines.append("blend_alpha_into_offscreen_attachment=NO (%r)" % e)
 
+    # Stroke-end readback strategy (the 0.1.0 bottleneck: ~1050 ms
+    # Buffer->numpy at 4K). Two probes against the blended 8x8 content
+    # above, so correctness is checked against non-trivial values:
+    # 1. fastest zero-copy Buffer->numpy ladder rung;
+    # 2. fb.read_color(..., data=Buffer-wrapping-numpy): if the Buffer
+    #    references the numpy memory (rather than copying), the read
+    #    lands directly in the array foreach_set consumes and the
+    #    conversion step disappears entirely.
+    global _buffer_numpy_path, _read_into_numpy
+    ref = None
+    try:
+        with fb.bind():
+            small = fb.read_color(0, 0, 8, 8, 4, 0, 'FLOAT')
+        ref = np.asarray(small.to_list(), dtype=np.float32).ravel()
+        _buffer_numpy_path = probe_buffer_to_numpy_path(small, ref)
+        lines.append("buffer_to_numpy_path=%s" % _buffer_numpy_path)
+    except Exception as e:
+        _buffer_numpy_path = "to_list_fallback"
+        lines.append("buffer_to_numpy_path=to_list_fallback (probe: %r)" % e)
+    try:
+        target = np.zeros((8, 8, 4), dtype=np.float32)
+        tbuf = gpu.types.Buffer('FLOAT', (8, 8, 4), target)
+        with fb.bind():
+            fb.read_color(0, 0, 8, 8, 4, 0, 'FLOAT', data=tbuf)
+        ok = (ref is not None and bool(ref.any())
+              and bool(np.allclose(target.ravel(), ref, atol=1e-3)))
+        _read_into_numpy = ok
+        lines.append("fb_read_into_numpy_buffer=%s"
+                     % ("yes" if ok else
+                        "NO (Buffer copies instead of wrapping, or "
+                        "values mismatched)"))
+    except Exception as e:
+        _read_into_numpy = False
+        lines.append("fb_read_into_numpy_buffer=NO (%r)" % e)
+
     # GPUTexture.read() on RGBA16F (vs fb.read_color): does the Buffer
-    # convert to numpy, and what dtype/length comes back?
+    # convert to numpy, what dtype/length comes back, and does it export
+    # the C buffer protocol (memoryview) — decides whether a half-float
+    # read + CPU astype could ever beat the 'FLOAT' read (headless
+    # measurement says no: float16->float32 astype alone costs ~119 ms
+    # at 4K on this machine).
     try:
         buf = tex.read()
+        try:
+            mv = memoryview(buf)
+            mv_desc = "memoryview format=%s itemsize=%d" % (mv.format,
+                                                            mv.itemsize)
+        except Exception as e:
+            mv_desc = "memoryview unsupported (%r)" % e
         arr = np.asarray(buf)
-        lines.append("gputexture_read_rgba16f=yes (numpy dtype=%s shape=%s)"
-                     % (arr.dtype, arr.shape))
+        lines.append("gputexture_read_rgba16f=yes (numpy dtype=%s shape=%s; "
+                     "%s)" % (arr.dtype, arr.shape, mv_desc))
     except Exception as e:
         lines.append("gputexture_read_rgba16f=NO (%r)" % e)
 
@@ -962,6 +1130,8 @@ def _finalize_stroke_gpu(s):
         stats["dabs_per_s"] = ((s.dab_count - 1)
                                / (s.last_dab_t - s.first_dab_t))
 
+    arr = None
+    buf = None
     with s.paint_fb.bind():
         # 1x1 read first: drains every queued dab, separating "GPU
         # actually finished the stroke" from the bulk-transfer cost.
@@ -969,25 +1139,43 @@ def _finalize_stroke_gpu(s):
         s.paint_fb.read_color(0, 0, 1, 1, 4, 0, 'FLOAT')
         stats["drain_ms"] = (time.perf_counter() - t0) * 1000.0
 
+        # ONE full-size read (0.1.0 did two — fb.read_color AND
+        # tex.read, an A/B probe artifact; they measured ~equal, so
+        # fb.read_color stays as the production path: it guarantees
+        # float32 regardless of the RGBA16F attachment and can target a
+        # caller-provided Buffer). Preferred: read straight into a
+        # Buffer wrapping pre-allocated numpy memory (probed at session
+        # start) — no conversion step at all.
         t0 = time.perf_counter()
-        buf = s.paint_fb.read_color(0, 0, size, size, 4, 0, 'FLOAT')
+        if _read_into_numpy:
+            try:
+                arr = np.empty((size, size, 4), dtype=np.float32)
+                s.paint_fb.read_color(
+                    0, 0, size, size, 4, 0, 'FLOAT',
+                    data=gpu.types.Buffer('FLOAT', (size, size, 4), arr))
+                arr = arr.ravel()
+                stats["readback_path"] = "read_into_numpy"
+            except Exception:
+                arr = None
+        if arr is None:
+            buf = s.paint_fb.read_color(0, 0, size, size, 4, 0, 'FLOAT')
+            stats["readback_path"] = _buffer_numpy_path
         stats["fb_read_ms"] = (time.perf_counter() - t0) * 1000.0
 
-    # Probe alternative: GPUTexture.read() (returns the attachment's own
-    # format — for RGBA16F possibly half floats; timed for FINDINGS).
-    try:
-        t0 = time.perf_counter()
-        s.paint_tex.read()
-        stats["tex_read_ms"] = (time.perf_counter() - t0) * 1000.0
-    except Exception:
-        stats["tex_read_ms"] = float("nan")
+    if DEBUG_COMPARE_READS:
+        # 0.1.0 A/B probe: GPUTexture.read() (returns the attachment's
+        # own format — half floats for RGBA16F). Costs a second full
+        # GPU->CPU transfer; never part of the production path.
+        try:
+            t0 = time.perf_counter()
+            s.paint_tex.read()
+            stats["tex_read_ms"] = (time.perf_counter() - t0) * 1000.0
+        except Exception:
+            stats["tex_read_ms"] = float("nan")
 
     t0 = time.perf_counter()
-    try:
-        arr = np.asarray(buf, dtype=np.float32).ravel()
-    except Exception:
-        # Buffer without buffer-protocol support: loud, slow fallback.
-        arr = np.asarray(buf.to_list(), dtype=np.float32).ravel()
+    if arr is None:
+        arr = buffer_to_numpy(buf, _buffer_numpy_path)
     stats["to_numpy_ms"] = (time.perf_counter() - t0) * 1000.0
 
     s.pending_pixels = arr

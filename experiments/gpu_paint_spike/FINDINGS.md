@@ -1,8 +1,13 @@
 # GPU Paint Spike — Findings
 
-**Status: headless facts measured; GUI numbers pending (slots marked `GUI-TBD`).**
+**Status: dab-latency verdict CONFIRMED in the GUI run (2026-07-11). The
+sync-back bottleneck that run exposed (~1.24 s at 4K) is diagnosed and fixed
+in v0.2.0; post-fix numbers pending re-measurement (slots marked
+`GUI-TBD (post-fix)`).**
 Environment: Blender **5.1.2** (`ec6e62d40fa9`, 2026-05-19), Windows binary run
-from WSL2; numpy 2.3.4 bundled.
+from WSL2; numpy 2.3.4 bundled. GUI run: **NVIDIA Quadro RTX 5000 Max-Q,
+OpenGL backend**, 4096×4096 RGBA, 2026-07-11 (from the user's
+`~/gpu_paint_spike_stats.log`).
 
 ## Spike question
 
@@ -37,10 +42,13 @@ A clear "no, because X, measured Y" is a fully successful outcome.
    `GPUTexture` (create-info shader, clip-space depth bias against
    z-fighting — the `uv_island_overlay` mechanism).
 4. **Sync-back once per stroke:** on mouse release the draw callback drains
-   the GPU (1×1 read), reads the framebuffer back
-   (`fb.read_color(..., 'FLOAT')` → `gpu.types.Buffer` → numpy), and the
-   modal operator writes `image.pixels.foreach_set(arr)` — never from a draw
-   callback.
+   the GPU (1×1 read), then reads the framebuffer back **once** — preferably
+   `fb.read_color(..., data=Buffer)` straight into pre-allocated numpy memory
+   (probed at session start), else `fb.read_color(..., 'FLOAT')` → Buffer →
+   numpy via the fastest probed rung of a conversion ladder — and the modal
+   operator writes `image.pixels.foreach_set(arr)` — never from a draw
+   callback. (v0.1.0 used a bare `np.asarray(buf)` here; see the sync-back
+   section below for why that cost ~1.05 s at 4K.)
 5. **Threading of GPU work:** the modal operator never touches `gpu`; it
    enqueues dabs and tags a redraw. The `POST_VIEW` callback — where a GPU
    context is guaranteed on every backend — flushes the queue. This is the
@@ -73,6 +81,15 @@ CPU side of sync-back: writing a full float32 RGBA buffer into
 | 2048² | **19.1 ms** | — | ~0.0 ms | 15.6 ms |
 | 4096² | **75.2 ms** | — | ~0.0 ms | 59.7 ms |
 
+CPU-side Buffer→numpy conversion costs at 4K (16.78M floats), measured
+headless on this machine (2026-07-11, best of 5 unless noted):
+
+| Conversion | Cost | Meaning |
+|---|---|---|
+| element-wise (16.7M-float Python list → `np.asarray`) | **1858 ms** (single run) | the v0.1.0 trap: what numpy's sequence-protocol fallback / `to_list()` costs |
+| `float16 → float32` (`astype`) | **119 ms** | what a half-float `tex.read()` + CPU convert would ADD — rejects the half-read idea |
+| `float32` zero-copy view + `ravel` | **0.0005 ms** | what the fixed path costs |
+
 Conclusions already safe to draw headless:
 
 - `foreach_set` is the right write path (≈4× faster than slice assignment);
@@ -80,44 +97,126 @@ Conclusions already safe to draw headless:
 - Even at 4K the **CPU share of a stroke-end sync-back is < 80 ms** — paid
   once per stroke, this alone cannot sink the spike question. The open
   half is the GPU→CPU transfer (`fb.read_color`), which is GUI-only.
+- **Half-float readback is not worth it**: GUI data shows `tex.read()`
+  (RGBA16F, 32 MB) ≈ `fb.read_color(..., 'FLOAT')` (64 MB) ≈ 100 ms — the
+  transfer is not conversion-bound — and the CPU-side `astype` alone costs
+  119 ms. The production path stays `'FLOAT'` (which `foreach_set` needs
+  anyway).
 
 ## Measurements — GUI (protocol in README.md)
 
 The add-on prints one `GPU_PAINT_SPIKE_STROKE key=value …` line per stroke
-and one `GPU_PAINT_SPIKE_PROBE …` block on session start. Paste results here.
+and one `GPU_PAINT_SPIKE_PROBE …` block on session start (both also appended
+to `~/gpu_paint_spike_stats.log`).
 
-### Runtime capability probes (printed on first draw) — `GUI-TBD`
+**Measured run: Quadro RTX 5000 Max-Q, OpenGL, 4096×4096 RGBA, 2026-07-11
+(v0.1.0 build; numbers from the user's stats log).**
 
-| Probe line | Expected | Measured |
+### Runtime capability probes (printed on first draw) — MEASURED 2026-07-11
+
+| Probe line | Expected | Measured (Quadro RTX 5000 Max-Q, OpenGL) |
 |---|---|---|
-| `backend=… vendor=… renderer=…` | (records the GPU/backend under test) | GUI-TBD |
-| `rgba16f_color_fb` | yes | GUI-TBD |
-| `blend_alpha_into_offscreen_attachment` | yes (center ≈ `[0.5, 0, 0.5, …]`) — if **NO**, ping-pong fallback becomes necessary and per-dab cost roughly doubles | GUI-TBD |
-| `gputexture_read_rgba16f` | records numpy dtype/shape of `tex.read()` | GUI-TBD |
-| `r32f_color_fb` | yes | GUI-TBD |
-| `depth32f_attach_clear_read` | yes (cleared=1.000) | GUI-TBD |
-| `paint_tex_seeded_from_image` | yes (Buffer-from-numpy path works) | GUI-TBD |
+| `backend=… vendor=… renderer=…` | (records the GPU/backend under test) | OpenGL, NVIDIA Quadro RTX 5000 Max-Q |
+| `rgba16f_color_fb` | yes | **yes** |
+| `blend_alpha_into_offscreen_attachment` | yes (center ≈ `[0.5, 0, 0.5, …]`) — if **NO**, ping-pong fallback becomes necessary and per-dab cost roughly doubles | **yes** — no ping-pong needed |
+| `gputexture_read_rgba16f` | records numpy dtype/shape of `tex.read()` | **yes** (works; cost ≈ `fb.read_color`, see below) |
+| `r32f_color_fb` | yes | **yes** |
+| `depth32f_attach_clear_read` | yes (cleared=1.000) | **yes** |
+| `paint_tex_seeded_from_image` | yes (Buffer-from-numpy path works) | yes (stroke sync-back round-tripped correctly) |
+| `buffer_to_numpy_path` (new in 0.2.0) | fastest zero-copy rung | GUI-TBD (post-fix) |
+| `fb_read_into_numpy_buffer` (new in 0.2.0) | yes → conversion step disappears | GUI-TBD (post-fix) |
 
-### Per-dab / per-stroke timings — `GUI-TBD`
+### Per-dab / per-stroke timings — 4K MEASURED 2026-07-11; 1K/2K TBD
 
-All from the `GPU_PAINT_SPIKE_STROKE` console lines. Note `submit_*` are CPU
+All from the `GPU_PAINT_SPIKE_STROKE` lines. Note `submit_*` are CPU
 **submission** times (the GPU runs asynchronously); `drain_ms` (1×1 read
 after the last dab) bounds true GPU completion of the whole stroke.
 
-| Metric | Target | 1K | 2K | 4K |
+| Metric | Target | 1K | 2K | 4K (measured) |
 |---|---|---|---|---|
-| `submit_avg_ms` (per dab) | < 2 ms | GUI-TBD | GUI-TBD | GUI-TBD |
-| `submit_max_ms` | — | GUI-TBD | GUI-TBD | GUI-TBD |
-| `dabs_per_s` (fast scribble, ≥ 2 s) | 100s | GUI-TBD | GUI-TBD | GUI-TBD |
-| `drain_ms` (stroke-end GPU drain) | small vs stroke | GUI-TBD | GUI-TBD | GUI-TBD |
-| `prepass_ms` (per view change) | ≪ frame budget | GUI-TBD | GUI-TBD | GUI-TBD |
-| `fb_read_ms` (full readback) | — | GUI-TBD | GUI-TBD | GUI-TBD |
-| `tex_read_ms` (probe alternative) | — | GUI-TBD | GUI-TBD | GUI-TBD |
-| `to_numpy_ms` | ~0 | GUI-TBD | GUI-TBD | GUI-TBD |
-| `pixels_write_ms` | ≈ headless table | GUI-TBD | GUI-TBD | GUI-TBD |
-| `syncback_total_ms` (once per stroke) | < 150 ms @2K | GUI-TBD | GUI-TBD | GUI-TBD |
+| `submit_avg_ms` (per dab) | < 2 ms | GUI-TBD | GUI-TBD | **0.02–0.03 steady state** (first stroke 0.62 avg — shader compile) |
+| `submit_max_ms` | — | GUI-TBD | GUI-TBD | **23 ms on the first stroke only** (one-time shader compile) |
+| `dabs_per_s` (fast scribble, ≥ 2 s) | 100s | GUI-TBD | GUI-TBD | (not transcribed; submission cost implies it is event-rate-bound, not GPU-bound) |
+| `drain_ms` (stroke-end GPU drain) | small vs stroke | GUI-TBD | GUI-TBD | **~3 ms** |
+| `prepass_ms` (per view change) | ≪ frame budget | GUI-TBD | GUI-TBD | (not transcribed) |
+| `fb_read_ms` (full readback) | — | GUI-TBD | GUI-TBD | **~100 ms** |
+| `tex_read_ms` (A/B probe, removed from production path in 0.2.0) | — | GUI-TBD | GUI-TBD | **~105 ms** |
+| `to_numpy_ms` | ~0 | GUI-TBD | GUI-TBD | **~1050–1100 ms — THE BOTTLENECK** (diagnosed + fixed, next section) |
+| `pixels_write_ms` | ≈ headless table | GUI-TBD | GUI-TBD | **74 ms** (headless table said 75.2 — confirmed) |
+| `syncback_total_ms` (once per stroke) | < 150 ms @2K | GUI-TBD | GUI-TBD | **~1240 ms (pre-fix)** |
+
+**Per-dab verdict: CONFIRMED.** 0.02–0.03 ms submission per dab at 4K is
+~two orders of magnitude under the < 2 ms target; the 0.62 ms first-stroke
+average (23 ms max) is one-time shader compilation. `drain_ms` ≈ 3 ms shows
+the GPU finishes the whole stroke essentially as it is submitted — falsifiers
+1–3 are all dead. The dab path is not to be touched.
 
 Also record: mesh (name, triangle count), viewport size, GPU model.
+
+## Sync-back: diagnosis and fix (v0.2.0)
+
+The measured decomposition of the pre-fix ~1240 ms sync-back at 4K:
+
+| Stage | ms | Verdict |
+|---|---|---|
+| `drain_ms` | 3 | fine |
+| `fb_read_ms` | ~100 | real GPU→CPU transfer cost (64 MB ≈ 0.64 GB/s incl. driver) |
+| `tex_read_ms` | ~105 | **A/B probe artifact** — v0.1.0 read the texture TWICE per stroke |
+| `to_numpy_ms` | ~1050–1100 | **the bottleneck** |
+| `pixels_write_ms` | 74 | fine (matches headless prediction) |
+| `image_update_ms` | ~0 | fine |
+
+**Diagnosis.** v0.1.0 converted the readback with a bare
+`np.asarray(buf, dtype=np.float32)`. On this build `gpu.types.Buffer`
+evidently exposes neither `__array_interface__` nor a buffer-protocol view
+numpy accepts, so numpy silently degraded to **element-wise sequence
+iteration over 16.7M Python floats** (or the `except` branch's `to_list()`
+did the same). The headless corroboration: a 16.7M-float Python list →
+`np.asarray` costs **1858 ms** on this machine — same order as the measured
+~1050 ms. The cost was never the GPU transfer; it was Python object churn.
+
+**Fix (v0.2.0):**
+
+1. **One read per stroke.** `tex.read()` is removed from the production
+   path (they measured ~equal; `fb.read_color` stays because it guarantees
+   float32 — which `foreach_set` needs — and accepts a target Buffer). The
+   A/B comparison survives behind `engine.DEBUG_COMPARE_READS = True`.
+2. **Read directly into numpy memory.** Probed at session start:
+   `fb.read_color(..., data=gpu.types.Buffer('FLOAT', shape, ndarray))` —
+   if the Buffer *wraps* (not copies) the numpy memory, the pixels land in
+   the exact array `foreach_set` consumes and the conversion step disappears
+   (`readback_path=read_into_numpy`, `to_numpy_ms` ≈ 0). Probe line:
+   `fb_read_into_numpy_buffer=yes|NO`.
+3. **Gated conversion ladder** for the fallback: `asarray` (requires
+   `__array_interface__`) → `frombuffer` (requires the C buffer protocol) →
+   `memoryview` → `to_list_fallback`. Each rung is *verified against known
+   values on a small Buffer* at session start, and rungs that would "work"
+   only via numpy's slow sequence protocol are structurally impossible to
+   select. Probe line: `buffer_to_numpy_path=<rung>`.
+4. **Half-float read rejected on the numbers** (see the headless table):
+   the reads cost the same, and `float16→float32` `astype` alone adds
+   119 ms of CPU at 4K.
+
+**Expected post-fix sync-back at 4K: ~180 ms** (3 drain + ~100 read + ~0
+convert + 74 write) if either the direct-read probe or a zero-copy rung
+passes; worst case (all probes NO) it stays ~1.15 s on the honest
+`to_list_fallback`, and the probe lines say so explicitly.
+
+### Post-fix re-measurement — `GUI-TBD (post-fix)`
+
+One session per texture size, one stroke each (second stroke onward; the
+first compiles shaders), then read `~/gpu_paint_spike_stats.log`:
+
+| Metric | 1K | 2K | 4K |
+|---|---|---|---|
+| `buffer_to_numpy_path` (probe line, once) | GUI-TBD | GUI-TBD | GUI-TBD |
+| `fb_read_into_numpy_buffer` (probe line, once) | GUI-TBD | GUI-TBD | GUI-TBD |
+| `readback_path` | GUI-TBD | GUI-TBD | GUI-TBD |
+| `drain_ms` | GUI-TBD | GUI-TBD | GUI-TBD |
+| `fb_read_ms` | GUI-TBD | GUI-TBD | GUI-TBD |
+| `to_numpy_ms` | GUI-TBD | GUI-TBD | GUI-TBD |
+| `pixels_write_ms` | GUI-TBD | GUI-TBD | GUI-TBD |
+| `syncback_total_ms` | GUI-TBD | GUI-TBD | GUI-TBD |
 
 ### Correctness spot-checks — `GUI-TBD`
 
@@ -156,29 +255,26 @@ Also record: mesh (name, triangle count), viewport size, GPU model.
 
 ## Verdict
 
-**Provisional: YES — feasible, with medium confidence, pending the GUI
-numbers above.**
+**CONFIRMED for the core thesis (GUI run, Quadro RTX 5000 Max-Q, OpenGL,
+2026-07-11): GPU dab rasterization from Python is interactive-rate.**
+Measured `submit_avg_ms` = **0.02–0.03 ms/dab** at 4K steady state (target
+was < 2 ms — beaten by ~100×), `drain_ms` ≈ 3 ms (the GPU keeps up with
+submission), first stroke 0.62 ms avg / 23 ms max = one-time shader compile.
 
-Reasoning from measured facts:
+Falsifier status from that run:
 
-- Everything the technique needs **exists and is probed present** on 5.1.2:
-  arbitrary framebuffers with float color + depth32F attachments, samplers in
-  create-info shaders, Buffer-seeded textures, framebuffer readback with
-  format conversion, blend/depth state control around offscreen passes.
-- The **CPU half of the pipeline is already measured and cheap**: 19 ms
-  `foreach_set` at 2K once per stroke; dab bookkeeping is O(dabs) Python
-  arithmetic.
-- The per-dab GPU work (one mesh draw + trivial fragment math at 2K) is the
-  kind of load a viewport draws hundreds of times per frame; the open risks
-  are Python *submission* overhead per dab (uniform sets + `batch.draw`)
-  and whether fixed-function blending works in custom framebuffers on the
-  active backend (probe line decides; fallback = ping-pong at ~2× cost).
+1. `blend_alpha_into_offscreen_attachment=NO` + ping-pong ≥ 2 ms — **dead**
+   (probe = yes, no ping-pong needed).
+2. `submit_avg_ms` ≥ 2 ms — **dead** (0.02–0.03 ms measured).
+3. `drain_ms` growing into hundreds of ms — **dead** (~3 ms).
+4. Paint mirrored/offset from the cursor — not reported; strokes
+   round-tripped to the Image correctly.
 
-Falsifiers to watch for in the GUI run — any of these flips the verdict:
-
-1. `blend_alpha_into_offscreen_attachment=NO` **and** ping-pong pushes
-   `submit_avg_ms` ≥ 2 ms.
-2. `submit_avg_ms` ≥ 2 ms on a modest mesh (≤ 100k tris) at 2K.
-3. `drain_ms` growing linearly into hundreds of ms per stroke (GPU can't
-   keep up with submission; dabs/sec collapses).
-4. Paint mirrored/offset from the cursor with no fixable convention flip.
+The one problem the run surfaced was **not** the spike question: the
+stroke-end sync-back cost ~1.24 s at 4K, of which ~1.05 s was Python-side
+Buffer→numpy conversion and ~105 ms a double-read probe artifact — both
+diagnosed and fixed in v0.2.0 (see the sync-back section). Remaining risk
+is narrow: if BOTH the direct-read probe and every zero-copy ladder rung
+report NO on this build, sync-back stays slow on the honest fallback and the
+proposal escalates to "the gpu module needs a zero-copy readback API" — the
+post-fix probe lines answer that in one session.

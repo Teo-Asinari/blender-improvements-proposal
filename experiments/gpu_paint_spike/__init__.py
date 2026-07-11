@@ -12,7 +12,7 @@ exact measurement protocol.
 bl_info = {
     "name": "GPU Paint Spike (Experimental)",
     "author": "Teo Asinari",
-    "version": (0, 1, 0),
+    "version": (0, 2, 0),
     "blender": (5, 1, 0),
     "location": "3D Viewport > Sidebar (N) > GPU Paint tab; "
                 "Object menu > GPU Paint Spike",

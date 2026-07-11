@@ -42,10 +42,14 @@ every other real-tool concern are deliberately out of scope.
 
 While painting, a small text overlay (bottom-left) shows live dab counts and
 the last stroke's timings; the N-panel shows the full stats table; the
-console gets one machine-readable line per stroke:
+console gets one machine-readable line per stroke, and every PROBE/STROKE
+line is also appended to `~/gpu_paint_spike_stats.log` (console output is
+hidden by default on Windows):
 
 ```
 GPU_PAINT_SPIKE_PROBE  blend_alpha_into_offscreen_attachment=yes (…)
+GPU_PAINT_SPIKE_PROBE  buffer_to_numpy_path=frombuffer
+GPU_PAINT_SPIKE_PROBE  fb_read_into_numpy_buffer=yes
 GPU_PAINT_SPIKE_STROKE dabs=214 dabs_per_s=163.1 submit_avg_ms=0.41 …
 ```
 
@@ -56,9 +60,11 @@ sphere (~100k tris, Smart UV Project) for the mesh-scaling data point.
 Record GPU model and viewport size once.
 
 1. **Probes.** Start a session at 2K and copy the whole
-   `GPU_PAINT_SPIKE_PROBE` block from the console into the FINDINGS probe
-   table. If `blend_alpha_into_offscreen_attachment=NO`, stop — that alone
-   is a finding (ping-pong fallback required).
+   `GPU_PAINT_SPIKE_PROBE` block from the console/log into the FINDINGS
+   probe table. If `blend_alpha_into_offscreen_attachment=NO`, stop — that
+   alone is a finding (ping-pong fallback required). The two readback
+   probes (`buffer_to_numpy_path=…`, `fb_read_into_numpy_buffer=…`) decide
+   which stroke-end path production uses; copy them verbatim.
 2. **Per-dab + dabs/sec.** For each texture size (1024 / 2048 / 4096 —
    restart the session per size):
    - Paint one **slow, steady** stroke (~3 s). Record `submit_avg_ms`,
@@ -66,8 +72,14 @@ Record GPU model and viewport size once.
    - Paint one **fast scribble** (~3 s of continuous zig-zag). Record
      `dabs_per_s`, `submit_avg_ms`, `drain_ms`. The first stroke after
      starting compiles shaders — discard it and measure the second onward.
-3. **Sync-back.** From the same strokes record `fb_read_ms`, `tex_read_ms`,
-   `to_numpy_ms`, `pixels_write_ms`, `syncback_total_ms` per size.
+3. **Sync-back.** From the same strokes record `readback_path`,
+   `fb_read_ms`, `to_numpy_ms`, `pixels_write_ms`, `syncback_total_ms`
+   per size. (`readback_path=read_into_numpy` means the readback landed
+   directly in numpy memory and `to_numpy_ms` should be ~0.) `tex_read_ms`
+   no longer appears by default: since 0.2.0 the texture is read **once**
+   per stroke; set `engine.DEBUG_COMPARE_READS = True` to restore the
+   fb.read_color-vs-tex.read A/B comparison (adds a second full transfer
+   per stroke).
 4. **Occlusion correctness.** On the sphere: paint across the silhouette,
    orbit to the back — it must be clean. Toggle **Occlusion Test** off,
    repeat, confirm it paints through (proves the test was doing the work).
