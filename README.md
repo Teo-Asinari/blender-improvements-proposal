@@ -1,30 +1,38 @@
-# Blender Improvements Proposal
+# Blender Improvements
 
-A project proposing enhancements to Blender's sculpting, texture painting, and UX — inspired by workflows found in specialized 3D tools such as 3DCoat and Substance Painter.
+Enhancements to Blender's sculpting, texture painting, and UX workflows — inspired by workflows found in specialized 3D tools such as 3DCoat and Substance Painter. Shipped as add-ons where Python can carry the feature; researched toward upstream contributions where it can't.
 
 > This is an independent project. It is not affiliated with, endorsed by, or derived from 3DCoat (Pilgway), Substance Painter (Adobe), or any other product mentioned; product names are used only to describe comparable workflows. All code here is original, written against Blender's public APIs.
 
-## What This Is
+## Add-ons (working today)
 
-This repository contains a detailed proposal for bringing key missing features to Blender, either as add-ons/plugins or as upstream contributions to the Blender project. The focus areas are:
+All three are tested against **Blender 5.1.2**, ship with headless test suites that run against a real Blender binary, and install by copying the folder (minus `tests/`) into your `scripts/addons/` directory. See each add-on's README for details.
 
-- **Voxel-Based Sculpting** — topology-free sculpting with real-time booleans on true volumes
-- **PBR Texture Painting with Layers** — a proper layer stack, simultaneous multi-channel PBR painting, template materials, and GPU-accelerated performance
-- **Interactive Brush Controls** — right-click drag to adjust brush size and intensity in a single gesture
-- **UX & Navigation Improvements** — viewport navigation and workflow enhancements drawn from dedicated sculpting/painting tools
+### [Seam Path Tool](addons/seam_path_tool/) — v1.4.0
+
+Interactive shortest-path UV seam marking in Edit Mode: click points on the mesh, each click commits a seam along the shortest path from the last anchor, with a live preview of the candidate path under the cursor. Occlusion-aware vertex picking, erase mode, per-segment undo, on-screen help panel. Fast on large meshes: commits reuse the previewed path (no pathfinding on click), and the hover path tree solves at C speed via an optional scipy dependency (pure-Python fallback included).
+
+### [UV Island Overlay](addons/uv_island_overlay/) — v1.4.0
+
+Viewport overlay that colors each UV island distinctly and/or drapes a texel-density checkerboard through the actual UVs — the default combined mode shows both at once (hue = island, checker scale = density). Islands can be computed from true UV connectivity or *predicted from seams live as you mark them*, no unwrap needed. Per-island density stats, deviation tint, live opacity controls. Drawn as a GPU overlay; the mesh is never modified.
+
+### [EZ-Bake](addons/ez_bake/) — v1.0.1
+
+A guided high-poly → low-poly normal-baking workflow in one sidebar panel: pair the sculpt with a retopo mesh (existing, or a generated QuadriFlow candidate), pass a bake-readiness checklist (UVs, scale, normals — with one-click fixes and shortcuts into the two add-ons above), then one button runs the whole bake gauntlet: Cycles switch, image/material/node targeting, selected-to-active with auto ray distances, save to `//textures/`, normal map wired into the material, everything restored afterward. Normals-only for now; other map types are structured TODOs.
 
 ## Documents
 
-- [PROPOSAL.md](PROPOSAL.md) — the full proposal with feature descriptions, current limitations, and research checklist
+- [PROPOSAL.md](PROPOSAL.md) — the full proposal: the features above, plus the two flagship efforts (layered PBR texture painting, voxel sculpting) that ultimately need work in Blender's core.
+- [research/](research/) — technical research feeding the flagship designs.
+
+## Approach
+
+Features are piloted as Python add-ons with agent-assisted development: each add-on carries a headless test suite (`tests/run_tests.sh`) that exercises the real Blender binary in `--background`, including — where the domain allows — real end-to-end assertions (e.g. EZ-Bake's suite performs an actual Cycles normal bake and checks the pixel statistics). API behavior is probed against the running binary rather than assumed; the traps found along the way are documented in the add-on READMEs.
 
 ## Status
 
-Early research and planning phase. This is a living document that will be updated as technical research progresses and implementation strategies become clearer.
-
-## Contributing
-
-Ideas, research, and discussion are welcome. Open an issue or submit a PR.
+Active development. The three add-ons above are usable daily; the flagship features are in research/design.
 
 ## License
 
-TBD
+The add-ons are GPL-2.0-or-later (as Blender add-ons must be; see SPDX headers). Documentation and research notes: all rights reserved for now.
