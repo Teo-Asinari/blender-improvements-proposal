@@ -1,9 +1,10 @@
 # GPU Paint Spike — Findings
 
-**Status: dab-latency verdict CONFIRMED in the GUI run (2026-07-11). The
-sync-back bottleneck that run exposed (~1.24 s at 4K) is diagnosed and fixed
-in v0.2.0; post-fix numbers pending re-measurement (slots marked
-`GUI-TBD (post-fix)`).**
+**Status: dab-latency verdict CONFIRMED and the v0.2.0 sync-back fix
+CONFIRMED (~165 ms at 4K, was ~1.24 s) in the GUI runs of 2026-07-11.
+v0.3.0 adds the multi-channel (MRT) question: headless-measurable numbers
+are filled below; the GPU-side probe results and timings await the next GUI
+run (slots marked `GUI-TBD (v0.3.0)`).**
 Environment: Blender **5.1.2** (`ec6e62d40fa9`, 2026-05-19), Windows binary run
 from WSL2; numpy 2.3.4 bundled. GUI run: **NVIDIA Quadro RTX 5000 Max-Q,
 OpenGL backend**, 4096×4096 RGBA, 2026-07-11 (from the user's
@@ -245,6 +246,159 @@ for the upstream pitch.
 - [ ] After RMB-stop, the Image editor shows the stroke (sync-back wrote
       the datablock).
 
+## v0.3.0 — multi-channel painting (MRT)
+
+**New spike question:** what does N-channel painting cost? A real material
+paint tool writes color + roughness + height + mask (+ more) per stroke.
+v0.3.0 attaches N (1/2/4/8) RGBA16F textures to ONE `GPUFrameBuffer`; the
+dab fragment shader emits a distinct value per attachment (color, a scalar
+packed in R, an inverted color, the falloff as a height-ish scalar), all
+modulated by the **same** brush falloff alpha. N=1 is the untouched v0.2.0
+path (`dab_frag_src(1)` returns the 0.2.0 source byte-for-byte).
+
+### Design constraint found at the API level (not a probe surprise)
+
+`gpu.state.blend_set` is **global** — the Python API has no per-attachment
+blend form (no `glBlendFunci` equivalent). One blend mode applies to every
+MRT attachment, so a stroke has **same-blend-per-stroke semantics across
+all channels**. That matches the shared-mask model this spike implements
+anyway (one disc test, one falloff, N values); it would only pinch a design
+where e.g. color blends ALPHA while height blends ADD within one dab. The
+`mrt_blend_alpha_all_attachments` probe verifies the global mode really is
+applied to attachment 1 (and that output-slot routing works).
+
+### Runtime probes (new in v0.3.0; printed on first draw)
+
+| Probe line | Expected | Measured |
+|---|---|---|
+| `fb_max_color_slots` (tries 8, then 4, then 2) | 8 (GL/VK minimum guarantee is 8) | GUI-TBD (v0.3.0) |
+| `r16f_color_fb` | yes | GUI-TBD (v0.3.0) |
+| `mixed_format_mrt_rgba16f_r16f` (RGBA16F slot 0 + R16F slot 1, clear + read both) | yes → scalar channels can be 4× smaller | GUI-TBD (v0.3.0) |
+| `mrt_blend_alpha_all_attachments` (att0 ≈ (0.5,0,0.5), att1 ≈ (0.25,0,0.25)) | yes — blend is global; routing distinct | GUI-TBD (v0.3.0) |
+| `fb_read_color_subrect` (x/y offsets honored; non-square read into numpy-wrapping Buffer is (h, w, 4) row-major) | yes | GUI-TBD (v0.3.0) |
+| `gpu_capabilities_memory` | none_exposed (analytic VRAM below) | GUI-TBD (v0.3.0) |
+
+### Q1 — MRT dab cost (per-dab submission vs N=1 baseline)
+
+Per-dab submission is uniform-upload + draw-call bound (v0.2.0 measured
+0.02–0.03 ms at 4K, N=1); MRT adds fragment output work on the GPU side but
+nothing per-dab on the CPU side, so the prediction is **no change in
+`submit_avg_ms` with N** — the GPU absorbs the extra writes asynchronously,
+bounded by `drain_ms`.
+
+| Metric | N=1 (v0.2.0 baseline) | N=2 | N=4 | N=8 |
+|---|---|---|---|---|
+| `submit_avg_ms` @4K | **0.02–0.03 (measured)** | GUI-TBD | GUI-TBD | GUI-TBD |
+| `drain_ms` @4K | **~3 (measured)** | GUI-TBD | GUI-TBD | GUI-TBD |
+| `submit_avg_ms` @2K | GUI-TBD | GUI-TBD | GUI-TBD | GUI-TBD |
+| `drain_ms` @2K | GUI-TBD | GUI-TBD | GUI-TBD | GUI-TBD |
+
+Falsifier: `submit_avg_ms` or `drain_ms` growing ~linearly with N would
+mean MRT dabs are bandwidth-bound already at dab time (unlikely — a 50 px
+dab touches ~10⁴ texels × N × 8 bytes ≈ 0.6 MB at N=8).
+
+### Q2 — region-of-interest (sub-rect) readback
+
+`fb.read_color` takes an x/y/w/h sub-rect per the API docs; the
+`fb_read_color_subrect` probe verifies offsets and row order against known
+content. Production now tracks a **conservative dirty rect**: per-triangle
+screen bboxes (numpy, cached per prepass with the same matrices the dab
+shader uses) are intersected with each flush's dab-disc bbox; the union of
+hit triangles' UV bboxes bounds every texel the rasterizer can have
+touched. Triangles crossing the near plane count as always-dirty;
+occlusion-discarded texels only make the rect conservative, never wrong.
+`readback_rect=WxH` appears in the stroke stats (`full` when disabled or
+not smaller). Toggle: *Sub-rect Readback* in the panel.
+
+One-time per-session characterization (logged as
+`GPU_PAINT_SPIKE_READBACK_CHAR`, best of 2):
+
+| Texture | 100% area | 25% area | 5% area |
+|---|---|---|---|
+| 2048² read ms | GUI-TBD (v0.2.0 measured ~23) | GUI-TBD | GUI-TBD |
+| 4096² read ms | GUI-TBD (v0.2.0 measured ~88–101) | GUI-TBD | GUI-TBD |
+
+Expected: ~linear in area with a fixed sync floor (the drain shows ~3 ms of
+that floor). Falsifier: near-flat times would mean the driver reads the
+whole surface regardless, killing the sub-rect idea.
+
+**CPU-side finding (headless, measured 2026-07-11, this machine):** the
+sub-rect only shrinks the GPU→CPU transfer — `Image.pixels` has **no
+partial write**, so `foreach_set` stays full-cost per synced channel. The
+sub-rect path's own CPU overhead is small:
+
+| CPU cost (4K) | 100% | 25% | 5% |
+|---|---|---|---|
+| scatter sub-rect → full mirror | 19.1 ms | 5.7 ms | 1.1 ms |
+
+(One-time: allocating 4× 4K float32 mirrors costs ~175 ms at first
+finalize. Dirty-rect math: 0.02 ms/flush at 12 tris, **1.5 ms/flush +
+39.6 ms/prepass at 100k tris** — visible in the new `dirty_ms` stat; at
+heavy mesh counts the tracking, not the dabs, dominates flush CPU. Design
+note for a real tool: coarse tile grid or GPU-side dirty mask instead.)
+
+### Q3 — multi-channel sync-back (N reads + N Image writes)
+
+Headless-measured CPU half (N × `foreach_set` + `update`, this machine):
+
+| Texture | N=1 | N=4 | N=8 |
+|---|---|---|---|
+| 2048² pixels write total | 16.8 ms | 69.2 ms | 136.8 ms |
+| 4096² pixels write total | 73.7 ms | 294.6 ms | 582.1 ms |
+
+Perfectly linear (~17 ms/channel at 2K, ~74 ms at 4K) — no batching win or
+penalty from multiple Image datablocks.
+
+Per-stroke table to fill (one session per channel count per size):
+
+| Metric | 2K N=4 | 2K N=8 | 4K N=4 | 4K N=8 |
+|---|---|---|---|---|
+| `fb_read_ms` (full) | GUI-TBD | GUI-TBD | GUI-TBD | GUI-TBD |
+| `fb_read_ms` (typical sub-rect) | GUI-TBD | GUI-TBD | GUI-TBD | GUI-TBD |
+| `pixels_write_ms` | ~69 (headless) | ~137 (headless) | ~295 (headless) | ~582 (headless) |
+| `syncback_total_ms` | GUI-TBD | GUI-TBD | GUI-TBD | GUI-TBD |
+
+**Provisional arithmetic** (v0.2.0 measured reads: ~23 ms full at 2K,
+~95 ms at 4K; assume linear-in-area sub-rect, typical stroke ≈ 25% of the
+map):
+
+- **2K, N=4, full reads:** 3 (drain) + 4×23 (reads) + ~0 (convert) +
+  69 (writes) ≈ **165 ms** — inside the < 200 ms target with no sub-rect
+  needed.
+- **2K, N=8, full:** 3 + 8×23 + 137 ≈ **324 ms**; with 25% sub-rect reads
+  ≈ 3 + 8×6 + 137 ≈ **188 ms** — sub-rect pulls N=8 under the bar.
+- **4K, N=4, full:** 3 + 4×95 + 295 ≈ **678 ms**. With 25% sub-rect:
+  3 + 4×24 + 23 (scatter) + 295 ≈ **417 ms** — still over budget, and now
+  **dominated by the irreducible `foreach_set`**, not the transfer.
+- **4K, N=8, full:** ≈ **1.35 s**. Sub-rect cannot rescue it alone.
+
+**Provisional verdict (to confirm/refute in the GUI run):** multi-channel
+painting is dab-side free and sync-side linear. At 2K, 4–8 channels fit the
+< 200 ms pen-lift budget (N=8 needs sub-rect). At 4K the binding constraint
+is not the GPU→CPU read (sub-rect fixes that) but Blender's full-image
+`Image.pixels` write per channel — **dirty-channel-only sync plus a partial
+Image write API (or deferring Image sync off the pen-lift path entirely,
+e.g. background/idle sync) is what 4K multi-channel needs.** That is a
+second concrete, citable API gap for the upstream pitch (alongside the
+zero-copy `Buffer`→numpy bridge from v0.2.0).
+
+### Q4 — VRAM (analytic; `gpu.capabilities` probe expected `none_exposed`)
+
+RGBA16F = 8 bytes/texel per attachment; logged per session as
+`GPU_PAINT_SPIKE_VRAM`:
+
+| Texture | N=1 | N=2 | N=4 | N=8 |
+|---|---|---|---|---|
+| 2048² | 32 MB | 64 MB | 128 MB | 256 MB |
+| 4096² | 128 MB | 256 MB | 512 MB | 1024 MB |
+
+Plus per session: R32F + DEPTH32F prepass at viewport size (~16 MB at
+1920×1080) and N full-size float32 CPU mirrors (64 MB each at 4K — 512 MB
+of RAM at N=8/4K; a real tool would keep half-float or per-tile mirrors).
+If `mixed_format_mrt_rgba16f_r16f=yes`, scalar channels (roughness,
+height, mask) drop to R16F at 2 bytes/texel — a 4× saving on those
+channels (4K scalar channel: 32 MB instead of 128 MB).
+
 ## Limitations discovered / accepted (spike scope)
 
 - **No undo** — the operator is not `'UNDO'`; painted pixels are only in the
@@ -267,6 +421,19 @@ for the upstream pitch.
 - Texture memory: RGBA16F at 4K = 128 MB per attachment. Fine for a spike.
 - `pixels.foreach_set` needs the readback as float32; `fb.read_color(...,
   'FLOAT')` guarantees that regardless of the RGBA16F attachment.
+- **Push constants exceed 128 bytes** on the dab shader (2× MAT4 + the
+  brush uniforms): Blender warns "minimum supported size of 128 bytes …
+  Consider using UBO" at create-info population. Worked on the GL/Quadro
+  run; a real tool should move the matrices to a UBO.
+- **Sub-rect y-convention risk on non-GL backends:** full-frame reads
+  round-trip by construction, but the dirty rect maps UV v → framebuffer y
+  directly. Verified on OpenGL; if a Vulkan/Metal build ever clips strokes
+  near the top/bottom of UV space, disable *Sub-rect Readback* and file the
+  y-flip as a finding.
+- **All channels are always dirty** in this spike (one shader writes all N
+  per dab); per-channel dirty flags (paint only color+height, skip the
+  rest at sync) are a real-tool concern, simulated here by comparing
+  channel counts.
 
 ## Verdict
 
@@ -293,3 +460,20 @@ is narrow: if BOTH the direct-read probe and every zero-copy ladder rung
 report NO on this build, sync-back stays slow on the honest fallback and the
 proposal escalates to "the gpu module needs a zero-copy readback API" — the
 post-fix probe lines answer that in one session.
+
+### Verdict template — v0.3.0 multi-channel (fill from the GUI run)
+
+- **MRT feasibility:** `fb_max_color_slots=___` (need ≥ 4);
+  `mrt_blend_alpha_all_attachments=___`;
+  `mixed_format_mrt_rgba16f_r16f=___`.
+- **Q1 dab cost:** `submit_avg_ms` at N=8 vs N=1 = ___ vs ___ (verdict
+  holds if ~equal); `drain_ms` growth with N = ___.
+- **Q2 sub-rect:** characterization slope ≈ linear in area? ___ ; typical
+  stroke `readback_rect` fraction on a sphere at default zoom = ___.
+- **Q3 pen-lift:** measured `syncback_total_ms` — 2K/N=4: ___ (predicted
+  ~165), 2K/N=8: ___ (~324 full / ~188 sub-rect), 4K/N=4: ___ (~678 full /
+  ~417 sub-rect). **< 200 ms typical-stroke bar passes at:** ___.
+- **Escalation (already defensible from the arithmetic):** at 4K the
+  binding constraint is Blender's full-image `Image.pixels` write per
+  channel — cite "partial Image write / deferred sync API" alongside the
+  v0.2.0 zero-copy readback gap.

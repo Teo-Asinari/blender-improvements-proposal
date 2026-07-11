@@ -154,7 +154,7 @@ def main():
     fin_src = inspect.getsource(engine._finalize_stroke_gpu)
     check("tex.read gated behind DEBUG_COMPARE_READS",
           "if DEBUG_COMPARE_READS" in fin_src
-          and fin_src.count("paint_tex.read") == 1)
+          and fin_src.count("paint_texs[0].read") == 1)
     check("finalize prefers read-into-numpy",
           "if _read_into_numpy" in fin_src
           and "read_into_numpy" in fin_src)
@@ -168,6 +168,117 @@ def main():
     check("syncback_total keeps semantics (drain+read+conv+write+update)",
           all(key in sync_src for key in
               ("drain_ms", "fb_read_ms", "to_numpy_ms")))
+
+    # -- v0.3.0 multi-channel: MRT GLSL + create-info + stats layout -----
+    check("dab_frag_src(1) is the v0.2.0 source unchanged",
+          engine.dab_frag_src(1) == engine.DAB_FRAG_SRC)
+    check("DAB_FRAG_SRC is prelude + single output",
+          engine.DAB_FRAG_SRC.startswith(engine._DAB_FRAG_PRELUDE))
+    check("channel expr table covers MAX_CHANNELS",
+          len(engine._CHANNEL_EXPRS) == engine.MAX_CHANNELS - 1)
+    for n in (2, 4, 8):
+        src = engine.dab_frag_src(n)
+        outs_ok = all(("fragColor%d = " % i) in src for i in range(1, n))
+        check("dab_frag_src(%d) has %d MRT outputs" % (n, n),
+              outs_ok and ("fragColor%d" % n) not in src)
+        check("dab_frag_src(%d) shares one falloff alpha" % n,
+              "float a = brush_color.a * f;" in src
+              and src.count(", a);") == n
+              and "vec4(brush_color.rgb, a);" in src)
+        check("dab_frag_src(%d) keeps disc+occlusion prelude" % n,
+              "texture(scene_depth_tex" in src
+              and "1.0 - smoothstep(h, 1.0, t)" in src)
+    try:
+        engine.dab_frag_src(engine.MAX_CHANNELS + 1)
+        check("dab_frag_src rejects > MAX_CHANNELS", False, "no raise")
+    except ValueError:
+        check("dab_frag_src rejects > MAX_CHANNELS", True)
+    for n in (1, 2, 4, 8):
+        try:
+            engine.dab_shader_create_info(n)
+            check("dab create-info builds headless (channels=%d)" % n, True)
+        except Exception as e:
+            check("dab create-info builds headless (channels=%d)" % n,
+                  False, repr(e))
+    ci_src = inspect.getsource(engine.dab_shader_create_info)
+    check("create-info populates one fragment_out per channel",
+          "for i in range(1, channels):" in ci_src
+          and 'fragment_out(i' in ci_src)
+    for key in ("channels", "readback_rect", "fb_read_avg_ch_ms",
+                "pixels_write_avg_ch_ms", "dirty_ms"):
+        check("stats layout has %s" % key,
+              any(k == key for k, _l, _f in engine.STATS_LAYOUT))
+
+    # -- v0.3.0 dirty-rect pure math -------------------------------------
+    uvb = engine.triangle_uv_bboxes(
+        np.array([[0.0, 0.0], [0.5, 0.0], [0.0, 0.5],
+                  [0.6, 0.6], [1.0, 0.6], [0.6, 1.0]], dtype=np.float32))
+    check("triangle_uv_bboxes shape", uvb.shape == (2, 4), str(uvb.shape))
+    check("triangle_uv_bboxes values",
+          np.allclose(uvb[0], [0.0, 0.0, 0.5, 0.5])
+          and np.allclose(uvb[1], [0.6, 0.6, 1.0, 1.0]), str(uvb))
+
+    # Identity MVP: NDC == object coords; region 100x100 -> px = (ndc*0.5
+    # + 0.5) * 100. Second triangle has a vertex at w<=0 via a matrix
+    # with row 3 = [0,0,-1,0] (w = -z): z=+1 vertex -> w=-1 -> flagged.
+    ident = np.eye(4, dtype=np.float32)
+    tri = np.array([[-1.0, -1.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 0.0]],
+                   dtype=np.float32)
+    bb, bad = engine.triangle_screen_bboxes(tri, ident, 100, 100)
+    check("screen bbox identity projection",
+          np.allclose(bb[0], [0.0, 0.0, 50.0, 50.0]), str(bb))
+    check("screen bbox no unprojectable under identity", not bad.any())
+    persp = np.array([[1, 0, 0, 0], [0, 1, 0, 0],
+                      [0, 0, 1, 0], [0, 0, -1, 0]], dtype=np.float32)
+    tri2 = np.array([[0.0, 0.0, -1.0], [1.0, 0.0, -1.0], [0.0, 1.0, 1.0]],
+                    dtype=np.float32)
+    _bb2, bad2 = engine.triangle_screen_bboxes(tri2, persp, 100, 100)
+    check("screen bbox flags near-plane crossers", bool(bad2[0]), str(bad2))
+
+    check("dab_rect_union",
+          engine.dab_rect_union([(10, 20, 1.0), (30, 5, 1.0)], 4.0)
+          == (6.0, 1.0, 34.0, 24.0))
+
+    sbb = np.array([[0, 0, 10, 10], [90, 90, 100, 100]], dtype=np.float32)
+    nobad = np.zeros(2, dtype=bool)
+    uvbb = np.array([[0.0, 0.0, 0.2, 0.2], [0.8, 0.8, 1.0, 1.0]],
+                    dtype=np.float32)
+    got = engine.dirty_uv_bbox(sbb, nobad, uvbb, (5, 5, 12, 12))
+    check("dirty_uv_bbox picks intersecting tri only",
+          got is not None and np.allclose(got, (0.0, 0.0, 0.2, 0.2)),
+          str(got))
+    check("dirty_uv_bbox miss -> None",
+          engine.dirty_uv_bbox(sbb, nobad, uvbb, (40, 40, 50, 50)) is None)
+    somebad = np.array([False, True])
+    got = engine.dirty_uv_bbox(sbb, somebad, uvbb, (40, 40, 50, 50))
+    check("dirty_uv_bbox counts unprojectable tris as dirty",
+          got is not None and np.allclose(got, (0.8, 0.8, 1.0, 1.0)),
+          str(got))
+
+    check("union_bbox with None", engine.union_bbox(None, (1, 2, 3, 4))
+          == (1, 2, 3, 4) and engine.union_bbox((1, 2, 3, 4), None)
+          == (1, 2, 3, 4))
+    check("union_bbox unions",
+          engine.union_bbox((0.1, 0.2, 0.3, 0.4), (0.0, 0.3, 0.5, 0.35))
+          == (0.0, 0.2, 0.5, 0.4))
+
+    check("uv_bbox_to_pixel_rect None passthrough",
+          engine.uv_bbox_to_pixel_rect(None, 1024) is None)
+    r = engine.uv_bbox_to_pixel_rect((0.25, 0.5, 0.5, 0.75), 1024, pad=2)
+    check("uv_bbox_to_pixel_rect scales+pads",
+          r == (254, 510, 260, 260), str(r))
+    r = engine.uv_bbox_to_pixel_rect((-0.5, -0.5, 2.0, 2.0), 256, pad=2)
+    check("uv_bbox_to_pixel_rect clamps to texture",
+          r == (0, 0, 256, 256), str(r))
+    check("uv_bbox_to_pixel_rect degenerate -> None",
+          engine.uv_bbox_to_pixel_rect((2.0, 2.0, 3.0, 3.0), 256) is None)
+
+    # Cube soup end-to-end: 12 tri UV bboxes, all inside [0,1].
+    cube_uvbb = engine.triangle_uv_bboxes(engine.build_mesh_soup(
+        bpy.data.objects["Cube"])[1])
+    check("cube tri uv bboxes", cube_uvbb.shape == (12, 4)
+          and float(cube_uvbb.min()) >= 0.0
+          and float(cube_uvbb.max()) <= 1.0)
 
     # -- mesh soup extraction (default cube has a UV layer) ------------------
     cube = bpy.data.objects.get("Cube")
@@ -245,8 +356,8 @@ def main():
           str(offenders))
 
     # -- registration lifecycle ----------------------------------------------
-    check("version 0.2.0",
-          gpu_paint_spike.bl_info["version"] == (0, 2, 0),
+    check("version 0.3.0",
+          gpu_paint_spike.bl_info["version"] == (0, 3, 0),
           str(gpu_paint_spike.bl_info["version"]))
     gpu_paint_spike.register()
     check("operator registered",
@@ -258,6 +369,12 @@ def main():
     check("color prop", hasattr(wm, "gpu_paint_spike_color"))
     check("resolution prop",
           wm.gpu_paint_spike_resolution in {'1024', '2048', '4096'})
+    check("channels prop defaults to baseline 1",
+          wm.gpu_paint_spike_channels == '1')
+    check("subrect prop defaults on",
+          wm.gpu_paint_spike_subrect is True)
+    check("preview channel prop",
+          wm.gpu_paint_spike_preview_channel == 0)
 
     op = bpy.types.OBJECT_OT_gpu_paint_spike
     bpy.context.view_layer.objects.active = cube
@@ -290,6 +407,29 @@ def main():
     eng.stop_session()
     check("session stopped", not eng.session_active())
     check("stats dict", isinstance(eng.last_stroke_stats(), dict))
+
+    # -- multi-channel session headless (still no gpu touched) ---------------
+    imgs = [bpy.data.images.new("spike_test_ch%d" % i, 128, 128, alpha=True)
+            for i in range(4)]
+    check("start_session channels=4",
+          eng.start_session(cube, imgs, None, channels=4))
+    s4 = eng._session
+    check("session channel count", s4.channels == 4)
+    check("session image names per channel",
+          s4.image_names == [im.name for im in imgs])
+    check("tri uv bboxes precomputed at start",
+          s4.tri_uv_bboxes is not None and s4.tri_uv_bboxes.shape == (12, 4))
+    eng.begin_stroke(5, 5, 1.0)
+    check("stroke dirty reset at begin",
+          s4.stroke_dirty is None and s4.stroke_dirty_full is False
+          and s4.dirty_ms == 0.0)
+    eng.move_stroke(40, 5, 1.0, radius_px=20.0)
+    eng.end_stroke()
+    check("channels finalize pending", eng.busy())
+    check("channels clamped to MAX_CHANNELS",
+          eng._Session("o", ["i"], 64, 0, channels=99).channels
+          == eng.MAX_CHANNELS)
+    eng.stop_session()
 
     # -- unregister / re-register cycle --------------------------------------
     gpu_paint_spike.unregister()

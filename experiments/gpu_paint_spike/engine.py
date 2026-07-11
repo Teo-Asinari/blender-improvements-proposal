@@ -61,6 +61,25 @@ winner). The naive ``np.asarray(buf)`` this replaces was measured at
 sequence iteration over 16.7M Python floats (see FINDINGS.md). CPU
 cost is paid ONCE per stroke.
 
+Multi-channel (v0.3.0)
+----------------------
+N (1/2/4/8) RGBA16F textures attach to ONE GPUFrameBuffer (MRT); the
+dab fragment shader writes a DISTINCT value per attachment (color, a
+scalar packed in R, a second color, a height-ish scalar), all modulated
+by the same brush falloff alpha. Design constraint (probed):
+``gpu.state.blend_set`` is GLOBAL — one blend mode for every attachment
+(per-attachment blend is not exposed by the Python API), which forces
+same-blend-per-stroke semantics; that matches the shared-mask model
+anyway. Sync-back reads N attachments (``fb.read_color(slot=i)``) and
+writes N Image datablocks. A CONSERVATIVE dirty-rect shrinks the reads:
+per-triangle screen bboxes (numpy, cached per prepass) are intersected
+with each flush's dab-disc bbox; the union of the hit triangles' UV
+bboxes bounds every texel the rasterizer can have touched (triangles
+that cross the near plane count as always-dirty). Sub-rect reads land
+in full-size CPU mirror arrays that ``foreach_set`` consumes whole —
+Image.pixels has no partial-write API, so the CPU write stays full-cost
+(a finding, not a bug).
+
 Instrumentation is the point: every stage is timed with
 time.perf_counter and reported in a blf overlay, the N-panel, and one
 machine-readable ``GPU_PAINT_SPIKE_STROKE ...`` console line per stroke.
@@ -100,6 +119,15 @@ DAB_SPACING_FACTOR = 0.25
 MIN_DAB_SPACING_PX = 2.0
 MAX_DABS_PER_EVENT = 256
 
+# Multi-channel painting: how many RGBA16F targets one session may
+# attach to the paint framebuffer (the panel offers 1/2/4/8; the probe
+# reports what GPUFrameBuffer actually accepts on this build/GPU).
+MAX_CHANNELS = 8
+
+# Conservative dirty-rect: texel padding added around the accumulated
+# UV bbox before the sub-rect read (guards float->texel rounding).
+DIRTY_RECT_PAD_PX = 2
+
 # When True, the stroke-end finalize ALSO times GPUTexture.read() next
 # to the production fb.read_color — the 0.1.0 A/B probe that produced
 # the FINDINGS numbers (they measured ~equal: ~100 vs ~105 ms at 4K on
@@ -123,7 +151,10 @@ void main()
 }
 """
 
-DAB_FRAG_SRC = """
+# Everything up to (and including) the falloff computation is shared by
+# the single-channel and MRT variants; dab_frag_src() appends the
+# per-attachment output assignments.
+_DAB_FRAG_PRELUDE = """
 void main()
 {
     /* Project this texel's 3D point through the same view_proj the
@@ -161,9 +192,50 @@ void main()
     float t = d / max(brush_radius_px, 1e-6);
     float h = clamp(brush_hardness, 0.0, 0.999);
     float f = 1.0 - smoothstep(h, 1.0, t);
+"""
+
+# v0.2.0's single-channel source, byte-for-byte (the N=1 case must not
+# regress): prelude + the one output assignment.
+DAB_FRAG_SRC = _DAB_FRAG_PRELUDE + """\
     fragColor = vec4(brush_color.rgb, brush_color.a * f);
 }
 """
+
+# Per-attachment value expressions for MRT slots 1..7 (slot 0 is always
+# the brush color). Each is a vec4 whose alpha is the shared falloff
+# ``a`` — the whole point of the shared-mask model: ONE disc test, ONE
+# falloff, N channel values. No extra uniforms: the values are derived
+# from brush_color/f so the spike measures pure MRT cost, not uniform
+# upload growth.
+_CHANNEL_EXPRS = (
+    # slot 1: material-ish scalar packed in R (brush luma)
+    "vec4(dot(brush_color.rgb, vec3(0.299, 0.587, 0.114)), 0.0, 0.0, a)",
+    # slot 2: a second color (inverted brush color)
+    "vec4(1.0 - brush_color.rgb, a)",
+    # slot 3: height-ish scalar (the falloff itself as displacement)
+    "vec4(f, f, f, a)",
+    # slots 4..7: scaled color variants (distinct, cheap)
+    "vec4(brush_color.rgb * 0.500, a)",
+    "vec4(brush_color.rgb * 0.625, a)",
+    "vec4(brush_color.rgb * 0.750, a)",
+    "vec4(brush_color.rgb * 0.875, a)",
+)
+
+
+def dab_frag_src(channels=1):
+    """Dab fragment source for ``channels`` MRT attachments. channels=1
+    returns v0.2.0's DAB_FRAG_SRC unchanged; N>1 appends one output
+    assignment per attachment (fragColor, fragColor1, ...), every one
+    modulated by the same falloff alpha ``a``."""
+    if channels <= 1:
+        return DAB_FRAG_SRC
+    if channels > MAX_CHANNELS:
+        raise ValueError("channels > MAX_CHANNELS")
+    lines = ["    float a = brush_color.a * f;",
+             "    fragColor = vec4(brush_color.rgb, a);"]
+    for i in range(1, channels):
+        lines.append("    fragColor%d = %s;" % (i, _CHANNEL_EXPRS[i - 1]))
+    return _DAB_FRAG_PRELUDE + "\n".join(lines) + "\n}\n"
 
 PREPASS_VERT_SRC = """
 void main()
@@ -284,6 +356,104 @@ def build_mesh_soup(obj):
 
 
 # ---------------------------------------------------------------------------
+# Conservative dirty-rect tracking (pure numpy; headless-testable)
+#
+# Exact "which texels did the rasterizer touch" is unknowable on the
+# CPU, but a CONSERVATIVE bound is cheap: a texel can only have been
+# written if its triangle produced a fragment inside a dab disc, and a
+# triangle can only do that if its screen-space bbox intersects the
+# disc's bbox. So: project every triangle once per prepass (numpy
+# matmul), intersect the per-triangle screen bboxes with each flush's
+# dab-union rect, and union the HIT triangles' UV bboxes. Triangles
+# with any vertex at clip.w <= 0 cannot be projected — they count as
+# always-dirty. Occluded/discarded fragments only make the rect larger
+# than needed, never smaller: conservative is correct.
+# ---------------------------------------------------------------------------
+
+
+def triangle_uv_bboxes(uvs):
+    """(n_tris, 4) float32 [min_u, min_v, max_u, max_v] per triangle
+    from the soup's per-corner UVs (n_tris*3, 2)."""
+    import numpy as np
+    t = np.asarray(uvs, dtype=np.float32).reshape(-1, 3, 2)
+    return np.concatenate([t.min(axis=1), t.max(axis=1)], axis=1)
+
+
+def triangle_screen_bboxes(coords, mvp, region_w, region_h):
+    """(bboxes (n_tris, 4) [minx, miny, maxx, maxy] in region pixels,
+    unprojectable (n_tris,) bool) for the soup's coords (n_tris*3, 3)
+    under the 4x4 ``mvp`` (view_proj @ model, row-major like mathutils).
+    Triangles with any vertex at clip.w <= 0 are flagged unprojectable
+    (their bbox row is garbage; callers must treat them as dirty)."""
+    import numpy as np
+    co = np.asarray(coords, dtype=np.float32).reshape(-1, 3)
+    m = np.asarray(mvp, dtype=np.float32)
+    hom = co @ m[:3, :3].T + m[:3, 3]          # clip.xyz
+    w = co @ m[3, :3].T + m[3, 3]              # clip.w
+    bad = (w <= 1e-6)
+    w_safe = np.where(bad, 1.0, w)
+    px = (hom[:, :2] / w_safe[:, None] * 0.5 + 0.5)
+    px[:, 0] *= float(region_w)
+    px[:, 1] *= float(region_h)
+    tri = px.reshape(-1, 3, 2)
+    bboxes = np.concatenate([tri.min(axis=1), tri.max(axis=1)], axis=1)
+    unprojectable = bad.reshape(-1, 3).any(axis=1)
+    return bboxes.astype(np.float32), unprojectable
+
+
+def dab_rect_union(dabs, radius):
+    """Screen-space bbox (minx, miny, maxx, maxy) covering every dab
+    disc in ``dabs`` (iterable of (x, y, ...) tuples)."""
+    xs = [d[0] for d in dabs]
+    ys = [d[1] for d in dabs]
+    r = float(radius)
+    return (min(xs) - r, min(ys) - r, max(xs) + r, max(ys) + r)
+
+
+def dirty_uv_bbox(screen_bboxes, unprojectable, uv_bboxes, rect):
+    """UV bbox (min_u, min_v, max_u, max_v) unioned over the triangles
+    whose screen bbox intersects ``rect`` — plus every unprojectable
+    triangle (always dirty). None when no triangle is hit."""
+    import numpy as np
+    hit = ~((screen_bboxes[:, 2] < rect[0])
+            | (screen_bboxes[:, 0] > rect[2])
+            | (screen_bboxes[:, 3] < rect[1])
+            | (screen_bboxes[:, 1] > rect[3]))
+    hit = hit | unprojectable
+    if not bool(hit.any()):
+        return None
+    sel = uv_bboxes[hit]
+    return (float(sel[:, 0].min()), float(sel[:, 1].min()),
+            float(sel[:, 2].max()), float(sel[:, 3].max()))
+
+
+def union_bbox(a, b):
+    """Union of two (min_u, min_v, max_u, max_v) bboxes; either may be
+    None (returns the other)."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return (min(a[0], b[0]), min(a[1], b[1]),
+            max(a[2], b[2]), max(a[3], b[3]))
+
+
+def uv_bbox_to_pixel_rect(bbox, size, pad=DIRTY_RECT_PAD_PX):
+    """Clamped integer texel rect (x, y, w, h) for a UV bbox on a
+    size x size texture, padded by ``pad`` texels; None for a None/
+    degenerate/out-of-range bbox."""
+    if bbox is None:
+        return None
+    x0 = max(0, int(math.floor(bbox[0] * size)) - pad)
+    y0 = max(0, int(math.floor(bbox[1] * size)) - pad)
+    x1 = min(size, int(math.ceil(bbox[2] * size)) + pad)
+    y1 = min(size, int(math.ceil(bbox[3] * size)) + pad)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    return (x0, y0, x1 - x0, y1 - y0)
+
+
+# ---------------------------------------------------------------------------
 # Buffer -> numpy conversion ladder (stroke-end readback)
 #
 # The 0.1.0 sync-back converted the readback Buffer with a bare
@@ -394,7 +564,7 @@ _read_into_numpy = False
 # ---------------------------------------------------------------------------
 
 
-def dab_shader_create_info():
+def dab_shader_create_info(channels=1):
     iface = gpu.types.GPUStageInterfaceInfo("gpu_paint_spike_dab_iface")
     iface.smooth('VEC3', "worldPos")
     info = gpu.types.GPUShaderCreateInfo()
@@ -412,8 +582,10 @@ def dab_shader_create_info():
     info.vertex_in(1, 'VEC2', "uv")
     info.vertex_out(iface)
     info.fragment_out(0, 'VEC4', "fragColor")
+    for i in range(1, channels):
+        info.fragment_out(i, 'VEC4', "fragColor%d" % i)
     info.vertex_source(DAB_VERT_SRC)
-    info.fragment_source(DAB_FRAG_SRC)
+    info.fragment_source(dab_frag_src(channels))
     return info
 
 
@@ -453,21 +625,26 @@ def preview_shader_create_info():
 
 
 class _Session:
-    def __init__(self, obj_name, image_name, size, region_ptr):
+    def __init__(self, obj_name, image_names, size, region_ptr, channels=1):
         self.obj_name = obj_name
-        self.image_name = image_name
+        # One Image datablock per channel (channel 0 first). Extra
+        # channels beyond the provided images simply never sync.
+        self.image_names = list(image_names)
+        self.image_name = self.image_names[0] if self.image_names else ""
         self.size = size
         self.region_ptr = region_ptr
+        self.channels = max(1, min(int(channels), MAX_CHANNELS))
 
         # Pure geometry (built eagerly at start — no gpu involved).
         self.coords = None
         self.uvs = None
+        self.tri_uv_bboxes = None      # (n_tris, 4), pure numpy
 
         # GPU resources — ALL lazy, created at first draw.
         self.dab_shader = None
         self.prepass_shader = None
         self.preview_shader = None
-        self.paint_tex = None
+        self.paint_texs = None         # list of N RGBA16F GPUTextures
         self.paint_fb = None
         self.depth_color_tex = None    # R32F: prepass NDC depth
         self.depth_depth_tex = None    # DEPTH_COMPONENT32F: z-testing
@@ -486,6 +663,19 @@ class _Session:
         self.view_proj = None          # mathutils.Matrix copy
         self.model = None              # mathutils.Matrix copy
         self.prepass_ms = 0.0
+
+        # Dirty-rect: per-triangle screen bboxes cached per prepass
+        # (same matrices the dab shader uses) + per-stroke accumulator.
+        self.tri_screen_bboxes = None
+        self.tri_unprojectable = None
+        self.stroke_dirty = None       # UV bbox or None
+        self.stroke_dirty_full = False  # tracking unavailable: full read
+        self.dirty_ms = 0.0            # CPU cost of the tracking math
+
+        # Full-size CPU mirror arrays (one per channel): sub-rect reads
+        # scatter into them; foreach_set consumes them whole (there is
+        # no partial Image.pixels write). Allocated at first finalize.
+        self.cpu_mirrors = None
 
         # Stroke state.
         self.stroke_active = False
@@ -523,18 +713,23 @@ _last_stroke_stats = {}
 # Ordered (key, label, format) for UI display of the stats dict.
 STATS_LAYOUT = (
     ("size", "Texture", "%d px"),
+    ("channels", "Channels", "%d"),
     ("dabs", "Dabs", "%d"),
     ("stroke_s", "Stroke wall time", "%.3f s"),
     ("dabs_per_s", "Dabs/sec sustained", "%.1f"),
     ("submit_avg_ms", "Dab submit avg", "%.3f ms"),
     ("submit_max_ms", "Dab submit max", "%.3f ms"),
     ("prepass_ms", "Depth prepass", "%.2f ms"),
+    ("dirty_ms", "Dirty-rect math", "%.2f ms"),
     ("drain_ms", "GPU drain (1px read)", "%.2f ms"),
-    ("fb_read_ms", "FB readback (full)", "%.2f ms"),
+    ("readback_rect", "Readback rect", "%s"),
+    ("fb_read_ms", "FB readback (all ch)", "%.2f ms"),
+    ("fb_read_avg_ch_ms", "FB read avg/channel", "%.2f ms"),
     ("readback_path", "Readback path", "%s"),
     ("tex_read_ms", "tex.read() (debug A/B)", "%.2f ms"),
     ("to_numpy_ms", "Buffer -> numpy", "%.2f ms"),
-    ("pixels_write_ms", "pixels.foreach_set", "%.2f ms"),
+    ("pixels_write_ms", "pixels.foreach_set (all ch)", "%.2f ms"),
+    ("pixels_write_avg_ch_ms", "pixels write avg/channel", "%.2f ms"),
     ("image_update_ms", "image.update()", "%.2f ms"),
     ("syncback_total_ms", "Sync-back total", "%.2f ms"),
 )
@@ -574,20 +769,26 @@ def probe_lines():
     return []
 
 
-def start_session(obj, image, region):
-    """Create the paint session for ``obj``/``image``. Pure work happens
-    here (geometry soup); ALL gpu work waits for the first draw. Safe
-    headless: handler registration failures are quietly ignored."""
+def start_session(obj, images, region, channels=1):
+    """Create the paint session for ``obj``/``images`` (a single Image
+    or a list — one per channel, channel 0 first). Pure work happens
+    here (geometry soup + per-triangle UV bboxes); ALL gpu work waits
+    for the first draw. Safe headless: handler registration failures
+    are quietly ignored."""
     global _session
     if _session is not None:
         stop_session()
+    if not isinstance(images, (list, tuple)):
+        images = [images]
     coords, uvs = build_mesh_soup(obj)
     if coords is None:
         return False
-    s = _Session(obj.name, image.name,
-                 image.size[0], region.as_pointer() if region else 0)
+    s = _Session(obj.name, [im.name for im in images],
+                 images[0].size[0], region.as_pointer() if region else 0,
+                 channels=channels)
     s.coords = coords
     s.uvs = uvs
+    s.tri_uv_bboxes = triangle_uv_bboxes(uvs)
     _session = s
     _add_handlers()
     return True
@@ -613,6 +814,9 @@ def begin_stroke(x, y, pressure):
     s.submit_times = []
     s.last_px = (x, y)
     s.leftover = 0.0
+    s.stroke_dirty = None
+    s.stroke_dirty_full = False
+    s.dirty_ms = 0.0
     s.dab_queue.append((x, y, pressure))
 
 
@@ -637,14 +841,15 @@ def end_stroke():
 
 
 def take_pending_pixels():
-    """(numpy array, image_name) awaiting the Image write, or None.
-    Called from the modal operator (never from a draw callback)."""
+    """List of (numpy array, image_name) pairs — one per channel —
+    awaiting the Image writes, or None. Called from the modal operator
+    (never from a draw callback)."""
     s = _session
     if s is None or s.pending_pixels is None:
         return None
-    arr = s.pending_pixels
+    pairs = s.pending_pixels
     s.pending_pixels = None
-    return arr, s.image_name
+    return pairs
 
 
 def stats_log_path():
@@ -679,6 +884,8 @@ def record_sync_stats(pixels_write_ms, image_update_ms):
     s.pending_gpu_stats = None
     stats["pixels_write_ms"] = pixels_write_ms
     stats["image_update_ms"] = image_update_ms
+    n = max(1, int(stats.get("channels", 1)))
+    stats["pixels_write_avg_ch_ms"] = pixels_write_ms / n
     stats["syncback_total_ms"] = (stats.get("drain_ms", 0.0)
                                   + stats.get("fb_read_ms", 0.0)
                                   + stats.get("to_numpy_ms", 0.0)
@@ -801,22 +1008,23 @@ def _ensure_gpu(s):
         for line in s.probe_lines:
             _log_line("GPU_PAINT_SPIKE_PROBE %s" % line)
 
-    s.dab_shader = gpu.shader.create_from_info(dab_shader_create_info())
+    s.dab_shader = gpu.shader.create_from_info(
+        dab_shader_create_info(s.channels))
     s.prepass_shader = gpu.shader.create_from_info(
         prepass_shader_create_info())
     s.preview_shader = gpu.shader.create_from_info(
         preview_shader_create_info())
 
-    # Paint texture: RGBA16F accumulation target. Readback goes through
-    # fb.read_color(..., 'FLOAT') which converts to float32 regardless
-    # of the attachment format.
+    # Paint textures: N RGBA16F accumulation targets on ONE framebuffer
+    # (MRT). Readback goes through fb.read_color(..., slot=i, 'FLOAT')
+    # which converts to float32 regardless of the attachment format.
     size = s.size
-    s.paint_tex = gpu.types.GPUTexture((size, size), format='RGBA16F')
-    s.paint_fb = gpu.types.GPUFrameBuffer(color_slots=(s.paint_tex,))
+    n = s.channels
 
-    # Seed the paint texture with the Image's current pixels so
-    # sync-back is lossless for unpainted texels.
+    # Seed channel 0 with the Image's current pixels so sync-back is
+    # lossless for unpainted texels; extra channels start cleared.
     seeded = False
+    tex0 = None
     image = bpy.data.images.get(s.image_name)
     if image is not None and image.size[0] == size and image.size[1] == size:
         try:
@@ -824,18 +1032,35 @@ def _ensure_gpu(s):
             image.pixels.foreach_get(arr)
             buf = gpu.types.Buffer('FLOAT', (size, size, 4),
                                    arr.reshape(size, size, 4))
-            s.paint_tex = gpu.types.GPUTexture((size, size),
-                                               format='RGBA16F', data=buf)
-            s.paint_fb = gpu.types.GPUFrameBuffer(
-                color_slots=(s.paint_tex,))
+            tex0 = gpu.types.GPUTexture((size, size),
+                                        format='RGBA16F', data=buf)
             seeded = True
         except Exception:
             traceback.print_exc()
-    if not seeded:
-        with s.paint_fb.bind():
+    if tex0 is None:
+        tex0 = gpu.types.GPUTexture((size, size), format='RGBA16F')
+    s.paint_texs = [tex0] + [gpu.types.GPUTexture((size, size),
+                                                  format='RGBA16F')
+                             for _ in range(n - 1)]
+    s.paint_fb = gpu.types.GPUFrameBuffer(color_slots=tuple(s.paint_texs))
+    with s.paint_fb.bind():
+        if seeded:
+            # clear() hits every attachment; re-seed ch0 afterwards by
+            # clearing the extras individually instead.
+            for tex in s.paint_texs[1:]:
+                tex.clear(format='FLOAT', value=(0.0, 0.0, 0.0, 0.0))
+        else:
             s.paint_fb.clear(color=(0.0, 0.0, 0.0, 0.0))
-    s.probe_lines.append("paint_tex_seeded_from_image=%s"
-                         % ("yes" if seeded else "NO"))
+    seed_line = "paint_tex_seeded_from_image=%s" % ("yes" if seeded else "NO")
+    s.probe_lines.append(seed_line)
+    _log_line("GPU_PAINT_SPIKE_PROBE %s" % seed_line)
+
+    # VRAM: analytic (gpu.capabilities exposes no memory getters — the
+    # probe reports whatever it finds). RGBA16F = 8 bytes/texel.
+    per_ch_mb = size * size * 8 / (1024.0 * 1024.0)
+    _log_line("GPU_PAINT_SPIKE_VRAM channels=%d format=RGBA16F size=%d "
+              "per_channel_mb=%.1f total_mb=%.1f"
+              % (n, size, per_ch_mb, per_ch_mb * n))
 
     s.batch_dab = batch_for_shader(
         s.dab_shader, 'TRIS', {"pos": s.coords, "uv": s.uvs})
@@ -844,6 +1069,62 @@ def _ensure_gpu(s):
     s.batch_preview = batch_for_shader(
         s.preview_shader, 'TRIS', {"pos": s.coords, "uv": s.uvs})
     s.gpu_ready = True
+
+    # One-time sub-rect readback characterization (Q2/Q3 of the
+    # multi-channel spike): timing table, not production path.
+    try:
+        _characterize_readback(s)
+    except Exception:
+        traceback.print_exc()   # characterization must never kill paint
+
+
+def _characterize_readback(s):
+    """One-time per-session measurement: fb.read_color cost at 100% /
+    25% / 5% of the texture AREA (slot 0), plus a full all-channels
+    read. Logged as GPU_PAINT_SPIKE_READBACK_CHAR lines; best of 2."""
+    import numpy as np
+    size = s.size
+    with s.paint_fb.bind():
+        s.paint_fb.read_color(0, 0, 1, 1, 4, 0, 'FLOAT')   # warm/drain
+        for frac_pct in (100, 25, 5):
+            side = max(1, int(round(size * math.sqrt(frac_pct / 100.0))))
+            best = None
+            for _ in range(2):
+                t0 = time.perf_counter()
+                if _read_into_numpy:
+                    arr = np.empty((side, side, 4), dtype=np.float32)
+                    s.paint_fb.read_color(
+                        0, 0, side, side, 4, 0, 'FLOAT',
+                        data=gpu.types.Buffer('FLOAT', (side, side, 4), arr))
+                else:
+                    s.paint_fb.read_color(0, 0, side, side, 4, 0, 'FLOAT')
+                dt = (time.perf_counter() - t0) * 1000.0
+                best = dt if best is None else min(best, dt)
+            _log_line("GPU_PAINT_SPIKE_READBACK_CHAR size=%d channels=1 "
+                      "frac=%d%% rect=%dx%d ms=%.2f read_into_numpy=%s"
+                      % (size, frac_pct, side, side, best,
+                         "yes" if _read_into_numpy else "no"))
+        if s.channels > 1:
+            best = None
+            for _ in range(2):
+                t0 = time.perf_counter()
+                for slot in range(s.channels):
+                    if _read_into_numpy:
+                        arr = np.empty((size, size, 4), dtype=np.float32)
+                        s.paint_fb.read_color(
+                            0, 0, size, size, 4, slot, 'FLOAT',
+                            data=gpu.types.Buffer('FLOAT',
+                                                  (size, size, 4), arr))
+                    else:
+                        s.paint_fb.read_color(0, 0, size, size, 4, slot,
+                                              'FLOAT')
+                dt = (time.perf_counter() - t0) * 1000.0
+                best = dt if best is None else min(best, dt)
+            _log_line("GPU_PAINT_SPIKE_READBACK_CHAR size=%d channels=%d "
+                      "frac=100%% rect=%dx%d ms=%.2f read_into_numpy=%s "
+                      "(all channels, full)"
+                      % (size, s.channels, size, size, best,
+                         "yes" if _read_into_numpy else "no"))
 
 
 def _probe_capabilities():
@@ -984,12 +1265,174 @@ def _probe_capabilities():
     except Exception as e:
         lines.append("depth32f_attach_clear_read=NO (%r)" % e)
 
+    # ---- v0.3.0 multi-channel probes ----------------------------------
+
+    # How many color_slots does GPUFrameBuffer accept? (Try 8 then 4
+    # then 2 — the panel's channel counts.)
+    max_slots = 0
+    slots_err = ""
+    for count in (8, 4, 2):
+        try:
+            texs = [gpu.types.GPUTexture((8, 8), format='RGBA16F')
+                    for _ in range(count)]
+            gpu.types.GPUFrameBuffer(color_slots=tuple(texs))
+            max_slots = count
+            break
+        except Exception as e:
+            if not slots_err:
+                slots_err = repr(e)
+    lines.append("fb_max_color_slots=%d (of 8/4/2 tried%s)"
+                 % (max_slots,
+                    "" if max_slots == 8 else "; first failure: %s"
+                    % slots_err))
+
+    # R16F color attachment (scalar channels) + mixed-format MRT
+    # (RGBA16F slot 0 + R16F slot 1 on one framebuffer).
+    try:
+        r16 = gpu.types.GPUTexture((8, 8), format='R16F')
+        gpu.types.GPUFrameBuffer(color_slots=(r16,))
+        lines.append("r16f_color_fb=yes")
+    except Exception as e:
+        lines.append("r16f_color_fb=NO (%r)" % e)
+    try:
+        fbm = gpu.types.GPUFrameBuffer(color_slots=(
+            gpu.types.GPUTexture((8, 8), format='RGBA16F'),
+            gpu.types.GPUTexture((8, 8), format='R16F')))
+        with fbm.bind():
+            fbm.clear(color=(0.25, 0.0, 0.0, 1.0))
+            v0 = np.asarray(fbm.read_color(4, 4, 1, 1, 4, 0,
+                                           'FLOAT').to_list()).ravel()
+            v1 = np.asarray(fbm.read_color(4, 4, 1, 1, 1, 1,
+                                           'FLOAT').to_list()).ravel()
+        ok = abs(v0[0] - 0.25) < 0.01 and abs(v1[0] - 0.25) < 0.01
+        lines.append("mixed_format_mrt_rgba16f_r16f=%s (slot0=%.3f "
+                     "slot1=%.3f)" % ("yes" if ok else "NO",
+                                      float(v0[0]), float(v1[0])))
+    except Exception as e:
+        lines.append("mixed_format_mrt_rgba16f_r16f=NO (%r)" % e)
+
+    # Does fixed-function ALPHA blend apply to ALL MRT attachments?
+    # gpu.state.blend_set has no per-attachment form, so if attachment 1
+    # blends too this is a design constraint: one blend mode per stroke
+    # across every channel. Shader routes DISTINCT values (att1 = rgb *
+    # 0.5) so this also proves output-slot routing. Draw opaque red then
+    # half-alpha blue: att0 -> (0.5, 0, 0.5); att1 -> (0.25, 0, 0.25)
+    # iff blending applied there as well.
+    try:
+        mrt_sh = gpu.shader.create_from_info(_mrt_probe_shader_create_info())
+        mrt_quad = batch_for_shader(
+            mrt_sh, 'TRI_FAN',
+            {"pos": [(-1.0, -1.0, 0.0), (1.0, -1.0, 0.0),
+                     (1.0, 1.0, 0.0), (-1.0, 1.0, 0.0)]})
+        t0 = gpu.types.GPUTexture((8, 8), format='RGBA16F')
+        t1 = gpu.types.GPUTexture((8, 8), format='RGBA16F')
+        fb2 = gpu.types.GPUFrameBuffer(color_slots=(t0, t1))
+        with fb2.bind():
+            fb2.viewport_set(0, 0, 8, 8)
+            fb2.clear(color=(0.0, 0.0, 0.0, 0.0))
+            gpu.state.blend_set('ALPHA')
+            gpu.state.depth_test_set('NONE')
+            mrt_sh.bind()
+            mrt_sh.uniform_float("color", (1.0, 0.0, 0.0, 1.0))
+            mrt_quad.draw(mrt_sh)
+            mrt_sh.uniform_float("color", (0.0, 0.0, 1.0, 0.5))
+            mrt_quad.draw(mrt_sh)
+            a0 = np.asarray(fb2.read_color(4, 4, 1, 1, 4, 0,
+                                           'FLOAT').to_list()).ravel()
+            a1 = np.asarray(fb2.read_color(4, 4, 1, 1, 4, 1,
+                                           'FLOAT').to_list()).ravel()
+        ok0 = abs(a0[0] - 0.5) < 0.06 and abs(a0[2] - 0.5) < 0.06
+        ok1 = abs(a1[0] - 0.25) < 0.06 and abs(a1[2] - 0.25) < 0.06
+        lines.append("mrt_blend_alpha_all_attachments=%s (att0=%s att1=%s; "
+                     "per-attachment blend NOT exposed by gpu.state — "
+                     "one blend mode per stroke)"
+                     % ("yes" if (ok0 and ok1) else "NO",
+                        np.round(a0, 3).tolist(), np.round(a1, 3).tolist()))
+    except Exception as e:
+        lines.append("mrt_blend_alpha_all_attachments=NO (%r)" % e)
+
+    # Sub-rect fb.read_color: paint left half red / right half blue via
+    # viewport_set, then check that x/y offsets land on the right texels
+    # and that a non-square sub-rect read into a numpy-wrapping Buffer
+    # comes back in (h, w, 4) row-major order.
+    try:
+        tex3 = gpu.types.GPUTexture((8, 8), format='RGBA16F')
+        fb3 = gpu.types.GPUFrameBuffer(color_slots=(tex3,))
+        with fb3.bind():
+            fb3.viewport_set(0, 0, 8, 8)
+            fb3.clear(color=(0.0, 0.0, 0.0, 0.0))
+            gpu.state.blend_set('NONE')
+            shader.bind()
+            shader.uniform_float("color", (1.0, 0.0, 0.0, 1.0))
+            with gpu.matrix.push_pop():
+                with gpu.matrix.push_pop_projection():
+                    gpu.matrix.load_matrix(ident)
+                    gpu.matrix.load_projection_matrix(ident)
+                    quad.draw(shader)
+                    fb3.viewport_set(4, 0, 4, 8)
+                    shader.uniform_float("color", (0.0, 0.0, 1.0, 1.0))
+                    quad.draw(shader)
+            left = np.asarray(fb3.read_color(1, 4, 1, 1, 4, 0,
+                                             'FLOAT').to_list()).ravel()
+            right = np.asarray(fb3.read_color(6, 4, 1, 1, 4, 0,
+                                              'FLOAT').to_list()).ravel()
+            sub = np.zeros((8, 4, 4), dtype=np.float32)   # h=8, w=4
+            fb3.read_color(2, 0, 4, 8, 4, 0, 'FLOAT',
+                           data=gpu.types.Buffer('FLOAT', (8, 4, 4), sub))
+        ok_off = left[0] > 0.9 and left[2] < 0.1 \
+            and right[2] > 0.9 and right[0] < 0.1
+        # columns 2,3 red / 4,5 blue -> sub[:, :2] red, sub[:, 2:] blue
+        ok_sub = (bool((sub[:, :2, 0] > 0.9).all())
+                  and bool((sub[:, 2:, 2] > 0.9).all()))
+        lines.append("fb_read_color_subrect=%s (offsets=%s; "
+                     "into_numpy_hw4_order=%s)"
+                     % ("yes" if (ok_off and ok_sub) else "NO",
+                        "ok" if ok_off else "WRONG",
+                        "ok" if ok_sub else "WRONG"))
+    except Exception as e:
+        lines.append("fb_read_color_subrect=NO (%r)" % e)
+
+    # Queryable GPU memory info? (Expected absent; analytic VRAM
+    # numbers are logged separately.)
+    try:
+        mem = []
+        for name in dir(gpu.capabilities):
+            if "mem" in name.lower() and name.endswith("_get"):
+                try:
+                    mem.append("%s=%r" % (name,
+                                          getattr(gpu.capabilities, name)()))
+                except Exception:
+                    mem.append("%s=raises" % name)
+        lines.append("gpu_capabilities_memory=%s"
+                     % ("; ".join(mem) if mem else "none_exposed"))
+    except Exception as e:
+        lines.append("gpu_capabilities_memory=probe_failed (%r)" % e)
+
     # Direct sampling of a DEPTH texture through a FLOAT_2D sampler is
     # deliberately NOT relied on (backend convention minefield); the
     # spike samples its own R32F NDC-depth instead. Informational only.
     lines.append("depth_texture_direct_sampling=not_relied_on "
                  "(spike stores NDC depth in R32F color)")
     return lines
+
+
+def _mrt_probe_shader_create_info():
+    """Two-attachment MRT probe shader: slot 0 gets ``color``, slot 1
+    gets ``color`` with rgb halved (distinct, so slot routing is
+    proven). Positions are already NDC — no matrices."""
+    info = gpu.types.GPUShaderCreateInfo()
+    info.push_constant('VEC4', "color")
+    info.vertex_in(0, 'VEC3', "pos")
+    info.fragment_out(0, 'VEC4', "fragColor")
+    info.fragment_out(1, 'VEC4', "fragColor1")
+    info.vertex_source("void main() { gl_Position = vec4(pos, 1.0); }\n")
+    info.fragment_source(
+        "void main()\n"
+        "{\n"
+        "    fragColor = color;\n"
+        "    fragColor1 = vec4(color.rgb * 0.5, color.a);\n"
+        "}\n")
+    return info
 
 
 # ---------------------------------------------------------------------------
@@ -1028,6 +1471,18 @@ def _update_prepass(s, region, rv3d):
     # use the SAME values or the occlusion comparison is meaningless.
     s.view_proj = rv3d.perspective_matrix.copy()
     s.model = obj.matrix_world.copy()
+
+    # Cache per-triangle screen bboxes for conservative dirty-rect
+    # tracking (numpy, once per view change — the same matrices the
+    # dab shader will project with, so the bound is honest).
+    try:
+        import numpy as np
+        mvp = np.array(s.view_proj @ s.model, dtype=np.float32)
+        s.tri_screen_bboxes, s.tri_unprojectable = triangle_screen_bboxes(
+            s.coords, mvp, w, h)
+    except Exception:
+        s.tri_screen_bboxes = None
+        s.tri_unprojectable = None
 
     with s.depth_fb.bind():
         s.depth_fb.viewport_set(0, 0, w, h)
@@ -1072,6 +1527,19 @@ def _flush_dabs(s, region):
     if s.first_dab_t is None:
         s.first_dab_t = now
 
+    # Conservative dirty-rect accumulation (pure numpy; timed so the
+    # stats show what the tracking itself costs).
+    t_dirty = time.perf_counter()
+    if (s.tri_screen_bboxes is not None and s.tri_uv_bboxes is not None
+            and queue):
+        rect = dab_rect_union(queue, radius)
+        bb = dirty_uv_bbox(s.tri_screen_bboxes, s.tri_unprojectable,
+                           s.tri_uv_bboxes, rect)
+        s.stroke_dirty = union_bbox(s.stroke_dirty, bb)
+    elif queue:
+        s.stroke_dirty_full = True   # no projection cache: full read
+    s.dirty_ms += time.perf_counter() - t_dirty
+
     with s.paint_fb.bind():
         s.paint_fb.viewport_set(0, 0, s.size, s.size)
         gpu.state.blend_set('ALPHA')
@@ -1113,10 +1581,13 @@ def _finalize_stroke_gpu(s):
 
     s.pending_finalize = False
     size = s.size
+    n = s.channels
     stats = {
         "size": size,
         "dabs": s.dab_count,
+        "channels": n,
         "prepass_ms": s.prepass_ms,
+        "dirty_ms": s.dirty_ms * 1000.0,
     }
     if s.stroke_t0 is not None:
         stats["stroke_s"] = time.perf_counter() - s.stroke_t0
@@ -1130,8 +1601,41 @@ def _finalize_stroke_gpu(s):
         stats["dabs_per_s"] = ((s.dab_count - 1)
                                / (s.last_dab_t - s.first_dab_t))
 
-    arr = None
-    buf = None
+    # Sub-rect decision: the stroke's accumulated conservative UV bbox,
+    # unless tracking was unavailable, the user disabled it, or the
+    # rect is no smaller than the full texture.
+    wm = bpy.context.window_manager
+    use_subrect = bool(getattr(wm, "gpu_paint_spike_subrect", True))
+    rect = None
+    if use_subrect and not s.stroke_dirty_full:
+        rect = uv_bbox_to_pixel_rect(s.stroke_dirty, size)
+    if rect is not None and rect[2] * rect[3] >= size * size:
+        rect = None
+    rx, ry, rw, rh = rect if rect is not None else (0, 0, size, size)
+    stats["readback_rect"] = ("%dx%d" % (rw, rh)) if rect is not None \
+        else "full"
+
+    # Full-size CPU mirrors: sub-rect reads scatter into them and
+    # foreach_set consumes them whole (Image.pixels has no partial
+    # write). Channel 0's mirror starts from the Image's own pixels so
+    # a first-stroke sub-rect sync stays lossless.
+    if s.cpu_mirrors is None:
+        s.cpu_mirrors = []
+        for i in range(n):
+            mirror = np.zeros(size * size * 4, dtype=np.float32)
+            if i == 0:
+                image = bpy.data.images.get(s.image_name)
+                if (image is not None and image.size[0] == size
+                        and image.size[1] == size):
+                    try:
+                        image.pixels.foreach_get(mirror)
+                    except Exception:
+                        pass
+            s.cpu_mirrors.append(mirror)
+
+    t_read = 0.0
+    t_conv = 0.0
+    path = None
     with s.paint_fb.bind():
         # 1x1 read first: drains every queued dab, separating "GPU
         # actually finished the stroke" from the bulk-transfer cost.
@@ -1139,28 +1643,59 @@ def _finalize_stroke_gpu(s):
         s.paint_fb.read_color(0, 0, 1, 1, 4, 0, 'FLOAT')
         stats["drain_ms"] = (time.perf_counter() - t0) * 1000.0
 
-        # ONE full-size read (0.1.0 did two — fb.read_color AND
-        # tex.read, an A/B probe artifact; they measured ~equal, so
-        # fb.read_color stays as the production path: it guarantees
-        # float32 regardless of the RGBA16F attachment and can target a
-        # caller-provided Buffer). Preferred: read straight into a
-        # Buffer wrapping pre-allocated numpy memory (probed at session
-        # start) — no conversion step at all.
-        t0 = time.perf_counter()
-        if _read_into_numpy:
-            try:
-                arr = np.empty((size, size, 4), dtype=np.float32)
-                s.paint_fb.read_color(
-                    0, 0, size, size, 4, 0, 'FLOAT',
-                    data=gpu.types.Buffer('FLOAT', (size, size, 4), arr))
-                arr = arr.ravel()
-                stats["readback_path"] = "read_into_numpy"
-            except Exception:
-                arr = None
-        if arr is None:
-            buf = s.paint_fb.read_color(0, 0, size, size, 4, 0, 'FLOAT')
-            stats["readback_path"] = _buffer_numpy_path
-        stats["fb_read_ms"] = (time.perf_counter() - t0) * 1000.0
+        # ONE read per channel (fb.read_color guarantees float32 —
+        # which foreach_set needs — and can target a caller-provided
+        # Buffer). Preferred: read straight into a Buffer wrapping
+        # pre-allocated numpy memory (probed at session start) — no
+        # conversion step at all. Sub-rect reads land in a (rh, rw, 4)
+        # staging array and are scattered into the mirror (scatter cost
+        # counted as conversion).
+        for slot in range(n):
+            view = s.cpu_mirrors[slot].reshape(size, size, 4)
+            sub = None
+            direct = False
+            t0 = time.perf_counter()
+            if _read_into_numpy:
+                try:
+                    if rect is not None:
+                        sub = np.empty((rh, rw, 4), dtype=np.float32)
+                        s.paint_fb.read_color(
+                            rx, ry, rw, rh, 4, slot, 'FLOAT',
+                            data=gpu.types.Buffer('FLOAT', (rh, rw, 4),
+                                                  sub))
+                    else:
+                        s.paint_fb.read_color(
+                            0, 0, size, size, 4, slot, 'FLOAT',
+                            data=gpu.types.Buffer('FLOAT',
+                                                  (size, size, 4), view))
+                    direct = True
+                    path = path or "read_into_numpy"
+                except Exception:
+                    sub = None
+                    direct = False
+            if not direct:
+                buf = s.paint_fb.read_color(rx, ry, rw, rh, 4, slot,
+                                            'FLOAT')
+                t_read += time.perf_counter() - t0
+                path = path or _buffer_numpy_path
+                t0 = time.perf_counter()
+                flat = buffer_to_numpy(buf, _buffer_numpy_path)
+                if rect is not None:
+                    view[ry:ry + rh, rx:rx + rw] = flat.reshape(rh, rw, 4)
+                else:
+                    s.cpu_mirrors[slot][:] = flat
+                t_conv += time.perf_counter() - t0
+            else:
+                t_read += time.perf_counter() - t0
+                if sub is not None:
+                    t0 = time.perf_counter()
+                    view[ry:ry + rh, rx:rx + rw] = sub
+                    t_conv += time.perf_counter() - t0
+
+    stats["fb_read_ms"] = t_read * 1000.0
+    stats["fb_read_avg_ch_ms"] = t_read * 1000.0 / n
+    stats["readback_path"] = path or "none"
+    stats["to_numpy_ms"] = t_conv * 1000.0
 
     if DEBUG_COMPARE_READS:
         # 0.1.0 A/B probe: GPUTexture.read() (returns the attachment's
@@ -1168,17 +1703,13 @@ def _finalize_stroke_gpu(s):
         # GPU->CPU transfer; never part of the production path.
         try:
             t0 = time.perf_counter()
-            s.paint_tex.read()
+            s.paint_texs[0].read()
             stats["tex_read_ms"] = (time.perf_counter() - t0) * 1000.0
         except Exception:
             stats["tex_read_ms"] = float("nan")
 
-    t0 = time.perf_counter()
-    if arr is None:
-        arr = buffer_to_numpy(buf, _buffer_numpy_path)
-    stats["to_numpy_ms"] = (time.perf_counter() - t0) * 1000.0
-
-    s.pending_pixels = arr
+    s.pending_pixels = [(mirror, name) for mirror, name
+                        in zip(s.cpu_mirrors, s.image_names)]
     s.pending_gpu_stats = stats
 
 
@@ -1191,6 +1722,11 @@ def _draw_preview(s):
     obj = bpy.data.objects.get(s.obj_name)
     if obj is None:
         return
+    # Preview shows ONE selected channel (clamped to what exists);
+    # channel 0 (color) by default.
+    wm = bpy.context.window_manager
+    idx = int(getattr(wm, "gpu_paint_spike_preview_channel", 0))
+    idx = max(0, min(idx, s.channels - 1))
     gpu.state.blend_set('ALPHA')
     gpu.state.depth_test_set('LESS_EQUAL')
     gpu.state.depth_mask_set(False)
@@ -1203,7 +1739,7 @@ def _draw_preview(s):
                @ gpu.matrix.get_model_view_matrix())
         sh.uniform_float("ModelViewProjectionMatrix", mvp)
         sh.uniform_float("preview_opacity", 1.0)
-        sh.uniform_sampler("paint_tex", s.paint_tex)
+        sh.uniform_sampler("paint_tex", s.paint_texs[idx])
         s.batch_preview.draw(sh)
 
 
@@ -1228,11 +1764,11 @@ def _overlay_text_lines(s):
                             st.get("submit_avg_ms", 0.0),
                             st.get("submit_max_ms", 0.0)))
         lines.append(
-            "prepass %.2f ms | drain %.2f ms | readback %.2f ms | "
-            "pixels write %.2f ms" % (st.get("prepass_ms", 0.0),
-                                      st.get("drain_ms", 0.0),
-                                      st.get("fb_read_ms", 0.0),
-                                      st.get("pixels_write_ms", 0.0)))
+            "ch=%d rect=%s | prepass %.2f ms | drain %.2f ms | "
+            "readback %.2f ms | pixels write %.2f ms"
+            % (st.get("channels", 1), st.get("readback_rect", "full"),
+               st.get("prepass_ms", 0.0), st.get("drain_ms", 0.0),
+               st.get("fb_read_ms", 0.0), st.get("pixels_write_ms", 0.0)))
     return lines
 
 

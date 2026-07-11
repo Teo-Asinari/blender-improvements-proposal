@@ -3,7 +3,10 @@
 A **feasibility spike**, not a paint tool: can brush dabs be rasterized into
 a texture **on the GPU** from a Python modal operator at interactive rates
 (< 2 ms/dab, hundreds of dabs/sec), with occlusion-correct 3D projection and
-live viewport feedback, paying CPU cost only once per stroke?
+live viewport feedback, paying CPU cost only once per stroke? v0.3.0 adds
+the follow-up: what does **multi-channel** painting cost — N (1/2/4/8)
+RGBA16F targets on one framebuffer (MRT), N-channel sync-back, and
+conservative dirty-rect (sub-rect) readback?
 
 Everything here exists to produce **measurements**. The deliverable is
 [FINDINGS.md](FINDINGS.md) — technique, probe results, timing tables and the
@@ -33,9 +36,12 @@ every other real-tool concern are deliberately out of scope.
 2. Select a UV'd mesh object in Object Mode.
 3. Open a **system console** (`Window > Toggle System Console` on Windows) —
    the measurements print there.
-4. 3D Viewport: press `N` → **GPU Paint** tab → pick a **Texture** size →
-   **Start GPU Paint**. (Also reachable via `Object > GPU Paint Spike
-   (Experimental)` or menu search.)
+4. 3D Viewport: press `N` → **GPU Paint** tab → pick a **Texture** size and
+   a **Channels** count (1/2/4/8 — N RGBA16F targets painted through one
+   shared falloff mask; v0.3.0) → **Start GPU Paint**. (Also reachable via
+   `Object > GPU Paint Spike (Experimental)` or menu search.) **Preview
+   Channel** selects which channel the viewport preview shows;
+   **Sub-rect Readback** toggles the dirty-rect sync-back path.
 5. **LMB-drag** paints. Orbit/zoom freely between strokes (MMB/wheel pass
    through; the depth prepass re-renders itself on view changes).
 6. **RMB or Esc** stops the session (finishing any pending sync-back first).
@@ -86,7 +92,31 @@ Record GPU model and viewport size once.
 5. **Cursor registration.** Confirm paint appears exactly under the cursor.
    Vertical mirroring or a constant offset is a *finding* (backend NDC
    convention leak) — note the backend from the probe line.
-6. Tick the correctness checklist in FINDINGS.md and fill the tables.
+6. **Multi-channel (v0.3.0) — one session per channel count, at 2K and at
+   4K** (i.e. sessions for channels = 1, 2, 4, 8 × sizes 2048, 4096;
+   restart the session for every combination):
+   - On session start, copy the new probe lines once
+     (`fb_max_color_slots`, `r16f_color_fb`,
+     `mixed_format_mrt_rgba16f_r16f`, `mrt_blend_alpha_all_attachments`,
+     `fb_read_color_subrect`, `gpu_capabilities_memory`) plus the
+     `GPU_PAINT_SPIKE_VRAM` line and the three
+     `GPU_PAINT_SPIKE_READBACK_CHAR` lines (100%/25%/5% area; at N>1 a
+     fourth all-channels line). Expect a short one-time hiccup at session
+     start — that IS the characterization running.
+   - Paint one slow stroke + one ~3 s fast scribble per session (discard
+     the first stroke — shader compile). Record `submit_avg_ms`,
+     `drain_ms`, `channels`, `readback_rect`, `fb_read_ms`,
+     `fb_read_avg_ch_ms`, `pixels_write_ms`, `dirty_ms`,
+     `syncback_total_ms` into the v0.3.0 tables in FINDINGS.md.
+   - Repeat one 4K/N=4 session with **Sub-rect Readback** OFF for the
+     full-read baseline (`readback_rect=full`).
+   - Sanity: set **Preview Channel** to 1..N-1 — each shows its distinct
+     value (luma scalar / inverted color / falloff height / scaled
+     colors); after pen-lift the `GPUPaintSpike_<size>_ch<i>` images hold
+     the same content. Paint near the TOP of UV space with sub-rect on:
+     if the synced stroke is clipped, that is the y-convention finding —
+     note the backend and turn sub-rect off.
+7. Tick the correctness checklist in FINDINGS.md and fill the tables.
 
 ## How it works (one paragraph)
 

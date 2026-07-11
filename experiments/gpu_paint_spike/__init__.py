@@ -12,7 +12,7 @@ exact measurement protocol.
 bl_info = {
     "name": "GPU Paint Spike (Experimental)",
     "author": "Teo Asinari",
-    "version": (0, 2, 0),
+    "version": (0, 3, 0),
     "blender": (5, 1, 0),
     "location": "3D Viewport > Sidebar (N) > GPU Paint tab; "
                 "Object menu > GPU Paint Spike",
@@ -26,7 +26,7 @@ import time
 
 import bpy
 from bpy.props import (BoolProperty, EnumProperty, FloatProperty,
-                       FloatVectorProperty)
+                       FloatVectorProperty, IntProperty)
 
 if "engine" in locals():
     import importlib
@@ -36,12 +36,16 @@ else:
 
 
 IMAGE_NAME_FMT = "GPUPaintSpike_%d"
+IMAGE_NAME_CH_FMT = "GPUPaintSpike_%d_ch%d"
 
 
-def _ensure_image(size):
-    """The spike's target Image datablock at the requested resolution
-    (created or rebuilt on size mismatch)."""
-    name = IMAGE_NAME_FMT % size
+def _ensure_image(size, channel=0):
+    """The spike's target Image datablock for one channel at the
+    requested resolution (created or rebuilt on size mismatch).
+    Channel 0 keeps the v0.2.0 name so old sessions' images are
+    reused."""
+    name = (IMAGE_NAME_FMT % size if channel == 0
+            else IMAGE_NAME_CH_FMT % (size, channel))
     img = bpy.data.images.get(name)
     if img is not None and tuple(img.size) != (size, size):
         bpy.data.images.remove(img)
@@ -50,8 +54,15 @@ def _ensure_image(size):
         img = bpy.data.images.new(name, size, size, alpha=True)
         # Mid-grey seed so both the painted color and the untouched
         # background are visible in the preview and the Image editor.
-        img.generated_color = (0.5, 0.5, 0.5, 1.0)
+        # Extra channels seed black (they accumulate from empty).
+        img.generated_color = ((0.5, 0.5, 0.5, 1.0) if channel == 0
+                               else (0.0, 0.0, 0.0, 0.0))
     return img
+
+
+def _ensure_images(size, channels):
+    """One Image datablock per paint channel (channel 0 first)."""
+    return [_ensure_image(size, i) for i in range(channels)]
 
 
 class OBJECT_OT_gpu_paint_spike(bpy.types.Operator):
@@ -89,9 +100,10 @@ class OBJECT_OT_gpu_paint_spike(bpy.types.Operator):
 
         wm = context.window_manager
         size = int(wm.gpu_paint_spike_resolution)
-        image = _ensure_image(size)
+        channels = int(wm.gpu_paint_spike_channels)
+        images = _ensure_images(size, channels)
         obj = context.active_object
-        if not engine.start_session(obj, image, region):
+        if not engine.start_session(obj, images, region, channels=channels):
             self.report({'WARNING'}, "Mesh has no UVs / no faces")
             return {'CANCELLED'}
 
@@ -114,21 +126,26 @@ class OBJECT_OT_gpu_paint_spike(bpy.types.Operator):
                 and 0 <= ry < self._region.height)
 
     def _apply_pending_sync(self):
-        """Write a finished stroke's readback into the Image datablock
-        (CPU side of the sync-back; timed separately)."""
+        """Write a finished stroke's readback into the Image datablocks
+        — one per channel (CPU side of the sync-back; timed
+        separately, totals across channels)."""
         pending = engine.take_pending_pixels()
         if pending is None:
             return
-        arr, image_name = pending
-        image = bpy.data.images.get(image_name)
-        if image is None:
-            return
-        t0 = time.perf_counter()
-        image.pixels.foreach_set(arr)
-        t1 = time.perf_counter()
-        image.update()
-        t2 = time.perf_counter()
-        engine.record_sync_stats((t1 - t0) * 1000.0, (t2 - t1) * 1000.0)
+        write_ms = 0.0
+        update_ms = 0.0
+        for arr, image_name in pending:
+            image = bpy.data.images.get(image_name)
+            if image is None:
+                continue
+            t0 = time.perf_counter()
+            image.pixels.foreach_set(arr)
+            t1 = time.perf_counter()
+            image.update()
+            t2 = time.perf_counter()
+            write_ms += (t1 - t0) * 1000.0
+            update_ms += (t2 - t1) * 1000.0
+        engine.record_sync_stats(write_ms, update_ms)
         # Repaint the panel stats and any Image editors showing the map.
         for area in bpy.context.screen.areas:
             if area.type in {'VIEW_3D', 'IMAGE_EDITOR'}:
@@ -232,12 +249,15 @@ class VIEW3D_PT_gpu_paint_spike(bpy.types.Panel):
         col = layout.column(align=True)
         col.enabled = not engine.session_active()
         col.prop(wm, "gpu_paint_spike_resolution", text="Texture")
+        col.prop(wm, "gpu_paint_spike_channels", text="Channels")
         col = layout.column(align=True)
         col.prop(wm, "gpu_paint_spike_radius")
         col.prop(wm, "gpu_paint_spike_hardness")
         col.prop(wm, "gpu_paint_spike_strength")
         col.prop(wm, "gpu_paint_spike_color", text="")
         col.prop(wm, "gpu_paint_spike_occlusion")
+        col.prop(wm, "gpu_paint_spike_subrect")
+        col.prop(wm, "gpu_paint_spike_preview_channel")
 
         stats = engine.last_stroke_stats()
         box = layout.box()
@@ -300,6 +320,29 @@ def register():
                ('2048', "2048 (2K)", ""),
                ('4096', "4096 (4K)", "")),
         default='2048')
+    wm.gpu_paint_spike_channels = EnumProperty(
+        name="Channels",
+        description="Paint channel count: N RGBA16F targets on one "
+                    "framebuffer (MRT); every dab writes all channels "
+                    "through the same falloff mask (pick each count to "
+                    "fill the multi-channel tables in FINDINGS.md)",
+        items=(('1', "1", "Single channel (v0.2.0 baseline path)"),
+               ('2', "2", ""),
+               ('4', "4", ""),
+               ('8', "8", "")),
+        default='1')
+    wm.gpu_paint_spike_subrect = BoolProperty(
+        name="Sub-rect Readback",
+        description="Read back only the stroke's conservative dirty "
+                    "rect (per-triangle screen bbox vs dab bbox) "
+                    "instead of the full texture; disable to force "
+                    "full-frame reads for the baseline measurement",
+        default=True)
+    wm.gpu_paint_spike_preview_channel = IntProperty(
+        name="Preview Channel",
+        description="Which paint channel the viewport preview shows "
+                    "(clamped to the session's channel count)",
+        default=0, min=0, max=engine.MAX_CHANNELS - 1)
 
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
@@ -315,7 +358,10 @@ def unregister():
     for name in ("gpu_paint_spike_radius", "gpu_paint_spike_hardness",
                  "gpu_paint_spike_strength", "gpu_paint_spike_color",
                  "gpu_paint_spike_occlusion",
-                 "gpu_paint_spike_resolution"):
+                 "gpu_paint_spike_resolution",
+                 "gpu_paint_spike_channels",
+                 "gpu_paint_spike_subrect",
+                 "gpu_paint_spike_preview_channel"):
         try:
             delattr(wm, name)
         except AttributeError:
