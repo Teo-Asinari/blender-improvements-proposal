@@ -51,7 +51,11 @@ requirement — see A1.
 
 ## Open items
 
-- [ ] User's Ucupaint grievance list (UX anti-requirements) — pending
+- [x] User's Ucupaint grievance list — RESOLVED as non-specific (2026-07-11):
+      dislike is real but details have faded ("weird and counterintuitive").
+      Consequence: design from 3DCoat/Substance reference workflows and the
+      user's live reactions to our own prototypes, not against a Ucupaint
+      checklist.
 - [ ] Reference workflow walkthroughs (3DCoat paint room / Substance layer
       semantics) to fix target UX vocabulary
 - [ ] Mask types for v1 (paint, curvature, AO, cavity, edge)
