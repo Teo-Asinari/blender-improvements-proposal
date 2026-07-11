@@ -202,21 +202,36 @@ convert + 74 write) if either the direct-read probe or a zero-copy rung
 passes; worst case (all probes NO) it stays ~1.15 s on the honest
 `to_list_fallback`, and the probe lines say so explicitly.
 
-### Post-fix re-measurement — `GUI-TBD (post-fix)`
+### Post-fix re-measurement — MEASURED 2026-07-11 (4K; 1K/2K extrapolated)
 
-One session per texture size, one stroke each (second stroke onward; the
-first compiles shaders), then read `~/gpu_paint_spike_stats.log`:
+Measured on the same Quadro RTX 5000 Max-Q / OpenGL session set, ~19
+strokes at 4096², from `~/gpu_paint_spike_stats.log`. 1K/2K columns are
+extrapolations (readback + pixels-write scale linearly with pixel count;
+headless table corroborates the pixels-write scaling), not measured.
 
-| Metric | 1K | 2K | 4K |
+| Metric | 1K (extrap.) | 2K (extrap.) | 4K (measured) |
 |---|---|---|---|
-| `buffer_to_numpy_path` (probe line, once) | GUI-TBD | GUI-TBD | GUI-TBD |
-| `fb_read_into_numpy_buffer` (probe line, once) | GUI-TBD | GUI-TBD | GUI-TBD |
-| `readback_path` | GUI-TBD | GUI-TBD | GUI-TBD |
-| `drain_ms` | GUI-TBD | GUI-TBD | GUI-TBD |
-| `fb_read_ms` | GUI-TBD | GUI-TBD | GUI-TBD |
-| `to_numpy_ms` | GUI-TBD | GUI-TBD | GUI-TBD |
-| `pixels_write_ms` | GUI-TBD | GUI-TBD | GUI-TBD |
-| `syncback_total_ms` | GUI-TBD | GUI-TBD | GUI-TBD |
+| `buffer_to_numpy_path` (probe line, once) | — | — | **`to_list_fallback`** — Blender 5.1 `gpu.types.Buffer` exposes NO fast conversion mechanism (no `__array_interface__`, no C buffer protocol). Ladder correctly refused the silent-degradation paths. |
+| `fb_read_into_numpy_buffer` (probe line, once) | — | — | **`yes`** — the direct-read path works and is the production path |
+| `readback_path` | — | — | **`read_into_numpy`** (every stroke) |
+| `drain_ms` | ~3 | ~3 | **~2.8–3.0** |
+| `fb_read_ms` | ~6 | ~23 | **~88–101** |
+| `to_numpy_ms` | ~0 | ~0 | **~0.0002 — eliminated** (was ~1050–1100) |
+| `pixels_write_ms` | ~4.7 | ~19 | **~66–74** |
+| `syncback_total_ms` | ~15 | ~50 | **~158–174** (was ~1240; 7.5× improvement, matches the ~180 ms prediction) |
+
+Additional measured point: a 6.6 s fast scribble sustained **1342 dabs at
+203 dabs/s** with `submit_avg_ms=0.022` — dab throughput remains
+event-rate-bound, not GPU-bound, during real fast painting.
+
+**Sync-back verdict: FIXED and acceptable.** The remaining 4K cost is
+~90 ms of raw GPU→CPU transfer + ~70 ms of Blender's `image.pixels`
+write — both irreducible from Python and paid once per stroke. Upstream
+note: the `buffer_to_numpy_path=to_list_fallback` probe result means
+`fb.read_color(data=Buffer-wrapping-numpy)` is the ONLY viable bulk
+readback route in the 5.1 Python API; a zero-copy `Buffer`→numpy bridge
+(buffer protocol on `gpu.types.Buffer`) is a concrete, citable API gap
+for the upstream pitch.
 
 ### Correctness spot-checks — `GUI-TBD`
 
