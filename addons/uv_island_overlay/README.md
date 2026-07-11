@@ -17,6 +17,10 @@ live **opacity slider** (the density checker is near-opaque by default,
 so it reads like paint instead of a translucent film) and the overlay
 draws with **back-face culling** in both modes: only camera-facing
 surfaces are painted, so nothing bleeds through open or thin geometry.
+Since v1.4.0 a third mode — **Islands + Density**, the new default —
+shows both at once: the texel-density checker multiplied by each
+island's identity color, so **hue reads island membership while
+checker scale reads texel density**.
 
 *(No screenshots included — see the GUI checklist below to see it live in
 under a minute.)*
@@ -39,8 +43,9 @@ For development, symlink/copy the folder into your Blender
 2. Open the 3D viewport **sidebar** (press `N`) and pick the
    **UV Islands** tab — it has the **UV Island Overlay** checkbox, a
    refresh button, a **Mode** dropdown (*Island Colors* / *Texel
-   Density*) and a live status readout (island count; in density mode
-   also the mesh's median density).
+   Density* / *Islands + Density*, the default) and a live status
+   readout (island count; in the checker modes also the mesh's median
+   density).
 3. The same controls also live at the bottom of the viewport header
    **Overlays popover** (the two-overlapping-circles icon), where
    overlay toggles conventionally go.
@@ -55,9 +60,11 @@ reshuffles existing ones.
 
 ## Island sources: Seams (predicted) vs UVs (actual)
 
-In **Island Colors** mode both panels have a **Source** dropdown
-choosing how islands are defined (the density mode always uses actual
-UVs and hides this dropdown):
+In **Island Colors** and **Islands + Density** modes both panels have
+a **Source** dropdown choosing how the island *colors* are defined
+(the density mode always uses actual UVs and hides this dropdown; the
+combined mode's *checker* always samples actual UVs regardless of the
+source — see *Combined mode* below):
 
 - **Seams (predicted)** — the default. Islands are connected face regions
   bounded by seam edges (boundary edges bound; non-manifold edges connect
@@ -148,7 +155,8 @@ default 1024 px) to show the familiar **px/unit** figure. Per island the
 ratio is computed over *summed* areas (area-weighted, not a mean of
 per-face ratios); the panel shows the **median** across islands.
 
-Properties (in both panels, DENSITY mode only):
+Properties (in both panels; shown in DENSITY mode — since v1.4.0 the
+first three also appear in COMBINED mode, which shares them):
 
 - **Checker Size** — checkers per UV unit (default 32: on a 1024 px
   texture each checker covers 32 px). It is a shader **push constant**
@@ -197,12 +205,79 @@ extraction 0.35 s on the Object-Mode numpy `foreach_get` fast path vs
 `uv_layers` data arrays are empty — probed on 5.1.2); area + density
 statistics 0.10 s.
 
+## Combined mode (v1.4.0, the default)
+
+Set **Mode** to **Islands + Density** (the default for new sessions)
+to see both visualizations at once: the texel-density checkerboard
+**multiplied by each island's identity color**. Hue reads island
+membership, checker scale reads texel density — one glance answers
+"where are my islands *and* is their density consistent".
+
+**How it works (no new shader).** The density fragment stage already
+multiplies the per-vertex attribute color by the checker parity;
+combined mode simply bakes the ISLANDS-mode per-island palette into
+that attribute instead of the deviation tints. Same soup layout
+(positions + UVs), same shader, same push constants — the colors are
+bit-identical to Island Colors mode for the same mesh and source (the
+test suite asserts this).
+
+Design decisions, deliberate and pinned by tests:
+
+- **Deviation Tint is Texel Density-only.** Island hue x checker x
+  deviation tint would be unreadable; the combined checker's tint IS
+  the island color. The *Deviation Tint* checkbox is hidden outside
+  Texel Density mode and toggling the underlying property while in
+  combined mode is a no-op (no rebuild).
+- **Opacity comes from Checker Opacity** (default 0.9): the combined
+  overlay is checker-like paint, so it shares the density mode's
+  property and near-opaque default. *Tint Opacity* remains Island
+  Colors-only. As always, both are live push-constant uniforms.
+- **Needs a UV layer.** The checker has nothing to sample without UVs,
+  so — exactly like Texel Density mode — the panel shows *"Mesh has no
+  UVs"* and **nothing is drawn**. It deliberately does *not* degrade
+  to an islands-only overlay: silently changing what the mode shows
+  would be surprising; switch to Island Colors (which falls back to
+  seam prediction) if the mesh has no UVs yet.
+- **The Source dropdown applies to the island COLORS exactly as in
+  Island Colors mode**; the checker always samples the actual UVs.
+  With **Seams (predicted)** and *stale* UVs this means the hues are
+  predictions of the next unwrap while the checkers still show the
+  *old* layout — expected behavior, documented plainly: the hue
+  partition and the checker layout are two different readouts and only
+  agree after you re-unwrap. Switch the source to **UVs (actual)** to
+  make both reflect the current unwrap.
+- The panel shows the island count with its *(predicted)* / *(actual)*
+  source tag plus the median-density readout (in Seams source the
+  median is grouped by the *predicted* islands over the actual UVs —
+  coherent with what is drawn).
+
+**Refreshing / invalidation.** Combined+**Seams** participates in the
+live seam-marking refresh exactly like Island Colors+Seams: hues
+update ~0.3 s after a seam-edit burst goes quiet. Its debounce
+checksum additionally covers the **UV layer bytes**, so UV edits and
+re-unwraps ride the *same* debounced pipeline — both invalidation
+concerns converge on **one** rebuild (the draw path never rebuilds
+this mode/source, so a draw-path rebuild can never race a debounced
+one; the suite drives both edit kinds with a fake clock and asserts
+exactly one rebuild each). Combined+**UVs** uses the classic dirty →
+rebuild-at-next-draw path, exactly like Texel Density mode.
+
+**Default change, no migration.** The Mode setting is a
+`WindowManager` property: runtime-only, never restored from `.blend`
+files — every session starts from the property default, so flipping
+the default to combined required no migration for existing users. The
+suite probes this empirically (saves a file with mode Island Colors,
+changes the session value, reopens the file: the saved value does not
+come back).
+
 ## Opacity and back-face culling (v1.3.1)
 
-Both modes have an **opacity slider** (in both panels): **Tint
+All modes have an **opacity slider** (in both panels): **Tint
 Opacity** in Island Colors mode (default 0.4 — the classic translucent
 color wash, unchanged) and **Checker Opacity** in Texel Density mode
-(default 0.9 — near-opaque paint). They are deliberately **two separate
+(default 0.9 — near-opaque paint; since v1.4.0 the combined mode
+shares this property, because its overlay is checker-like paint too).
+They are deliberately **two separate
 properties** rather than one shared slider: the right default differs
 by an order of intent (a color wash must let the shading through; a
 texel checker should cover it), and separate properties mean switching
@@ -264,6 +339,12 @@ lives in module-level constants (`overlay.VERT_SHADER_SRC` /
 `FRAG_SHADER_SRC`) and compilation stays lazy at draw time, so a shader
 error surfaces through the loud *"Draw failed"* row, never silently.
 
+The COMBINED mode (v1.4.0) adds **no shader at all**: it draws the
+density soup through the density shader below, with the island
+identity palette baked into the per-vertex `color` attribute (the
+fragment stage's `finalColor.rgb * shade` is exactly "island color x
+checker").
+
 The DENSITY mode (v1.3.0) is a second shader built the same way
 (`overlay.DENSITY_VERT_SHADER_SRC` / `DENSITY_FRAG_SHADER_SRC`,
 compiled lazily behind the same latch, same depth-bias term): it adds a
@@ -323,7 +404,9 @@ structurally.
   manual **Refresh** button after re-unwrapping if in doubt.
 - SEAM source can only see seams: charts split by Smart UV Project or
   manual UV edits (no seam flags) show as one predicted island — switch
-  the source to **UVs (actual)** for those.
+  the source to **UVs (actual)** for those. In COMBINED mode with SEAM
+  source and stale UVs, the hues are predictions while the checkers
+  show the old unwrap (see *Combined mode*).
 - While enabled in SEAM mode on an edit-mode mesh, a private snapshot
   mesh datablock (`.uv_island_overlay.snapshot`) holds a copy of the
   mesh for cheap array reads; it is removed when the overlay is
@@ -337,8 +420,9 @@ structurally.
   after installing (see the checklist in the tests section notes).
 - Colors are distinct but unlabeled; with hundreds of islands, adjacent
   hues can get close (value is cycled to compensate).
-- **DENSITY mode**: needs a UV layer (panel hints, draws nothing
-  without one). Hidden faces are excluded from the drawn soup *and*
+- **DENSITY and COMBINED modes**: need a UV layer (panel hints, draws
+  nothing without one — COMBINED deliberately does not fall back to
+  islands-only). Hidden faces are excluded from the drawn soup *and*
   from the density statistics, matching what you see. Overlapping UVs
   count their area once per face (overlaps are not detected), and the
   density is measured against the base mesh in object space —
@@ -359,7 +443,7 @@ addons/uv_island_overlay/tests/run_tests.sh
 
 Blender exits 0 even when a `--python` script raises, so each test prints
 a sentinel (`ISLANDS_TESTS_PASSED`, `DENSITY_TESTS_PASSED`,
-`REGISTER_TESTS_PASSED`) and the
+`COMBINED_TESTS_PASSED`, `REGISTER_TESTS_PASSED`) and the
 wrapper greps for them, printing `ALL_TESTS_PASSED` / `TESTS_FAILED` and
 setting the exit code. GPU shader/batch creation is impossible in
 `--background` (`gpu.shader.create_from_info` raises `SystemError` on
@@ -386,6 +470,22 @@ rebuild — same assertion style as the checker-size test), and — via the
 AST guard audit plus a targeted span check — that the unconditional
 `face_culling_set('BACK')` call sits inside the `_gpu_state_restored`
 guard, whose finally-clause restores the documented default `'NONE'`.
+For v1.4.0, `test_combined.py` covers the COMBINED mode end to end:
+the enum gained COMBINED and its default flipped (plus an empirical
+save/reopen probe that WM property values are never restored from
+`.blend` files — no migration needed); no third shader variant exists
+(structural checks that the draw path routes COMBINED through the
+density shader/batch/uniforms and reads Checker Opacity); COMBINED
+geometry equals the DENSITY soup (positions + UVs) while its colors
+are bit-identical to the ISLANDS-mode colors for the same mesh and
+source (both SEAM and UV); the deviation-tint property is a no-op in
+COMBINED; opacity/checker-size changes are uniform-only;
+mode-switching between all three modes invalidates and rebuilds; the
+no-UV contract (hint, draw nothing, no error latch, both sources);
+and — with a fake clock — that COMBINED+SEAM routes both seam edits
+AND UV edits through the debounced pipeline (the checksum covers UV
+bytes) for **exactly one** rebuild each, while COMBINED+UV takes the
+classic dirty → draw path with the live tick refusing to run.
 The shaders' actual compile/draw can only be confirmed in the GUI.
 
 ### GUI checklist (drawing — not coverable headless)
@@ -451,6 +551,33 @@ v1.3.1 (opacity + culling):
     diagnostic. Recalculate Outside brings it back.
 17. Islands mode at the default Tint Opacity (0.4) must look exactly
     like v1.3.0 from the front.
+
+v1.4.0 (Islands + Density):
+
+18. Fresh session, enable the overlay on an unwrapped multi-island
+    mesh: the default mode is **Islands + Density** and every island
+    must show a checkerboard in its own hue — **hued checkers per
+    island**, continuous within each island.
+19. The checker scale must still read texel density: an island
+    unwrapped 2x larger shows half-size checkers, exactly as in Texel
+    Density mode (only the tinting differs).
+20. With **Source: Seams (predicted)**, mark a seam across an island
+    in Edit Mode: ~0.3 s after you stop, the **hues must re-split
+    live** (like Island Colors mode) while the checker layout stays
+    put until you re-unwrap; after Unwrap the checkers follow. Then
+    scale some UVs in the UV editor: the checkers must update
+    automatically too (the combined live checksum covers UVs).
+21. On a mesh with no UV layer, combined mode must draw **nothing**
+    and show *"Mesh has no UVs"* — no islands-only fallback, no error
+    row.
+22. Cycle Mode through all three entries: Island Colors shows the
+    plain tints (Source + Tint Opacity rows), Texel Density the
+    gray/deviation checker (Checker rows + Deviation Tint), Islands +
+    Density the hued checker (Source + Checker rows, **no** Deviation
+    Tint row) — each switch updates immediately.
+23. Drag **Checker Opacity** in combined mode: live, no hitch, and it
+    is the same value Texel Density mode uses; **Tint Opacity** must
+    have no effect in combined mode.
 
 ## Credits
 

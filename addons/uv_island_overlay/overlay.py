@@ -49,6 +49,27 @@ Opacity + culling (v1.3.1):
   longer bleed through. Flipped-normal faces vanish from the overlay —
   a deliberate diagnostic (those faces misbehave in baking too).
 
+Combined mode (v1.4.0, the new default):
+- 'COMBINED' — island colors AND the texel-density checker at once:
+  the DENSITY checker soup (positions + actual UVs) drawn through the
+  SAME density shader, but with the ISLANDS per-island identity colors
+  baked as the per-vertex tint instead of deviation tints. The density
+  fragment stage just multiplies the attribute color by the checker
+  parity, so NO new GLSL exists — hue reads island membership, checker
+  scale reads texel density. Island COLORS follow the island-source
+  enum exactly as ISLANDS mode does ('SEAM' predicted / 'UV' actual);
+  the checker always samples the actual UV layer, and a mesh with no
+  UV layer draws NOTHING (panel hint — no silent islands-only
+  degrade). The deviation tint stays DENSITY-only (hue x checker x
+  deviation would be unreadable); opacity comes from the Checker
+  Opacity property (the combined overlay is checker-like paint).
+  Invalidation: with the SEAM source ALL geometry updates ride the
+  debounced live pipeline (its checksum additionally covers the UV
+  layer, so seam edits AND UV edits/re-unwraps converge on ONE
+  debounced rebuild — the draw path never rebuilds this mode/source,
+  so no double build is possible); with the UV source the classic
+  dirty -> rebuild-at-next-draw path is used, exactly like DENSITY.
+
 The SEAM live path deliberately never calls Object.update_from_editmode():
 probed on 5.1.2, that tags the depsgraph and would make the refresh loop
 self-triggering. Instead, edit-mode state is snapshotted with
@@ -193,17 +214,17 @@ class _State:
     dirty = True           # geometry/batch needs rebuilding at next draw
     object_name = None     # active mesh object being overlaid
     source = 'SEAM'        # 'UV' or 'SEAM' (synced from the WM enum)
-    mode = 'ISLANDS'       # 'ISLANDS' or 'DENSITY' (synced from WM enum)
+    mode = 'COMBINED'      # 'ISLANDS'/'DENSITY'/'COMBINED' (WM enum)
     island_count = 0
     coords = None          # triangle-soup positions (object space)
     colors = None          # per-vertex RGBA, flat per face
-    uvs = None             # per-vertex UV soup (DENSITY mode only)
-    densities = None       # per-island density array (DENSITY mode only)
-    median_density = None  # unitless median density (DENSITY mode only)
-    no_uvs = False         # DENSITY mode on a mesh with no UV layer
+    uvs = None             # per-vertex UV soup (checker modes only)
+    densities = None       # per-island densities (checker modes only)
+    median_density = None  # unitless median (checker modes only)
+    no_uvs = False         # checker mode on a mesh with no UV layer
     batch = None           # gpu batch (lazily built, viewport only)
     shader = None
-    density_shader = None  # checker shader (DENSITY mode, lazy like shader)
+    density_shader = None  # checker shader (DENSITY + COMBINED, lazy)
     seam_checksum = None   # checksum of the state the SEAM build used
     debounce = live.Debounce(LIVE_QUIET_S)
     # First draw-time error since the last enable/refresh, as a formatted
@@ -236,15 +257,18 @@ def active_mode():
 
 
 def has_no_uvs():
-    """True when the last DENSITY-mode build found no UV layer on the
-    tracked mesh (a state the panel hints at — not an error)."""
+    """True when the last checker-mode (DENSITY/COMBINED) build found no
+    UV layer on the tracked mesh (a state the panel hints at — not an
+    error). COMBINED deliberately draws nothing in that state instead
+    of degrading to islands-only."""
     return _state.no_uvs
 
 
 def median_density():
     """Unitless median texel density (sqrt(UV area / 3D area)) of the
-    last DENSITY-mode build, or None (no build / no valid faces).
-    Multiply by an assumed texture edge in px to get px/unit."""
+    last checker-mode (DENSITY/COMBINED) build, or None (no build / no
+    valid faces). Multiply by an assumed texture edge in px to get
+    px/unit."""
     return _state.median_density
 
 
@@ -269,9 +293,9 @@ def set_source(source, context=None):
 
 
 def set_mode(mode, context=None):
-    """Switch the display mode ('ISLANDS'/'DENSITY'). Same contract as
-    set_source: no-op when unchanged, invalidates and rebuilds
-    immediately when the overlay is enabled."""
+    """Switch the display mode ('ISLANDS'/'DENSITY'/'COMBINED'). Same
+    contract as set_source: no-op when unchanged, invalidates and
+    rebuilds immediately when the overlay is enabled."""
     if mode == _state.mode:
         return
     _state.mode = mode
@@ -301,21 +325,27 @@ def on_opacity_changed():
 def on_density_tint_changed(context=None):
     """Deviation-tint toggle changed: the tint is baked into the
     per-vertex color attribute (same pipeline as ISLANDS colors), so
-    this needs a rebuild — but only in DENSITY mode."""
+    this needs a rebuild — but only in DENSITY mode. COMBINED ignores
+    the property entirely (its checker tint IS the island color; a
+    third modulation would be unreadable), so no rebuild there."""
     if _state.enabled and _state.mode == 'DENSITY':
         refresh(context)
 
 
 def on_tracked_geometry_update():
     """Called by the depsgraph handler when the tracked object reports a
-    geometry update. UV source and DENSITY mode keep the classic
-    behavior (dirty -> rebuild at next draw; UV edits and re-unwraps DO
-    report is_updated_geometry — probed on 5.1.2). SEAM source in
-    ISLANDS mode goes through the debounced live pipeline so a burst of
-    seam edits costs one recompute, after the burst."""
-    if _state.mode != 'ISLANDS':
-        mark_dirty()
-    elif _state.source == 'SEAM':
+    geometry update. UV source (any mode) and DENSITY mode keep the
+    classic behavior (dirty -> rebuild at next draw; UV edits and
+    re-unwraps DO report is_updated_geometry — probed on 5.1.2). SEAM
+    source in ISLANDS *and* COMBINED mode goes through the debounced
+    live pipeline so a burst of seam edits costs one recompute, after
+    the burst. Routing COMBINED+SEAM exclusively through the debounce
+    is what keeps its two invalidation concerns (seam edits for the
+    hues, UV edits for the checker) converged on ONE rebuild: the
+    handler cannot tell the edit kinds apart, so feeding both paths
+    would double-build — instead the debounce checksum also covers the
+    UV layer in COMBINED, catching UV edits on the same single path."""
+    if _state.source == 'SEAM' and _state.mode in ('ISLANDS', 'COMBINED'):
         note_activity()
     else:
         mark_dirty()
@@ -376,15 +406,34 @@ def _remove_scratch_mesh():
         pass
 
 
-def _checksum_from_arrays(n_verts, n_edges, n_faces, seam, co):
-    return hash((n_verts, n_edges, n_faces, seam.tobytes(), co.tobytes()))
+def _checksum_from_arrays(n_verts, n_edges, n_faces, seam, co, uv=None):
+    return hash((n_verts, n_edges, n_faces, seam.tobytes(), co.tobytes(),
+                 None if uv is None else uv.tobytes()))
 
 
-def seam_state_checksum(obj):
+def _uv_array_from_mesh(me):
+    """Flat float32 UV array of the mesh's active UV layer (empty array
+    when there is no layer or no loops). Reads from a snapshot/Object-
+    Mode mesh whose data arrays are valid (the edit-mode caveat of
+    _density_soup_arrays does not apply to the bm.to_mesh snapshot)."""
+    import numpy as np
+    uv = np.empty(0, dtype=np.float32)
+    layer = me.uv_layers.active
+    if layer is not None and len(me.loops):
+        uv = np.empty(len(me.loops) * 2, dtype=np.float32)
+        layer.data.foreach_get("uv", uv)
+    return uv
+
+
+def seam_state_checksum(obj, include_uvs=False):
     """Cheap checksum of everything the SEAM overlay depends on: counts,
     seam flags and vertex positions (~0.1 s at 300k verts, dominated by
-    the edit-mode snapshot + foreach_get). Selection/UV/shading changes
-    do not affect it, so no-op depsgraph events skip the rebuild."""
+    the edit-mode snapshot + foreach_get). Selection/shading changes do
+    not affect it, so no-op depsgraph events skip the rebuild. With
+    include_uvs=True (COMBINED mode) the active UV layer's data is
+    hashed too: the combined checker samples actual UVs, so UV edits
+    and re-unwraps must count as changes there — in plain ISLANDS SEAM
+    mode they deliberately do not (UV data is never read)."""
     import numpy as np
     me = _snapshot_mesh(obj)
     n_verts = len(me.vertices)
@@ -396,7 +445,8 @@ def seam_state_checksum(obj):
     co = np.empty(n_verts * 3, dtype=np.float32)
     if n_verts:
         me.vertices.foreach_get("co", co)
-    return _checksum_from_arrays(n_verts, n_edges, n_faces, seam, co)
+    uv = _uv_array_from_mesh(me) if include_uvs else None
+    return _checksum_from_arrays(n_verts, n_edges, n_faces, seam, co, uv)
 
 
 def _build_seam_arrays(obj):
@@ -525,7 +575,7 @@ def _build_bmesh(obj, force_seam=False):
 
 
 # ---------------------------------------------------------------------------
-# DENSITY-mode build (v1.3.0)
+# Checker-mode builds: DENSITY (v1.3.0) and COMBINED (v1.4.0)
 # ---------------------------------------------------------------------------
 
 def _density_soup_arrays(me):
@@ -597,19 +647,47 @@ def _density_soup_bmesh(bm, uv_layer):
 
 def _build_density(obj):
     """(coords, colors, uvs, island_count, densities, median, no_uvs)
-    for DENSITY mode.
+    for DENSITY mode: the shared UV-checker build with deviation tints
+    (or all-neutral when the tint property is off). Kept as the stable
+    7-tuple entry point the density tests drive directly."""
+    return _build_uv_checker(obj, tint='DEVIATION')
+
+
+def _island_tint_colors(tri_isl, count):
+    """Per-soup-vertex RGBA from the ISLANDS identity palette — the
+    exact colors ISLANDS mode bakes (same islands.island_colors call,
+    same min-face-index island ordering), one row per triangle corner.
+    Used by COMBINED, where the density fragment shader multiplies this
+    attribute by the checker parity. The baked alpha is vestigial since
+    v1.3.1 (the overlay_opacity push constant wins); it keeps the soup
+    layout unchanged."""
+    import numpy as np
+    from . import islands as islands_mod
+    palette = np.asarray(islands_mod.island_colors(count, alpha=ALPHA),
+                         dtype=np.float32).reshape(count, 4)
+    return np.ascontiguousarray(np.repeat(palette[tri_isl], 3, axis=0),
+                                dtype=np.float32)
+
+
+def _build_uv_checker(obj, tint):
+    """(coords, colors, uvs, island_count, densities, median, no_uvs)
+    for the checker modes over TRUE UV connectivity: DENSITY
+    (tint='DEVIATION') and COMBINED with the UV island source
+    (tint='ISLAND' — per-island identity colors instead of deviation
+    tints; same soup, same shader, only the baked tint differs).
 
     Islands come from TRUE UV connectivity (islands.compute_islands) —
-    density is a property of the actual unwrap, so seam predictions do
-    not apply. Per-island densities/median via density.py (see there for
-    the sqrt(UV area / 3D area) convention and degenerate-face
-    exclusions). The optional deviation tint is baked into the same
-    per-vertex color attribute ISLANDS mode uses; with the tint off the
-    colors are all neutral. A mesh with no UV layer returns
-    no_uvs=True and empty geometry — a state, not an error (no latch).
-    Reads happen via bmesh in Edit Mode / Mesh arrays in Object Mode:
-    no datablock snapshot, so this build is safe inside a draw callback
-    (unlike the SEAM live path)."""
+    for DENSITY because density is a property of the actual unwrap, for
+    COMBINED because this is exactly what the UV island source means.
+    Per-island densities/median via density.py (see there for the
+    sqrt(UV area / 3D area) convention and degenerate-face exclusions).
+    The tint is baked into the same per-vertex color attribute ISLANDS
+    mode uses; with the deviation tint off the DENSITY colors are all
+    neutral. A mesh with no UV layer returns no_uvs=True and empty
+    geometry — a state, not an error (no latch). Reads happen via bmesh
+    in Edit Mode / Mesh arrays in Object Mode: no datablock snapshot,
+    so this build is safe inside a draw callback (unlike the SEAM
+    paths)."""
     import bmesh
     import numpy as np
     from . import density as density_mod
@@ -648,22 +726,137 @@ def _build_density(obj):
             tri_isl, area_uv, area_3d, count)
         median = density_mod.median_density(densities)
 
-        wm = getattr(bpy.context, "window_manager", None)
-        tint_on = bool(getattr(wm, "uv_island_overlay_density_tint", True))
-        if tint_on:
-            tints = density_mod.deviation_tints(densities, median,
-                                                alpha=ALPHA)
+        if tint == 'ISLAND':
+            # COMBINED: bake the per-island identity colors as the
+            # checker tint. The deviation tint stays DENSITY-only —
+            # island hue x checker x deviation would be unreadable —
+            # so the density-tint property is deliberately ignored.
+            colors = _island_tint_colors(tri_isl, count)
         else:
-            tints = np.empty((count, 4))
-            tints[:, :3] = density_mod.TINT_NEUTRAL
-            tints[:, 3] = ALPHA
-        tints = np.ascontiguousarray(tints, dtype=np.float32)
-        colors = np.ascontiguousarray(np.repeat(tints[tri_isl], 3, axis=0),
-                                      dtype=np.float32)
+            wm = getattr(bpy.context, "window_manager", None)
+            tint_on = bool(getattr(wm, "uv_island_overlay_density_tint",
+                                   True))
+            if tint_on:
+                tints = density_mod.deviation_tints(densities, median,
+                                                    alpha=ALPHA)
+            else:
+                tints = np.empty((count, 4))
+                tints[:, :3] = density_mod.TINT_NEUTRAL
+                tints[:, 3] = ALPHA
+            tints = np.ascontiguousarray(tints, dtype=np.float32)
+            colors = np.ascontiguousarray(
+                np.repeat(tints[tri_isl], 3, axis=0), dtype=np.float32)
         return coords, colors, uvs, count, densities, median, False
     finally:
         if owned:
             bm.free()
+
+
+def _build_combined(obj, source):
+    """(coords, colors, uvs, island_count, densities, median, no_uvs,
+    checksum) for COMBINED mode (v1.4.0): the DENSITY checker soup
+    (positions + actual UVs, drawn through the same density shader)
+    with the ISLANDS-mode per-island identity colors baked as the
+    per-vertex tint — hue reads island membership, checker scale reads
+    texel density.
+
+    Island COLORS follow the island-source enum exactly as ISLANDS mode
+    does ('SEAM' predicted / 'UV' actual); the checker always samples
+    the actual UV layer. A mesh with no UV layer returns no_uvs=True
+    and empty geometry — the checker has nothing to sample, and
+    silently degrading to islands-only would be surprising (the panel
+    shows the "Mesh has no UVs" hint instead, exactly like DENSITY).
+    With the SEAM source and stale UVs the hues are predictions while
+    the checkers show the stale unwrap — expected and documented.
+
+    'UV' source delegates to the shared UV-checker build (bmesh / Mesh
+    array reads, no snapshot — safe inside a draw callback) and returns
+    checksum None. 'SEAM' source reads everything from the snapshot
+    mesh on the numpy paths (like the ISLANDS SEAM build it must NEVER
+    run inside a draw callback) and returns a checksum that ALSO covers
+    the UV layer, so the debounced live pipeline catches seam edits AND
+    UV edits/re-unwraps — both invalidation concerns converge on ONE
+    debounced rebuild (see on_tracked_geometry_update)."""
+    import numpy as np
+    from . import density as density_mod
+    from . import islands as islands_mod
+
+    if source != 'SEAM':
+        coords, colors, uvs, count, densities, median, no_uvs = \
+            _build_uv_checker(obj, tint='ISLAND')
+        return coords, colors, uvs, count, densities, median, no_uvs, None
+
+    me = _snapshot_mesh(obj)
+    n_verts = len(me.vertices)
+    n_edges = len(me.edges)
+    n_faces = len(me.polygons)
+
+    seam = np.empty(n_edges, dtype=bool)
+    if n_edges:
+        me.edges.foreach_get("use_seam", seam)
+    co = np.empty(n_verts * 3, dtype=np.float32)
+    if n_verts:
+        me.vertices.foreach_get("co", co)
+    # The UV bytes join the checksum (unlike plain ISLANDS SEAM mode):
+    # this build samples them, so UV edits must count as changes. The
+    # bm.to_mesh snapshot carries valid UV arrays even in Edit Mode
+    # (the empty-arrays caveat of _density_soup_arrays applies only to
+    # the mesh an edit bmesh currently owns).
+    uv = _uv_array_from_mesh(me)
+    checksum = _checksum_from_arrays(n_verts, n_edges, n_faces, seam, co,
+                                     uv)
+    if me.uv_layers.active is None:
+        return None, None, None, 0, None, None, True, checksum
+    if n_faces == 0:
+        return [], [], [], 0, None, None, False, checksum
+
+    # Seam-predicted islands: the exact mapping (and therefore the
+    # exact colors) the ISLANDS SEAM path produces for this mesh.
+    loop_edge = np.empty(len(me.loops), dtype=np.int32)
+    me.loops.foreach_get("edge_index", loop_edge)
+    loop_total = np.empty(n_faces, dtype=np.int32)
+    me.polygons.foreach_get("loop_total", loop_total)
+    loop_face = np.repeat(np.arange(n_faces, dtype=np.int32), loop_total)
+    face_to_island, count = islands_mod.compute_islands_by_seam_arrays(
+        n_faces, loop_edge, loop_face, seam)
+
+    co = co.reshape(-1, 3)
+    uv = uv.reshape(-1, 2)
+    hide = np.empty(n_faces, dtype=bool)
+    me.polygons.foreach_get("hide", hide)
+    if hasattr(me, "calc_loop_triangles"):
+        me.calc_loop_triangles()
+    tris = me.loop_triangles
+    n_tris = len(tris)
+    tv = np.empty(n_tris * 3, dtype=np.int32)
+    tris.foreach_get("vertices", tv)
+    tl = np.empty(n_tris * 3, dtype=np.int32)
+    tris.foreach_get("loops", tl)
+    tp = np.empty(n_tris, dtype=np.int32)
+    tris.foreach_get("polygon_index", tp)
+
+    visible = ~hide[tp]
+    tv = tv.reshape(-1, 3)[visible]
+    tl = tl.reshape(-1, 3)[visible]
+    tp = tp[visible]
+
+    # Positions bit-identical to the mesh's (crack-free contract) and
+    # per-corner UVs verbatim, same as the DENSITY fast path.
+    coords = np.ascontiguousarray(co[tv.ravel()], dtype=np.float32)
+    uvs = np.ascontiguousarray(uv[tl.ravel()], dtype=np.float32)
+    tri_isl = np.asarray(face_to_island, dtype=np.int64)[tp]
+
+    # Density stats for the panel's median readout. Measured per
+    # PREDICTED island here: with stale UVs that is a statistic over
+    # the stale unwrap grouped by the predicted partition — coherent
+    # with what is drawn (predicted hues over stale checkers).
+    area_3d = density_mod.triangle_areas_3d(coords.reshape(-1, 3, 3))
+    area_uv = density_mod.triangle_areas_uv(uvs.reshape(-1, 3, 2))
+    densities = density_mod.island_densities(tri_isl, area_uv, area_3d,
+                                             count)
+    median = density_mod.median_density(densities)
+    colors = _island_tint_colors(tri_isl, count)
+    return coords, colors, uvs, count, densities, median, False, checksum
 
 
 # ---------------------------------------------------------------------------
@@ -713,7 +906,7 @@ def _live_tick(now):
     the timer. Takes the clock as an argument so tests can drive it with
     fake time (app timers never fire in --background)."""
     if not _state.enabled or _state.source != 'SEAM' \
-            or _state.mode != 'ISLANDS' \
+            or _state.mode not in ('ISLANDS', 'COMBINED') \
             or not _state.debounce.pending:
         _state.debounce.reset()
         return None
@@ -721,15 +914,17 @@ def _live_tick(now):
         return LIVE_POLL_S
     # Quiet period over: one cheap checksum decides whether anything the
     # overlay depends on actually changed (seam flags, topology counts,
-    # vertex positions). No-op events (mode switches, re-marking an
-    # existing seam, selection-only updates) stop here.
+    # vertex positions; in COMBINED also the UV layer the checker
+    # samples). No-op events (mode switches, re-marking an existing
+    # seam, selection-only updates) stop here.
     obj = None
     if _state.object_name is not None:
         obj = bpy.data.objects.get(_state.object_name)
     if obj is None or obj.type != 'MESH':
         return None
     try:
-        checksum = seam_state_checksum(obj)
+        checksum = seam_state_checksum(
+            obj, include_uvs=(_state.mode == 'COMBINED'))
     except Exception:
         print("[uv_island_overlay] seam checksum failed:")
         traceback.print_exc()
@@ -774,7 +969,7 @@ def enable(context):
     if source in {'UV', 'SEAM'}:
         _state.source = source
     mode = getattr(wm, "uv_island_overlay_mode", None)
-    if mode in {'ISLANDS', 'DENSITY'}:
+    if mode in {'ISLANDS', 'DENSITY', 'COMBINED'}:
         _state.mode = mode
     refresh(context)
     if _state.handle is None:
@@ -840,6 +1035,11 @@ def refresh(context):
             coords, colors, uvs, count, densities, median, no_uvs = \
                 _build_density(obj)
             checksum = None
+        elif _state.mode == 'COMBINED':
+            # checksum is non-None only for the SEAM island source
+            # (where the live debounce pipeline gates on it).
+            (coords, colors, uvs, count, densities, median, no_uvs,
+             checksum) = _build_combined(obj, _state.source)
         else:
             coords, colors, count, checksum = _build(obj, _state.source)
             uvs, densities, median, no_uvs = None, None, None, False
@@ -1001,10 +1201,25 @@ def _draw():
                     _build_density(obj)
                 _state.batch = None
                 _state.dirty = False
+            elif _state.mode == 'COMBINED' and _state.source != 'SEAM':
+                # COMBINED with the UV island source delegates to the
+                # same snapshot-free reads as DENSITY — safe here. (The
+                # returned checksum is None for this source.)
+                (_state.coords, _state.colors, _state.uvs,
+                 _state.island_count, _state.densities,
+                 _state.median_density, _state.no_uvs,
+                 _state.seam_checksum) = \
+                    _build_combined(obj, _state.source)
+                _state.batch = None
+                _state.dirty = False
             elif _state.source == 'SEAM':
-                # SEAM rebuilds snapshot into a datablock, which must not
-                # happen inside a draw callback — hand off to the live
-                # timer (main loop) and keep drawing the cached batch.
+                # SEAM rebuilds (ISLANDS or COMBINED) snapshot into a
+                # datablock, which must not happen inside a draw
+                # callback — hand off to the live timer (main loop) and
+                # keep drawing the cached batch. For COMBINED this is
+                # also what keeps the invalidation paths converged: the
+                # debounced pipeline is the ONLY rebuild driver there,
+                # so a draw-path rebuild can never race it.
                 _state.dirty = False
                 note_activity()
             else:
@@ -1016,16 +1231,22 @@ def _draw():
                 _state.dirty = False
 
         # NOTE: explicit None/len test — coords may be a numpy array,
-        # whose truth value is ambiguous. A DENSITY-mode mesh with no
-        # UV layer lands here too (coords is None): draw nothing, no
-        # error latch — the panel shows the "Mesh has no UVs" hint.
+        # whose truth value is ambiguous. A checker-mode (DENSITY or
+        # COMBINED) mesh with no UV layer lands here too (coords is
+        # None): draw nothing, no error latch — the panel shows the
+        # "Mesh has no UVs" hint.
         if _state.coords is None or len(_state.coords) == 0:
             return
 
-        if _state.mode == 'DENSITY':
+        if _state.mode in ('DENSITY', 'COMBINED'):
             if _state.density_shader is None:
                 # Same lazy-compile-behind-the-latch contract as the
-                # ISLANDS shader below.
+                # ISLANDS shader below. COMBINED reuses the DENSITY
+                # shader UNCHANGED: its fragment stage already
+                # multiplies the per-vertex attribute color by the
+                # checker parity — COMBINED just bakes island identity
+                # colors into that attribute instead of deviation
+                # tints. No third shader variant exists.
                 _state.density_shader = _create_density_shader()
             shader = _state.density_shader
         else:
@@ -1041,7 +1262,7 @@ def _draw():
 
         if _state.batch is None:
             from gpu_extras.batch import batch_for_shader
-            if _state.mode == 'DENSITY':
+            if _state.mode in ('DENSITY', 'COMBINED'):
                 _state.batch = batch_for_shader(
                     shader, 'TRIS',
                     {"pos": _state.coords, "color": _state.colors,
@@ -1084,12 +1305,16 @@ def _draw():
                        @ gpu.matrix.get_model_view_matrix())
                 shader.uniform_float(
                     "ModelViewProjectionMatrix", mvp)
-                # Opacity (and in DENSITY mode the checker resolution):
-                # read fresh from the properties every draw — both are
-                # push constants, so changing them needs nothing but a
-                # redraw (dragging the sliders is live, zero rebuild).
+                # Opacity (and in the checker modes the checker
+                # resolution): read fresh from the properties every
+                # draw — both are push constants, so changing them
+                # needs nothing but a redraw (dragging the sliders is
+                # live, zero rebuild). COMBINED deliberately shares the
+                # Checker Opacity property with DENSITY — the combined
+                # overlay is checker-like paint, so the near-opaque
+                # default is right; Tint Opacity stays ISLANDS-only.
                 wm = bpy.context.window_manager
-                if _state.mode == 'DENSITY':
+                if _state.mode in ('DENSITY', 'COMBINED'):
                     res = float(getattr(wm,
                                         "uv_island_overlay_checker_size",
                                         DEFAULT_CHECKER_SIZE))

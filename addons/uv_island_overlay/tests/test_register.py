@@ -139,6 +139,12 @@ def main():
           any(h.__name__ == "_on_depsgraph_update"
               for h in bpy.app.handlers.depsgraph_update_post))
 
+    # v1.4.0 flipped the default display mode to COMBINED; the legacy
+    # sections below exercise the classic ISLANDS behavior, so pin it
+    # here (test_combined.py covers the COMBINED default and behavior;
+    # the sections below that need other modes set them explicitly).
+    bpy.context.window_manager.uv_island_overlay_mode = 'ISLANDS'
+
     # --- build a mesh with 2 islands -----------------------------------------
     bpy.ops.mesh.primitive_grid_add(x_subdivisions=4, y_subdivisions=4,
                                     size=2.0)
@@ -563,12 +569,14 @@ def main():
     check("version bumped for the density mode",
           uv_island_overlay.bl_info.get("version", (0,))[:3] >= (1, 3, 0))
     mode_prop = wm.bl_rna.properties.get("uv_island_overlay_mode")
-    check("display-mode enum registered with ISLANDS+DENSITY items",
+    check("display-mode enum registered with ISLANDS+DENSITY+COMBINED "
+          "items",
           mode_prop is not None
           and {i.identifier for i in mode_prop.enum_items}
-          == {'ISLANDS', 'DENSITY'})
-    check("display-mode default is ISLANDS (classic mode unchanged)",
-          mode_prop is not None and mode_prop.default == 'ISLANDS')
+          == {'ISLANDS', 'DENSITY', 'COMBINED'})
+    check("display-mode default is COMBINED (v1.4.0; WM properties are "
+          "per-session, so the flip needs no migration)",
+          mode_prop is not None and mode_prop.default == 'COMBINED')
     cs_prop = wm.bl_rna.properties.get("uv_island_overlay_checker_size")
     check("checker-size property registered, power-of-two default 32 "
           "(32 px checkers on a 1024 px texture)",

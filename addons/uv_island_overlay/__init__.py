@@ -2,21 +2,24 @@
 """UV Island Overlay — per-island UV coloring and texel-density
 checkerboard in the 3D viewport.
 
-Two display modes: each UV island's faces tinted with a distinct color
-(island boundaries at a glance), or a checkerboard mapped through the
-mesh's actual UVs (texel-density mismatches show as different checker
-scales on the surface).
+Three display modes: each UV island's faces tinted with a distinct
+color (island boundaries at a glance), a checkerboard mapped through
+the mesh's actual UVs (texel-density mismatches show as different
+checker scales on the surface), or — the default since v1.4.0 — both
+combined: the checker multiplied by each island's identity color, so
+hue reads island membership while checker scale reads texel density.
 """
 
 bl_info = {
     "name": "UV Island Overlay",
     "author": "Teo Asinari",
-    "version": (1, 3, 1),
+    "version": (1, 4, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N) > UV Islands tab; also in the "
                 "Overlays popover",
-    "description": "Color each UV island distinctly or visualize texel "
-                   "density as a UV checkerboard in the 3D viewport",
+    "description": "Color each UV island distinctly, visualize texel "
+                   "density as a UV checkerboard, or both combined, in "
+                   "the 3D viewport",
     "category": "UV",
 }
 
@@ -121,10 +124,14 @@ def _draw_overlay_controls(layout, context):
     mode_row = col.row(align=True)
     mode_row.enabled = interactive
     mode_row.prop(wm, "uv_island_overlay_mode", text="Mode")
-    if wm.uv_island_overlay_mode == 'ISLANDS':
+    mode = wm.uv_island_overlay_mode
+    if mode in ('ISLANDS', 'COMBINED'):
+        # Island colors follow the source in both of these modes; the
+        # COMBINED checker always samples actual UVs regardless.
         src_row = col.row(align=True)
         src_row.enabled = interactive
         src_row.prop(wm, "uv_island_overlay_source", text="Source")
+    if mode == 'ISLANDS':
         op_row = col.row(align=True)
         op_row.enabled = interactive
         op_row.prop(wm, "uv_island_overlay_opacity")
@@ -132,20 +139,38 @@ def _draw_overlay_controls(layout, context):
         den = col.column(align=True)
         den.enabled = interactive
         den.prop(wm, "uv_island_overlay_checker_size")
+        # COMBINED shares the Checker Opacity property with DENSITY:
+        # the combined overlay is checker-like paint, so the
+        # near-opaque default is right; Tint Opacity is ISLANDS-only.
         den.prop(wm, "uv_island_overlay_density_opacity")
         den.prop(wm, "uv_island_overlay_texture_size")
-        tint_row = col.row(align=True)
-        tint_row.enabled = interactive
-        tint_row.prop(wm, "uv_island_overlay_density_tint")
+        if mode == 'DENSITY':
+            # The deviation tint is DENSITY-only: in COMBINED the
+            # checker tint IS the island color, and island hue x
+            # checker x deviation would be unreadable.
+            tint_row = col.row(align=True)
+            tint_row.enabled = interactive
+            tint_row.prop(wm, "uv_island_overlay_density_tint")
     if overlay.is_enabled():
-        if overlay.active_mode() == 'DENSITY':
-            if overlay.has_no_uvs():
-                # A state, not an error: DENSITY needs a UV layer.
-                col.label(text="Mesh has no UVs", icon='INFO')
-            else:
+        active = overlay.active_mode()
+        if active != 'ISLANDS' and overlay.has_no_uvs():
+            # A state, not an error: the checker modes need a UV layer
+            # (COMBINED deliberately draws nothing rather than
+            # degrading to islands-only without the checker).
+            col.label(text="Mesh has no UVs", icon='INFO')
+        else:
+            if active == 'DENSITY':
                 col.label(text="%d island%s (actual UVs)"
                           % (overlay.island_count(),
                              "" if overlay.island_count() == 1 else "s"))
+            else:
+                col.label(text="%d island%s (%s)"
+                          % (overlay.island_count(),
+                             "" if overlay.island_count() == 1 else "s",
+                             "predicted"
+                             if overlay.active_source() == 'SEAM'
+                             else "actual"))
+            if active != 'ISLANDS':
                 med = overlay.median_density()
                 if med is not None:
                     tex = wm.uv_island_overlay_texture_size
@@ -153,18 +178,12 @@ def _draw_overlay_controls(layout, context):
                               % (med * tex, tex))
                 else:
                     col.label(text="Median: undefined (degenerate UVs)")
-        else:
-            col.label(text="%d island%s (%s)"
-                      % (overlay.island_count(),
-                         "" if overlay.island_count() == 1 else "s",
-                         "predicted" if overlay.active_source() == 'SEAM'
-                         else "actual"))
         if overlay.last_draw_error() is not None:
             col.label(text="Draw failed - see system console",
                       icon='ERROR')
     elif not have_mesh:
         col.label(text="Select a mesh object", icon='INFO')
-    elif wm.uv_island_overlay_mode == 'DENSITY' \
+    elif wm.uv_island_overlay_mode != 'ISLANDS' \
             and not getattr(obj.data, "uv_layers", None):
         col.label(text="Mesh has no UVs", icon='INFO')
 
@@ -253,13 +272,17 @@ def _on_density_tint_update(self, context):
 def _on_depsgraph_update(scene, depsgraph):
     """Cheap auto-refresh: when the overlaid object's geometry changes
     (mesh edits, seam marking, mode switches), notify the overlay. In UV
-    source and DENSITY mode that marks it dirty (recompute once at the
-    next draw — never per frame); in SEAM source it feeds the debounced
-    live pipeline (O(1) here; checksum + rebuild happen after a quiet
-    period, off the hot path). Probed on 5.1.2: seam-flag-only edits AND
-    UV edits (foreach_set, edit-bmesh writes, uv.unwrap) DO report
+    source (any mode) and DENSITY mode that marks it dirty (recompute
+    once at the next draw — never per frame); in SEAM source (Island
+    Colors and Combined modes) it feeds the debounced live pipeline
+    (O(1) here; checksum + rebuild happen after a quiet period, off the
+    hot path). In Combined the debounce checksum also covers the UV
+    layer, so seam edits and UV edits converge on the same SINGLE
+    debounced rebuild — never a draw-path rebuild racing a debounced
+    one. Probed on 5.1.2: seam-flag-only edits AND UV edits
+    (foreach_set, edit-bmesh writes, uv.unwrap) DO report
     is_updated_geometry, selection-only changes do NOT — exactly the
-    filter we want, and it means DENSITY mode catches re-unwraps."""
+    filter we want, and it means the checker modes catch re-unwraps."""
     if not overlay.is_enabled():
         return
     name = overlay.tracked_object_name()
@@ -334,7 +357,9 @@ def register():
     # (e.g. Smart UV Project charts, which have no seam flags).
     bpy.types.WindowManager.uv_island_overlay_source = EnumProperty(
         name="Island Source",
-        description="How islands are determined for the overlay colors",
+        description="How islands are determined for the overlay colors "
+                    "(Island Colors and Combined modes; the Combined "
+                    "checker always samples actual UVs regardless)",
         items=(
             ('SEAM', "Seams (predicted)",
              "Regions bounded by seam edges — updates live while you "
@@ -349,8 +374,12 @@ def register():
         update=_on_source_update,
     )
 
-    # Default 'ISLANDS': the classic colored mode, unchanged from
-    # earlier versions. 'DENSITY' visualizes texel density instead.
+    # Default 'COMBINED' (v1.4.0): island hues AND the texel-density
+    # checker at once — the most informative default. WindowManager
+    # properties are runtime-only (never restored from .blend files —
+    # a session always starts from the property default), so flipping
+    # the default needs no migration for existing users; the headless
+    # suite probes this by saving/reopening a file.
     bpy.types.WindowManager.uv_island_overlay_mode = EnumProperty(
         name="Display Mode",
         description="What the overlay visualizes",
@@ -363,8 +392,14 @@ def register():
              "islands with mismatched texel density show different "
              "checker scales on the surface, tinted blue/red below/"
              "above the mesh's median density (needs a UV layer)"),
+            ('COMBINED', "Islands + Density",
+             "Both at once: the texel-density checkerboard multiplied "
+             "by each island's identity color — hue reads island "
+             "membership, checker scale reads texel density. Island "
+             "colors follow the Source setting; the checker always "
+             "samples the actual UVs (needs a UV layer)"),
         ),
-        default='ISLANDS',
+        default='COMBINED',
         update=_on_mode_update,
     )
 
@@ -395,10 +430,11 @@ def register():
     bpy.types.WindowManager.uv_island_overlay_density_opacity = \
         FloatProperty(
             name="Checker Opacity",
-            description="Opacity of the texel-density checker in Texel "
-                        "Density mode; near-opaque by default so the "
-                        "checker reads like paint on the surface. "
-                        "Applied live (shader uniform, no rebuild)",
+            description="Opacity of the checker overlay in Texel "
+                        "Density and Combined modes; near-opaque by "
+                        "default so the checker reads like paint on "
+                        "the surface. Applied live (shader uniform, "
+                        "no rebuild)",
             default=overlay.DEFAULT_DENSITY_OPACITY, min=0.0, max=1.0,
             subtype='FACTOR',
             update=_on_opacity_update,
@@ -415,7 +451,9 @@ def register():
         name="Deviation Tint",
         description="Tint the checker per island by log2 deviation from "
                     "the mesh's median density: blue below the median, "
-                    "neutral at it, red above (clamped at +/-2 octaves)",
+                    "neutral at it, red above (clamped at +/-2 octaves). "
+                    "Texel Density mode only — Combined mode ignores it "
+                    "(its checker tint is the island color)",
         default=True,
         update=_on_density_tint_update,
     )
