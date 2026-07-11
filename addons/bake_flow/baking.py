@@ -1,0 +1,273 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+"""Stage 3: the bake gauntlet. One entry point — run_bake() — that does
+everything Blender's manual high->low normal-bake setup spreads over
+~15 steps and three editors:
+
+validate pair + readiness checklist -> remember render engine and
+selection -> switch to Cycles (baking requires it; the configured
+Cycles device is left alone) -> create/reuse the bake image datablock
+(Non-Color for normals) -> ensure the low-poly has a node material with
+an Image Texture node targeting that image, made the ACTIVE node
+(probed on 5.1.2: with bake target IMAGE_TEXTURES — the default — the
+bake writes into the active image node of each target material; there
+is no object/material-level bake_target property) -> select high, make
+low active -> bpy.ops.object.bake(type=..., use_selected_to_active=
+True, ...) with all settings passed as OPERATOR arguments (probed on
+5.1.2: cage_extrusion / max_ray_distance / margin / normal_space are
+operator props, so nothing in scene.render.bake needs mutating or
+restoring) -> save the image to disk (dirs created) -> optionally wire
+Image Texture -> Normal Map -> Principled BSDF Normal -> restore
+engine + selection in a finally block.
+
+Every failure raises BakeFlowError with an actionable message; the
+operator surfaces it via self.report — never a traceback.
+"""
+
+import os
+
+import bpy
+
+from . import flowcore
+from . import readiness
+
+
+class BakeFlowError(Exception):
+    """Actionable failure (message is shown via self.report)."""
+
+
+# Node names: stable identifiers so re-bakes reuse instead of piling up.
+BAKE_NODE_NAME = "BakeFlow Bake Target"
+NORMAL_MAP_NODE_NAME = "BakeFlow Normal Map"
+
+# Enum identifier -> pixels. Module-level so tests can shrink it.
+RESOLUTIONS = {'1K': 1024, '2K': 2048, '4K': 4096}
+
+
+def _validate_pair(settings):
+    high = settings.high_object
+    low = settings.low_object
+    if high is None:
+        raise BakeFlowError("No high-poly object set (stage 1)")
+    if low is None:
+        raise BakeFlowError("No low-poly object set (stage 1)")
+    if high == low:
+        raise BakeFlowError("High-poly and low-poly are the same object")
+    for label, ob in (("High", high), ("Low", low)):
+        if ob.type != 'MESH':
+            raise BakeFlowError("%s-poly object %r is not a mesh"
+                                % (label, ob.name))
+        if ob.name not in bpy.context.view_layer.objects:
+            raise BakeFlowError(
+                "%s-poly object %r is not in the current view layer"
+                % (label, ob.name))
+    return high, low
+
+
+def ensure_bake_image(low_name, bake_type, resolution_px):
+    """Create or reuse the bake image datablock (name from the
+    flowcore.BAKE_TYPES table); rescales a reused image to the
+    requested resolution; sets the colorspace per type."""
+    name = flowcore.image_name(low_name, bake_type)
+    info = flowcore.BAKE_TYPES[bake_type]
+    img = bpy.data.images.get(name)
+    if img is None:
+        img = bpy.data.images.new(name, resolution_px, resolution_px,
+                                  alpha=False, float_buffer=False)
+    elif tuple(img.size) != (resolution_px, resolution_px):
+        img.scale(resolution_px, resolution_px)
+    img.colorspace_settings.name = ('Non-Color' if info["non_color"]
+                                    else 'sRGB')
+    return img
+
+
+def ensure_material_target(low, img):
+    """Ensure the low-poly has a node material whose ACTIVE node is an
+    Image Texture pointing at ``img`` (the 5.1.2 bake-target
+    mechanism). Returns (material, tex_node). Reuses the named node on
+    re-bakes. NOTE: compare nodes with ``==`` — ``nodes.active is
+    node`` is False even right after assignment (RNA wrapper identity,
+    probed on 5.1.2)."""
+    mat = low.active_material
+    if mat is None:
+        mat = bpy.data.materials.new(low.name + "_baked")
+        mat.use_nodes = True
+        if len(low.data.materials) > 0:
+            low.data.materials[low.active_material_index] = mat
+        else:
+            low.data.materials.append(mat)
+    if not mat.use_nodes:
+        mat.use_nodes = True
+    nt = mat.node_tree
+    tex = nt.nodes.get(BAKE_NODE_NAME)
+    if tex is None or tex.bl_idname != 'ShaderNodeTexImage':
+        tex = nt.nodes.new("ShaderNodeTexImage")
+        tex.name = BAKE_NODE_NAME
+        tex.label = BAKE_NODE_NAME
+        tex.location = (-560.0, -260.0)
+    tex.image = img
+    for node in nt.nodes:
+        node.select = False
+    tex.select = True
+    nt.nodes.active = tex
+    return mat, tex
+
+
+def wire_normal_map(mat, tex):
+    """Image Texture -> Normal Map (tangent) -> Principled BSDF Normal.
+    Returns True when wired, False when the material has no Principled
+    BSDF to receive it (reported as a warning, not an error)."""
+    nt = mat.node_tree
+    principled = next((n for n in nt.nodes
+                       if n.bl_idname == 'ShaderNodeBsdfPrincipled'),
+                      None)
+    if principled is None or "Normal" not in principled.inputs:
+        return False
+    nm = nt.nodes.get(NORMAL_MAP_NODE_NAME)
+    if nm is None or nm.bl_idname != 'ShaderNodeNormalMap':
+        nm = nt.nodes.new("ShaderNodeNormalMap")
+        nm.name = NORMAL_MAP_NODE_NAME
+        nm.label = NORMAL_MAP_NODE_NAME
+        nm.location = (-300.0, -260.0)
+    nm.space = 'TANGENT'
+    nt.links.new(tex.outputs["Color"], nm.inputs["Color"])
+    nt.links.new(nm.outputs["Normal"], principled.inputs["Normal"])
+    return True
+
+
+def _bake_kwargs(settings, extrusion, max_ray):
+    """Operator arguments for bpy.ops.object.bake, switched on the
+    bake type."""
+    kwargs = dict(
+        type=settings.bake_type,
+        use_selected_to_active=True,
+        cage_extrusion=extrusion,
+        max_ray_distance=max_ray,
+        margin=int(settings.margin),
+        use_clear=True,
+        target='IMAGE_TEXTURES',
+    )
+    if settings.bake_type == 'NORMAL':
+        kwargs["normal_space"] = 'TANGENT'
+    # TODO: AO, cavity/curvature, displacement — same machinery: add
+    # the per-type operator settings here (e.g. AO pass_filter /
+    # sample counts), plus the enum item and BAKE_TYPES entry.
+    return kwargs
+
+
+def resolved_distances(settings, high, low):
+    """(extrusion, max_ray): the auto-heuristic from the pair's
+    bounding-box diagonal, or the user's overrides."""
+    if settings.use_auto_distances:
+        return flowcore.auto_distances(readiness.pair_diagonal(high, low))
+    return (float(settings.cage_extrusion),
+            float(settings.max_ray_distance))
+
+
+def run_bake(context, settings, report):
+    """The whole gauntlet. ``report`` is the operator's self.report.
+    Returns an info dict on success; raises BakeFlowError otherwise."""
+    high, low = _validate_pair(settings)
+
+    # Stage 2 gate: hard failures block, warnings are reported.
+    items = readiness.evaluate(low)
+    fails = readiness.blocking(items)
+    if fails:
+        raise BakeFlowError(
+            "Low-poly not ready: " + "; ".join(
+                "%s (%s)" % (i.label, i.detail) for i in fails))
+    for item in readiness.warnings(items):
+        report({'WARNING'}, "Checklist: %s - %s"
+               % (item.label, item.detail))
+
+    # Output path before any heavy work (fail fast, actionably).
+    blend_dir = os.path.dirname(bpy.data.filepath)
+    out_path, err = flowcore.resolve_output_path(
+        settings.output_path, blend_dir, low.name, settings.bake_type)
+    if err:
+        raise BakeFlowError(err)
+
+    resolution_px = RESOLUTIONS[settings.resolution]
+    extrusion, max_ray = resolved_distances(settings, high, low)
+
+    img = ensure_bake_image(low.name, settings.bake_type, resolution_px)
+    mat, tex = ensure_material_target(low, img)
+
+    # --- remember state, bake, restore in finally ---------------------------
+    scene = context.scene
+    prev_engine = scene.render.engine
+    prev_selected = [ob.name for ob in context.selected_objects]
+    prev_active = context.view_layer.objects.active
+    prev_active_name = prev_active.name if prev_active else None
+
+    if context.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+    try:
+        try:
+            scene.render.engine = 'CYCLES'
+        except Exception:
+            raise BakeFlowError(
+                "Cannot switch to Cycles (baking requires it) - is the "
+                "Cycles render engine add-on enabled?")
+        for ob in context.selected_objects:
+            ob.select_set(False)
+        high.select_set(True)
+        low.select_set(True)
+        context.view_layer.objects.active = low
+
+        try:
+            result = bpy.ops.object.bake(
+                **_bake_kwargs(settings, extrusion, max_ray))
+        except RuntimeError as exc:
+            raise BakeFlowError(
+                "Bake failed: %s" % str(exc).strip().splitlines()[-1])
+        if 'FINISHED' not in result:
+            raise BakeFlowError("Bake did not finish (%r) - see the "
+                                "status bar / console for the reason"
+                                % (result,))
+    finally:
+        try:
+            scene.render.engine = prev_engine
+        except Exception:
+            pass
+        try:
+            for ob in context.selected_objects:
+                ob.select_set(False)
+            for name in prev_selected:
+                ob = context.view_layer.objects.get(name)
+                if ob is not None:
+                    ob.select_set(True)
+            if prev_active_name is not None:
+                context.view_layer.objects.active = \
+                    context.view_layer.objects.get(prev_active_name)
+        except Exception:
+            pass
+
+    # --- save to disk ---------------------------------------------------------
+    out_dir = os.path.dirname(out_path)
+    try:
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        img.filepath_raw = out_path
+        img.file_format = 'PNG'
+        img.save()
+    except (OSError, RuntimeError) as exc:
+        raise BakeFlowError("Baked, but saving to %r failed: %s"
+                            % (out_path, str(exc).strip()))
+
+    # --- optional material wiring ----------------------------------------------
+    wired = False
+    if settings.wire_normal_map and settings.bake_type == 'NORMAL':
+        wired = wire_normal_map(mat, tex)
+        if not wired:
+            report({'WARNING'},
+                   "Baked and saved, but the material has no Principled "
+                   "BSDF - normal map not wired")
+
+    return {
+        "image": img,
+        "path": out_path,
+        "resolution": resolution_px,
+        "extrusion": extrusion,
+        "max_ray_distance": max_ray,
+        "wired": wired,
+    }
