@@ -32,18 +32,18 @@ def check(name, cond, detail=""):
 def main():
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
-    import bake_flow
-    from bake_flow import retopo
+    import ez_bake
+    from ez_bake import retopo
 
-    bake_flow.register()
+    ez_bake.register()
     try:
-        run(bake_flow, retopo)
+        run(ez_bake, retopo)
     finally:
-        bake_flow.unregister()
+        ez_bake.unregister()
 
 
-def run(bake_flow, retopo):
-    s = bpy.context.scene.bake_flow
+def run(ez_bake, retopo):
+    s = bpy.context.scene.ez_bake
 
     # --- QuadriFlow primary path ---------------------------------------------
     bpy.ops.mesh.primitive_uv_sphere_add(segments=32, ring_count=16)
@@ -52,13 +52,13 @@ def run(bake_flow, retopo):
     check("high sphere has 512 faces", len(high.data.polygons) == 512)
 
     check("op poll fails with no high-poly set",
-          not bpy.ops.object.bake_flow_create_lowpoly.poll())
+          not bpy.ops.object.ez_bake_create_lowpoly.poll())
     s.high_object = high
     check("op poll passes with a high-poly set",
-          bpy.ops.object.bake_flow_create_lowpoly.poll())
+          bpy.ops.object.ez_bake_create_lowpoly.poll())
 
     s.target_faces = 200
-    result = bpy.ops.object.bake_flow_create_lowpoly()
+    result = bpy.ops.object.ez_bake_create_lowpoly()
     check("create-lowpoly returned FINISHED", result == {'FINISHED'})
     low = s.low_object
     check("low-poly pointer was set to the new object", low is not None)
@@ -99,7 +99,7 @@ def run(bake_flow, retopo):
 
     retopo._run_quadriflow = boom
     try:
-        result = bpy.ops.object.bake_flow_create_lowpoly()
+        result = bpy.ops.object.ez_bake_create_lowpoly()
     finally:
         retopo._run_quadriflow = real_run
     check("fallback run returned FINISHED (with a WARNING report)",
@@ -146,7 +146,7 @@ def run(bake_flow, retopo):
     bpy.context.collection.objects.link(empty_ob)
     s.high_object = empty_ob
     try:
-        bpy.ops.object.bake_flow_create_lowpoly()
+        bpy.ops.object.ez_bake_create_lowpoly()
         raised = False
         msg = ""
     except RuntimeError as exc:   # background: {'ERROR'} report raises

@@ -110,7 +110,7 @@ def create_lowpoly_candidate(context, high, target_faces):
 
     # --- Decimate fallback -------------------------------------------------
     try:
-        mod = dup.modifiers.new("BakeFlowDecimate", 'DECIMATE')
+        mod = dup.modifiers.new("EZBakeDecimate", 'DECIMATE')
         mod.decimate_type = 'COLLAPSE'
         # Collapse decimation counts in triangles, so derive the ratio
         # from the triangulated face count — a quad input would

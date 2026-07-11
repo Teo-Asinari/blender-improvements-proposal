@@ -34,27 +34,27 @@ def check(name, cond, detail=""):
 def main():
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
-    import bake_flow
+    import ez_bake
 
     # --- bl_info ------------------------------------------------------------
     check("bl_info name/author/version",
-          bake_flow.bl_info.get("name") == "Bake Flow"
-          and bake_flow.bl_info.get("author") == "Teo Asinari"
-          and bake_flow.bl_info.get("version") == (1, 0, 0))
+          ez_bake.bl_info.get("name") == "EZ-Bake"
+          and ez_bake.bl_info.get("author") == "Teo Asinari"
+          and ez_bake.bl_info.get("version") == (1, 0, 0))
 
     # --- register -------------------------------------------------------------
-    bake_flow.register()
+    ez_bake.register()
 
-    for op in ("bake_flow_create_lowpoly", "bake_flow_bake",
-               "bake_flow_apply_scale", "bake_flow_recalc_outside"):
+    for op in ("ez_bake_create_lowpoly", "ez_bake_bake",
+               "ez_bake_apply_scale", "ez_bake_recalc_outside"):
         check("operator object.%s registered" % op,
               hasattr(bpy.types, "OBJECT_OT_%s" % op)
               and getattr(bpy.ops.object, op).idname_py()
               == "object.%s" % op)
 
     check("scene settings pointer registered",
-          hasattr(bpy.context.scene, "bake_flow"))
-    s = bpy.context.scene.bake_flow
+          hasattr(bpy.context.scene, "ez_bake"))
+    s = bpy.context.scene.ez_bake
     props = s.bl_rna.properties
     check("defaults: resolution 2K, margin 16, target 5000, auto "
           "distances on, wiring on",
@@ -79,15 +79,15 @@ def main():
     bpy.ops.mesh.primitive_cube_add()
     mesh_ob = bpy.context.active_object
     check("mesh-only poll rejects a camera, accepts a mesh",
-          bake_flow._mesh_object_poll(s, cam) is False
-          and bake_flow._mesh_object_poll(s, mesh_ob) is True)
+          ez_bake._mesh_object_poll(s, cam) is False
+          and ez_bake._mesh_object_poll(s, mesh_ob) is True)
 
     # --- panel + menu discoverability --------------------------------------------
-    check("N-panel registered in its own 'Bake Flow' tab",
-          hasattr(bpy.types, "VIEW3D_PT_bake_flow")
-          and bpy.types.VIEW3D_PT_bake_flow.bl_category == "Bake Flow"
-          and bpy.types.VIEW3D_PT_bake_flow.bl_space_type == 'VIEW_3D'
-          and bpy.types.VIEW3D_PT_bake_flow.bl_region_type == 'UI')
+    check("N-panel registered in its own 'EZ-Bake' tab",
+          hasattr(bpy.types, "VIEW3D_PT_ez_bake")
+          and bpy.types.VIEW3D_PT_ez_bake.bl_category == "EZ-Bake"
+          and bpy.types.VIEW3D_PT_ez_bake.bl_space_type == 'VIEW_3D'
+          and bpy.types.VIEW3D_PT_ez_bake.bl_region_type == 'UI')
 
     def menu_has_entry(menu):
         try:
@@ -105,9 +105,9 @@ def main():
     # return False without raising.
     check("sibling probes are False when the add-ons are absent "
           "(and do not explode)",
-          bake_flow.sibling_op_available(bake_flow.SEAM_TOOL_OT_TYPE)
+          ez_bake.sibling_op_available(ez_bake.SEAM_TOOL_OT_TYPE)
           is False
-          and bake_flow.sibling_op_available(bake_flow.OVERLAY_OT_TYPE)
+          and ez_bake.sibling_op_available(ez_bake.OVERLAY_OT_TYPE)
           is False)
 
     class MESH_OT_seam_path_interactive(bpy.types.Operator):
@@ -121,15 +121,15 @@ def main():
     bpy.utils.register_class(MESH_OT_seam_path_interactive)
     try:
         check("probe turns True when the sibling operator registers",
-              bake_flow.sibling_op_available(bake_flow.SEAM_TOOL_OT_TYPE)
+              ez_bake.sibling_op_available(ez_bake.SEAM_TOOL_OT_TYPE)
               is True)
     finally:
         bpy.utils.unregister_class(MESH_OT_seam_path_interactive)
     check("probe returns to False after the sibling unregisters",
-          bake_flow.sibling_op_available(bake_flow.SEAM_TOOL_OT_TYPE)
+          ez_bake.sibling_op_available(ez_bake.SEAM_TOOL_OT_TYPE)
           is False)
 
-    draw_src = inspect.getsource(bpy.types.VIEW3D_PT_bake_flow.draw)
+    draw_src = inspect.getsource(bpy.types.VIEW3D_PT_ez_bake.draw)
     check("panel draw gates the sibling buttons on the probe (no "
           "cross-imports)",
           "sibling_op_available" in draw_src
@@ -147,10 +147,10 @@ def main():
     s.low_object = cube
     s.margin = 33
     s.output_path = "//maps/"
-    blend = os.path.join(tempfile.gettempdir(), "bake_flow_persist.blend")
+    blend = os.path.join(tempfile.gettempdir(), "ez_bake_persist.blend")
     bpy.ops.wm.save_as_mainfile(filepath=blend)
     bpy.ops.wm.open_mainfile(filepath=blend)
-    s2 = bpy.context.scene.bake_flow
+    s2 = bpy.context.scene.ez_bake
     check("scene settings survive save/reopen (margin, path)",
           s2.margin == 33 and s2.output_path == "//maps/",
           "got %r %r" % (s2.margin, s2.output_path))
@@ -159,24 +159,24 @@ def main():
           and s2.low_object.name == "PersistLow")
 
     # --- unregister ----------------------------------------------------------------------
-    bake_flow.unregister()
+    ez_bake.unregister()
     check("operators unregistered",
-          not hasattr(bpy.types, "OBJECT_OT_bake_flow_bake"))
+          not hasattr(bpy.types, "OBJECT_OT_ez_bake_bake"))
     check("scene property removed",
-          "bake_flow" not in bpy.types.Scene.bl_rna.properties)
+          "ez_bake" not in bpy.types.Scene.bl_rna.properties)
     check("panel unregistered",
-          not hasattr(bpy.types, "VIEW3D_PT_bake_flow"))
+          not hasattr(bpy.types, "VIEW3D_PT_ez_bake"))
     check("menu entry removed",
           not menu_has_entry(bpy.types.VIEW3D_MT_object))
 
     # --- re-register cycle ------------------------------------------------------------------
-    bake_flow.register()
+    ez_bake.register()
     check("re-register restores the operators and settings",
-          hasattr(bpy.types, "OBJECT_OT_bake_flow_bake")
-          and hasattr(bpy.context.scene, "bake_flow"))
-    bake_flow.unregister()
-    bake_flow.register()
-    bake_flow.unregister()
+          hasattr(bpy.types, "OBJECT_OT_ez_bake_bake")
+          and hasattr(bpy.context.scene, "ez_bake"))
+    ez_bake.unregister()
+    ez_bake.register()
+    ez_bake.unregister()
     check("register/unregister cycle clean", True)
 
 

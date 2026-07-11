@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Bake Flow — guided high-poly -> low-poly normal-baking workflow.
+"""EZ-Bake — guided high-poly -> low-poly normal-baking workflow.
 
 One sidebar panel walks the pipeline as three sequential stages:
 
@@ -13,7 +13,7 @@ One sidebar panel walks the pipeline as three sequential stages:
    normal bake and saves the PNG, replacing Blender's ~15-step manual
    setup across three editors.
 
-Settings live in a SCENE-level PropertyGroup (bpy.types.Scene.bake_flow)
+Settings live in a SCENE-level PropertyGroup (bpy.types.Scene.ez_bake)
 — unlike the sibling overlay add-on's WindowManager properties, these
 must survive save/load: the high/low pair and bake settings are part of
 the asset, not of the UI session (WM properties are runtime-only and
@@ -22,11 +22,11 @@ a bake configuration).
 """
 
 bl_info = {
-    "name": "Bake Flow",
+    "name": "EZ-Bake",
     "author": "Teo Asinari",
     "version": (1, 0, 0),
     "blender": (4, 2, 0),
-    "location": "3D Viewport > Sidebar (N) > Bake Flow tab",
+    "location": "3D Viewport > Sidebar (N) > EZ-Bake tab",
     "description": "Guided high-poly to low-poly normal baking: pair "
                    "setup, UV readiness checklist, one-button Cycles "
                    "normal bake with saving and material wiring",
@@ -82,7 +82,7 @@ def _mesh_object_poll(self, obj):
     return obj.type == 'MESH'
 
 
-class BakeFlowSettings(bpy.types.PropertyGroup):
+class EZBakeSettings(bpy.types.PropertyGroup):
     high_object: PointerProperty(
         name="High-Poly",
         description="Source of detail: the dense sculpt to bake FROM",
@@ -177,22 +177,22 @@ class BakeFlowSettings(bpy.types.PropertyGroup):
 # Operators
 # ---------------------------------------------------------------------------
 
-class OBJECT_OT_bake_flow_create_lowpoly(bpy.types.Operator):
+class OBJECT_OT_ez_bake_create_lowpoly(bpy.types.Operator):
     """Duplicate the high-poly and remesh it to the target face count
     (QuadriFlow, or Decimate when QuadriFlow fails) — a starting point
     for retopo, not animation-grade topology"""
-    bl_idname = "object.bake_flow_create_lowpoly"
+    bl_idname = "object.ez_bake_create_lowpoly"
     bl_label = "Create Low-Poly Candidate"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
-        s = getattr(context.scene, "bake_flow", None)
+        s = getattr(context.scene, "ez_bake", None)
         return (s is not None and s.high_object is not None
                 and s.high_object.type == 'MESH')
 
     def execute(self, context):
-        s = context.scene.bake_flow
+        s = context.scene.ez_bake
         try:
             low, method, detail = retopo.create_lowpoly_candidate(
                 context, s.high_object, s.target_faces)
@@ -216,25 +216,25 @@ class OBJECT_OT_bake_flow_create_lowpoly(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class OBJECT_OT_bake_flow_bake(bpy.types.Operator):
+class OBJECT_OT_ez_bake_bake(bpy.types.Operator):
     """Bake the high-poly's normals onto the low-poly's UV layout with
     Cycles, save the PNG and (optionally) wire it into the material.
     Blocks the UI while baking (synchronous) — see the README"""
-    bl_idname = "object.bake_flow_bake"
+    bl_idname = "object.ez_bake_bake"
     bl_label = "Bake Normal Map"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
-        s = getattr(context.scene, "bake_flow", None)
+        s = getattr(context.scene, "ez_bake", None)
         return (s is not None and s.high_object is not None
                 and s.low_object is not None)
 
     def execute(self, context):
-        s = context.scene.bake_flow
+        s = context.scene.ez_bake
         try:
             info = baking.run_bake(context, s, self.report)
-        except baking.BakeFlowError as exc:
+        except baking.EZBakeError as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
         readiness.invalidate()
@@ -249,20 +249,20 @@ class OBJECT_OT_bake_flow_bake(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class OBJECT_OT_bake_flow_apply_scale(bpy.types.Operator):
+class OBJECT_OT_ez_bake_apply_scale(bpy.types.Operator):
     """Apply the low-poly object's scale (checklist fix: non-unit
     scale distorts the bake cage and tangent basis)"""
-    bl_idname = "object.bake_flow_apply_scale"
+    bl_idname = "object.ez_bake_apply_scale"
     bl_label = "Apply Scale (Low-Poly)"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
-        s = getattr(context.scene, "bake_flow", None)
+        s = getattr(context.scene, "ez_bake", None)
         return s is not None and s.low_object is not None
 
     def execute(self, context):
-        low = context.scene.bake_flow.low_object
+        low = context.scene.ez_bake.low_object
         prev_selected = [ob.name for ob in context.selected_objects]
         prev_active = context.view_layer.objects.active
         if context.mode != 'OBJECT':
@@ -292,20 +292,20 @@ class OBJECT_OT_bake_flow_apply_scale(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class OBJECT_OT_bake_flow_recalc_outside(bpy.types.Operator):
+class OBJECT_OT_ez_bake_recalc_outside(bpy.types.Operator):
     """Recalculate the low-poly's normals to point outside (checklist
     fix for mirrored/flipped normals)"""
-    bl_idname = "object.bake_flow_recalc_outside"
+    bl_idname = "object.ez_bake_recalc_outside"
     bl_label = "Recalculate Outside (Low-Poly)"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
-        s = getattr(context.scene, "bake_flow", None)
+        s = getattr(context.scene, "ez_bake", None)
         return s is not None and s.low_object is not None
 
     def execute(self, context):
-        low = context.scene.bake_flow.low_object
+        low = context.scene.ez_bake.low_object
         prev_active = context.view_layer.objects.active
         if context.mode != 'OBJECT':
             bpy.ops.object.mode_set(mode='OBJECT')
@@ -351,16 +351,16 @@ def _pair_ready(s):
             and s.high_object != s.low_object)
 
 
-class VIEW3D_PT_bake_flow(bpy.types.Panel):
-    bl_idname = "VIEW3D_PT_bake_flow"
-    bl_label = "Bake Flow"
+class VIEW3D_PT_ez_bake(bpy.types.Panel):
+    bl_idname = "VIEW3D_PT_ez_bake"
+    bl_label = "EZ-Bake"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Bake Flow"
+    bl_category = "EZ-Bake"
 
     def draw(self, context):
         layout = self.layout
-        s = context.scene.bake_flow
+        s = context.scene.ez_bake
         pair_ok = _pair_ready(s)
 
         # --- Stage 1: pair ------------------------------------------------
@@ -371,7 +371,7 @@ class VIEW3D_PT_bake_flow(bpy.types.Panel):
         box.prop(s, "low_object")
         col = box.column(align=True)
         col.prop(s, "target_faces")
-        col.operator(OBJECT_OT_bake_flow_create_lowpoly.bl_idname,
+        col.operator(OBJECT_OT_ez_bake_create_lowpoly.bl_idname,
                      icon='MOD_REMESH')
         if s.high_object == s.low_object and s.high_object is not None:
             box.label(text="High and low are the same object",
@@ -397,11 +397,11 @@ class VIEW3D_PT_bake_flow(bpy.types.Panel):
             states = {i.key: i.state for i in items}
             if states.get("scale") == readiness.WARN:
                 fixes.operator(
-                    OBJECT_OT_bake_flow_apply_scale.bl_idname,
+                    OBJECT_OT_ez_bake_apply_scale.bl_idname,
                     icon='CON_SIZELIKE')
             if states.get("normals") == readiness.WARN:
                 fixes.operator(
-                    OBJECT_OT_bake_flow_recalc_outside.bl_idname,
+                    OBJECT_OT_ez_bake_recalc_outside.bl_idname,
                     icon='NORMALS_FACE')
             # Sibling conveniences: shown only when installed; absent
             # siblings show nothing (and never error).
@@ -437,15 +437,15 @@ class VIEW3D_PT_bake_flow(bpy.types.Panel):
         col.prop(s, "wire_normal_map")
         row = box.row()
         row.scale_y = 1.4
-        row.operator(OBJECT_OT_bake_flow_bake.bl_idname,
+        row.operator(OBJECT_OT_ez_bake_bake.bl_idname,
                      icon='RENDER_STILL')
 
 
 def _menu_draw(self, context):
     """Object menu entries so F3 search finds the operators."""
     self.layout.separator()
-    self.layout.operator(OBJECT_OT_bake_flow_create_lowpoly.bl_idname)
-    self.layout.operator(OBJECT_OT_bake_flow_bake.bl_idname)
+    self.layout.operator(OBJECT_OT_ez_bake_create_lowpoly.bl_idname)
+    self.layout.operator(OBJECT_OT_ez_bake_bake.bl_idname)
 
 
 # ---------------------------------------------------------------------------
@@ -453,12 +453,12 @@ def _menu_draw(self, context):
 # ---------------------------------------------------------------------------
 
 _classes = (
-    BakeFlowSettings,
-    OBJECT_OT_bake_flow_create_lowpoly,
-    OBJECT_OT_bake_flow_bake,
-    OBJECT_OT_bake_flow_apply_scale,
-    OBJECT_OT_bake_flow_recalc_outside,
-    VIEW3D_PT_bake_flow,
+    EZBakeSettings,
+    OBJECT_OT_ez_bake_create_lowpoly,
+    OBJECT_OT_ez_bake_bake,
+    OBJECT_OT_ez_bake_apply_scale,
+    OBJECT_OT_ez_bake_recalc_outside,
+    VIEW3D_PT_ez_bake,
 )
 
 _MENUS = ("VIEW3D_MT_object",)
@@ -467,7 +467,7 @@ _MENUS = ("VIEW3D_MT_object",)
 def register():
     for cls in _classes:
         bpy.utils.register_class(cls)
-    bpy.types.Scene.bake_flow = PointerProperty(type=BakeFlowSettings)
+    bpy.types.Scene.ez_bake = PointerProperty(type=EZBakeSettings)
     for menu_name in _MENUS:
         menu = getattr(bpy.types, menu_name, None)
         if menu is not None:
@@ -482,7 +482,7 @@ def unregister():
                 menu.remove(_menu_draw)
             except Exception:
                 pass
-    del bpy.types.Scene.bake_flow
+    del bpy.types.Scene.ez_bake
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)
 

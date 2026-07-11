@@ -1,4 +1,4 @@
-# Bake Flow
+# EZ-Bake
 
 A **guided high-poly → low-poly normal-baking workflow** for Blender.
 Setting up a high→low normal bake by hand is roughly fifteen
@@ -13,7 +13,7 @@ wire the result through a Normal Map node into the BSDF. Forget any
 one of these and the bake is black, empty, sRGB-crushed or written
 into the void.
 
-Bake Flow collapses all of it into **one sidebar panel** that presents
+EZ-Bake collapses all of it into **one sidebar panel** that presents
 the pipeline as three sequential stages with status checkmarks, and
 one **Bake Normal Map** button that runs the whole gauntlet — with
 every failure reported as a clear, actionable message instead of a
@@ -27,10 +27,10 @@ it live in a minute.)*
 Legacy add-on packaging (`bl_info`), works on Blender 4.2+ / 5.x
 (probed throughout on 5.1.2):
 
-1. Zip the `bake_flow` folder (the folder itself, so the zip contains
-   `bake_flow/__init__.py`).
+1. Zip the `ez_bake` folder (the folder itself, so the zip contains
+   `ez_bake/__init__.py`).
 2. Blender: `Edit > Preferences > Add-ons > Install from Disk…`, pick
-   the zip, enable **Bake Flow**.
+   the zip, enable **EZ-Bake**.
 
 For development, symlink/copy the folder into your Blender
 `scripts/addons/` directory instead.
@@ -63,7 +63,7 @@ instead, and the report tells you which path was used.
 > that deforms, treat it as a base to retopologize properly. Either
 > way the remesh has **no UVs** — stage 2 is next, always.
 
-Settings live at **scene level** (`Scene.bake_flow`), so the pair and
+Settings live at **scene level** (`Scene.ez_bake`), so the pair and
 all bake settings **survive save/load** — unlike a sibling add-on's
 WindowManager properties, which are deliberately runtime-only (right
 for a viewport toggle, wrong for a bake configuration that belongs to
@@ -189,7 +189,7 @@ surface), badly matched pairs (raise both — misses show as flat
 Headless suite against the real binary (WSL → Windows Blender):
 
 ```bash
-addons/bake_flow/tests/run_tests.sh
+addons/ez_bake/tests/run_tests.sh
 # optionally: run_tests.sh "/path/to/blender.exe"
 ```
 
@@ -232,7 +232,7 @@ Scene properties, not WindowManager ones.
 
 ### GUI checklist (not coverable headless)
 
-1. Sidebar → **Bake Flow** tab: three numbered stage boxes with
+1. Sidebar → **EZ-Bake** tab: three numbered stage boxes with
    status icons; stage 2 and 3 show hints until both objects are
    picked.
 2. Pick a high-poly sculpt, hit **Create Low-Poly Candidate**: a

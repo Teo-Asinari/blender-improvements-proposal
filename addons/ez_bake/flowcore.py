@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Pure logic for the Bake Flow add-on: extrusion/ray auto-heuristic,
+"""Pure logic for the EZ-Bake add-on: extrusion/ray auto-heuristic,
 output path and image naming, UV-layout degeneracy math, scale checks
 and the decimate fallback ratio.
 
@@ -28,7 +28,7 @@ BAKE_TYPES = {
     },
     # TODO: AO, cavity/curvature, displacement — same machinery: add an
     # entry here (suffix + colorspace), a matching EnumProperty item in
-    # __init__.BakeFlowSettings.bake_type, and a per-type settings
+    # __init__.EZBakeSettings.bake_type, and a per-type settings
     # branch in baking._bake_kwargs. Image naming, node creation and
     # saving already switch on this table.
 }

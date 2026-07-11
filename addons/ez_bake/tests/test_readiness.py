@@ -35,7 +35,7 @@ def states(items):
 def main():
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
-    from bake_flow import readiness
+    from ez_bake import readiness
 
     OK, WARN, FAIL = readiness.OK, readiness.WARN, readiness.FAIL
 

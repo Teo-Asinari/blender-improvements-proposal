@@ -19,7 +19,7 @@ restoring) -> save the image to disk (dirs created) -> optionally wire
 Image Texture -> Normal Map -> Principled BSDF Normal -> restore
 engine + selection in a finally block.
 
-Every failure raises BakeFlowError with an actionable message; the
+Every failure raises EZBakeError with an actionable message; the
 operator surfaces it via self.report — never a traceback.
 """
 
@@ -31,13 +31,13 @@ from . import flowcore
 from . import readiness
 
 
-class BakeFlowError(Exception):
+class EZBakeError(Exception):
     """Actionable failure (message is shown via self.report)."""
 
 
 # Node names: stable identifiers so re-bakes reuse instead of piling up.
-BAKE_NODE_NAME = "BakeFlow Bake Target"
-NORMAL_MAP_NODE_NAME = "BakeFlow Normal Map"
+BAKE_NODE_NAME = "EZBake Bake Target"
+NORMAL_MAP_NODE_NAME = "EZBake Normal Map"
 
 # Enum identifier -> pixels. Module-level so tests can shrink it.
 RESOLUTIONS = {'1K': 1024, '2K': 2048, '4K': 4096}
@@ -47,17 +47,17 @@ def _validate_pair(settings):
     high = settings.high_object
     low = settings.low_object
     if high is None:
-        raise BakeFlowError("No high-poly object set (stage 1)")
+        raise EZBakeError("No high-poly object set (stage 1)")
     if low is None:
-        raise BakeFlowError("No low-poly object set (stage 1)")
+        raise EZBakeError("No low-poly object set (stage 1)")
     if high == low:
-        raise BakeFlowError("High-poly and low-poly are the same object")
+        raise EZBakeError("High-poly and low-poly are the same object")
     for label, ob in (("High", high), ("Low", low)):
         if ob.type != 'MESH':
-            raise BakeFlowError("%s-poly object %r is not a mesh"
+            raise EZBakeError("%s-poly object %r is not a mesh"
                                 % (label, ob.name))
         if ob.name not in bpy.context.view_layer.objects:
-            raise BakeFlowError(
+            raise EZBakeError(
                 "%s-poly object %r is not in the current view layer"
                 % (label, ob.name))
     return high, low
@@ -165,14 +165,14 @@ def resolved_distances(settings, high, low):
 
 def run_bake(context, settings, report):
     """The whole gauntlet. ``report`` is the operator's self.report.
-    Returns an info dict on success; raises BakeFlowError otherwise."""
+    Returns an info dict on success; raises EZBakeError otherwise."""
     high, low = _validate_pair(settings)
 
     # Stage 2 gate: hard failures block, warnings are reported.
     items = readiness.evaluate(low)
     fails = readiness.blocking(items)
     if fails:
-        raise BakeFlowError(
+        raise EZBakeError(
             "Low-poly not ready: " + "; ".join(
                 "%s (%s)" % (i.label, i.detail) for i in fails))
     for item in readiness.warnings(items):
@@ -184,7 +184,7 @@ def run_bake(context, settings, report):
     out_path, err = flowcore.resolve_output_path(
         settings.output_path, blend_dir, low.name, settings.bake_type)
     if err:
-        raise BakeFlowError(err)
+        raise EZBakeError(err)
 
     resolution_px = RESOLUTIONS[settings.resolution]
     extrusion, max_ray = resolved_distances(settings, high, low)
@@ -205,7 +205,7 @@ def run_bake(context, settings, report):
         try:
             scene.render.engine = 'CYCLES'
         except Exception:
-            raise BakeFlowError(
+            raise EZBakeError(
                 "Cannot switch to Cycles (baking requires it) - is the "
                 "Cycles render engine add-on enabled?")
         for ob in context.selected_objects:
@@ -218,10 +218,10 @@ def run_bake(context, settings, report):
             result = bpy.ops.object.bake(
                 **_bake_kwargs(settings, extrusion, max_ray))
         except RuntimeError as exc:
-            raise BakeFlowError(
+            raise EZBakeError(
                 "Bake failed: %s" % str(exc).strip().splitlines()[-1])
         if 'FINISHED' not in result:
-            raise BakeFlowError("Bake did not finish (%r) - see the "
+            raise EZBakeError("Bake did not finish (%r) - see the "
                                 "status bar / console for the reason"
                                 % (result,))
     finally:
@@ -251,7 +251,7 @@ def run_bake(context, settings, report):
         img.file_format = 'PNG'
         img.save()
     except (OSError, RuntimeError) as exc:
-        raise BakeFlowError("Baked, but saving to %r failed: %s"
+        raise EZBakeError("Baked, but saving to %r failed: %s"
                             % (out_path, str(exc).strip()))
 
     # --- optional material wiring ----------------------------------------------
