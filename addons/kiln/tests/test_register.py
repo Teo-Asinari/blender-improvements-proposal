@@ -34,27 +34,27 @@ def check(name, cond, detail=""):
 def main():
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
-    import ez_bake
+    import kiln
 
     # --- bl_info ------------------------------------------------------------
     check("bl_info name/author/version",
-          ez_bake.bl_info.get("name") == "EZ-Bake"
-          and ez_bake.bl_info.get("author") == "Teo Asinari"
-          and ez_bake.bl_info.get("version") == (1, 0, 1))
+          kiln.bl_info.get("name") == "Kiln"
+          and kiln.bl_info.get("author") == "Teo Asinari"
+          and kiln.bl_info.get("version") == (1, 0, 1))
 
     # --- register -------------------------------------------------------------
-    ez_bake.register()
+    kiln.register()
 
-    for op in ("ez_bake_create_lowpoly", "ez_bake_bake",
-               "ez_bake_apply_scale", "ez_bake_recalc_outside"):
+    for op in ("kiln_create_lowpoly", "kiln_bake",
+               "kiln_apply_scale", "kiln_recalc_outside"):
         check("operator object.%s registered" % op,
               hasattr(bpy.types, "OBJECT_OT_%s" % op)
               and getattr(bpy.ops.object, op).idname_py()
               == "object.%s" % op)
 
     check("scene settings pointer registered",
-          hasattr(bpy.context.scene, "ez_bake"))
-    s = bpy.context.scene.ez_bake
+          hasattr(bpy.context.scene, "kiln"))
+    s = bpy.context.scene.kiln
     props = s.bl_rna.properties
     check("defaults: resolution 2K, margin 16, target 5000, auto "
           "distances on, wiring on",
@@ -85,15 +85,15 @@ def main():
     bpy.ops.mesh.primitive_cube_add()
     mesh_ob = bpy.context.active_object
     check("mesh-only poll rejects a camera, accepts a mesh",
-          ez_bake._mesh_object_poll(s, cam) is False
-          and ez_bake._mesh_object_poll(s, mesh_ob) is True)
+          kiln._mesh_object_poll(s, cam) is False
+          and kiln._mesh_object_poll(s, mesh_ob) is True)
 
     # --- panel + menu discoverability --------------------------------------------
-    check("N-panel registered in its own 'EZ-Bake' tab",
-          hasattr(bpy.types, "VIEW3D_PT_ez_bake")
-          and bpy.types.VIEW3D_PT_ez_bake.bl_category == "EZ-Bake"
-          and bpy.types.VIEW3D_PT_ez_bake.bl_space_type == 'VIEW_3D'
-          and bpy.types.VIEW3D_PT_ez_bake.bl_region_type == 'UI')
+    check("N-panel registered in its own 'Kiln' tab",
+          hasattr(bpy.types, "VIEW3D_PT_kiln")
+          and bpy.types.VIEW3D_PT_kiln.bl_category == "Kiln"
+          and bpy.types.VIEW3D_PT_kiln.bl_space_type == 'VIEW_3D'
+          and bpy.types.VIEW3D_PT_kiln.bl_region_type == 'UI')
 
     def menu_has_entry(menu):
         try:
@@ -105,7 +105,7 @@ def main():
           menu_has_entry(bpy.types.VIEW3D_MT_object))
 
     # Menu entries appear without the panel's stage context, so their
-    # text must carry the "EZ-Bake: " prefix (F3 menu search matches
+    # text must carry the "Kiln: " prefix (F3 menu search matches
     # substrings, so "Bake Normal Map" still finds the prefixed entry).
     # Drive _menu_draw with a recording layout stub.
     class _RecordingLayout:
@@ -122,14 +122,14 @@ def main():
         layout = _RecordingLayout()
 
     fake = _FakeMenu()
-    ez_bake._menu_draw(fake, bpy.context)
+    kiln._menu_draw(fake, bpy.context)
     labels = dict(fake.layout.entries)
-    check("menu entries are prefixed 'EZ-Bake: ' (context-free menu "
+    check("menu entries are prefixed 'Kiln: ' (context-free menu "
           "text; panel buttons stay short)",
-          labels.get("object.ez_bake_create_lowpoly")
-          == "EZ-Bake: Create Low-Poly Candidate"
-          and labels.get("object.ez_bake_bake")
-          == "EZ-Bake: Bake Normal Map",
+          labels.get("object.kiln_create_lowpoly")
+          == "Kiln: Create Low-Poly Candidate"
+          and labels.get("object.kiln_bake")
+          == "Kiln: Bake Normal Map",
           "got %r" % (fake.layout.entries,))
 
     # --- soft integration probes ------------------------------------------------------
@@ -139,9 +139,9 @@ def main():
     # return False without raising.
     check("sibling probes are False when the add-ons are absent "
           "(and do not explode)",
-          ez_bake.sibling_op_available(ez_bake.SEAM_TOOL_OT_TYPE)
+          kiln.sibling_op_available(kiln.SEAM_TOOL_OT_TYPE)
           is False
-          and ez_bake.sibling_op_available(ez_bake.OVERLAY_OT_TYPE)
+          and kiln.sibling_op_available(kiln.OVERLAY_OT_TYPE)
           is False)
 
     class MESH_OT_seam_path_interactive(bpy.types.Operator):
@@ -155,15 +155,15 @@ def main():
     bpy.utils.register_class(MESH_OT_seam_path_interactive)
     try:
         check("probe turns True when the sibling operator registers",
-              ez_bake.sibling_op_available(ez_bake.SEAM_TOOL_OT_TYPE)
+              kiln.sibling_op_available(kiln.SEAM_TOOL_OT_TYPE)
               is True)
     finally:
         bpy.utils.unregister_class(MESH_OT_seam_path_interactive)
     check("probe returns to False after the sibling unregisters",
-          ez_bake.sibling_op_available(ez_bake.SEAM_TOOL_OT_TYPE)
+          kiln.sibling_op_available(kiln.SEAM_TOOL_OT_TYPE)
           is False)
 
-    draw_src = inspect.getsource(bpy.types.VIEW3D_PT_ez_bake.draw)
+    draw_src = inspect.getsource(bpy.types.VIEW3D_PT_kiln.draw)
     check("panel draw gates the sibling buttons on the probe (no "
           "cross-imports)",
           "sibling_op_available" in draw_src
@@ -186,10 +186,10 @@ def main():
     s.low_object = cube
     s.margin = 33
     s.output_path = "//maps/"
-    blend = os.path.join(tempfile.gettempdir(), "ez_bake_persist.blend")
+    blend = os.path.join(tempfile.gettempdir(), "kiln_persist.blend")
     bpy.ops.wm.save_as_mainfile(filepath=blend)
     bpy.ops.wm.open_mainfile(filepath=blend)
-    s2 = bpy.context.scene.ez_bake
+    s2 = bpy.context.scene.kiln
     check("scene settings survive save/reopen (margin, path)",
           s2.margin == 33 and s2.output_path == "//maps/",
           "got %r %r" % (s2.margin, s2.output_path))
@@ -198,24 +198,24 @@ def main():
           and s2.low_object.name == "PersistLow")
 
     # --- unregister ----------------------------------------------------------------------
-    ez_bake.unregister()
+    kiln.unregister()
     check("operators unregistered",
-          not hasattr(bpy.types, "OBJECT_OT_ez_bake_bake"))
+          not hasattr(bpy.types, "OBJECT_OT_kiln_bake"))
     check("scene property removed",
-          "ez_bake" not in bpy.types.Scene.bl_rna.properties)
+          "kiln" not in bpy.types.Scene.bl_rna.properties)
     check("panel unregistered",
-          not hasattr(bpy.types, "VIEW3D_PT_ez_bake"))
+          not hasattr(bpy.types, "VIEW3D_PT_kiln"))
     check("menu entry removed",
           not menu_has_entry(bpy.types.VIEW3D_MT_object))
 
     # --- re-register cycle ------------------------------------------------------------------
-    ez_bake.register()
+    kiln.register()
     check("re-register restores the operators and settings",
-          hasattr(bpy.types, "OBJECT_OT_ez_bake_bake")
-          and hasattr(bpy.context.scene, "ez_bake"))
-    ez_bake.unregister()
-    ez_bake.register()
-    ez_bake.unregister()
+          hasattr(bpy.types, "OBJECT_OT_kiln_bake")
+          and hasattr(bpy.context.scene, "kiln"))
+    kiln.unregister()
+    kiln.register()
+    kiln.unregister()
     check("register/unregister cycle clean", True)
 
 

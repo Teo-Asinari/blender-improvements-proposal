@@ -28,7 +28,7 @@ def check(name, cond, detail=""):
 def main():
     import numpy as np
 
-    from ez_bake import flowcore
+    from kiln import flowcore
 
     # --- purity: flowcore must not import bpy or gpu ------------------------
     src = open(os.path.join(_ADDON_DIR, "flowcore.py")).read()

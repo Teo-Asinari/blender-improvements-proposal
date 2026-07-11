@@ -591,7 +591,7 @@ size (stack default, 2048 initially), colorspace per `ChannelDef`
 COLOR, 8-bit for masks, float toggle per stack for height). On every canvas
 activation the guard re-checks `image.colorspace_settings.name` against the
 registry and repairs (with an info report) if the user changed it — silent
-sRGB-crushed scalars are the classic failure EZ-Bake's README complains
+sRGB-crushed scalars are the classic failure Kiln's README complains
 about, and the same one-table discipline prevents it here.
 
 ### 5.4 WYSIWYG rule
@@ -643,23 +643,23 @@ brush today and with the GPU engine later without model changes.
 AO / curvature / cavity / edge masks are **bakes into mask images**, not
 live node chains (avoid #6 — in-graph feature maximalism is a permanent
 compile tax; issue #361's 66k-line shader is the tombstone). Reuse of
-EZ-Bake's proven patterns:
+Kiln's proven patterns:
 
-- Settings snapshot/restore in a `finally` (EZ-Bake does engine+selection;
+- Settings snapshot/restore in a `finally` (Kiln does engine+selection;
   we extend with the autopsy §4 book/restore checklist: samples=1, denoise
   off, modifiers, material_override…).
 - Emit-bake through a temp emission node for arbitrary quantities
   (curvature via geometry/bevel setups, AO via AO node), `type='EMIT'`,
   Cycles, CPU-retry-on-GPU-failure wrapper.
 - One `BAKE_TYPES`-style table drives naming, colorspace, node wiring — the
-  exact extension seam EZ-Bake's README already advertises.
+  exact extension seam Kiln's README already advertises.
 - **Provenance on the image** (`MaskState.bake_info`): generator type +
   params, so *Re-bake* and *Re-bake All Masks* are one click after mesh
   edits. Generator masks are thus cheap "smart masks": bake once, paint on
   top (a paint mask above a generator mask in the same layer's chain), rerun
   when the mesh changes.
 - Multi-object/UDIM/multi-material bake complications: out of scope until
-  phase 5; single mesh, active material, like EZ-Bake v1.
+  phase 5; single mesh, active material, like Kiln v1.
 
 ---
 
@@ -808,7 +808,7 @@ to our prototypes — ship small, watch, iterate (phase 7).
   Paint modes) and, later, Image Editor — the panel is the product.
 - **Menus**: all operators under a submenu in the Texture Paint *Paint* menu
   and Object *Material* context, entries prefixed with the add-on name so F3
-  substring search finds them (house rule, proven by EZ-Bake/overlay).
+  substring search finds them (house rule, proven by Kiln/overlay).
 - **A dedicated workspace** ("Painting" tab: viewport + image editor +
   sidebar pre-opened) ships in phase 7 as an *operator that creates it*, not
   a hard default.
@@ -870,7 +870,7 @@ exceptions):
   repairs a tampered image; new-image parameters per registry.
 - **Register lifecycle**: register/unregister/re-register, menu entries
   present, F3-discoverable operator labels prefixed.
-- Phase 4 adds a real headless CPU emit-bake test (EZ-Bake proved headless
+- Phase 4 adds a real headless CPU emit-bake test (Kiln proved headless
   Cycles bakes work on 5.1.2 — reuse that harness shape and its
   statistical-assertion trick).
 
@@ -958,12 +958,12 @@ phase with architectural risk; everything after it is additive by design.
 
 ## 13. Name candidates
 
-Kitchen-adjacent and playful, in the EZ-Bake spirit; all checked to be
+Kitchen-adjacent and playful, in the Kiln spirit; all checked to be
 generic dictionary words (no product-name collisions in the 3D-tool space
 that would read as trademark-adjacent):
 
-1. **Flapjack** — a stack of pancakes; *the* layer-stack pun, sits next to
-   EZ-Bake like they came from the same kitchen. Short, memorable,
+1. **Impasto** — a stack of pancakes; *the* layer-stack pun, sits next to
+   Kiln like they came from the same kitchen. Short, memorable,
    F3-searchable. *(recommended)*
 2. **Parfait** — layers you can see through the glass; evokes the
    translucent blend-mode stack; "perfect" pun built in.
@@ -974,4 +974,4 @@ that would read as trademark-adjacent):
    discoverability in an add-on listing; zero personality by design.
 
 Naming note: operator/menu labels get the chosen name as prefix (e.g.
-"Flapjack: Add Fill Layer") for F3 substring search, per house convention.
+"Impasto: Add Fill Layer") for F3 substring search, per house convention.

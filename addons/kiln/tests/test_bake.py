@@ -50,25 +50,25 @@ def pixel_stats(img):
 def main():
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
-    import ez_bake
-    from ez_bake import baking, flowcore, readiness
+    import kiln
+    from kiln import baking, flowcore, readiness
 
-    ez_bake.register()
+    kiln.register()
 
     # Shrink the resolution table: the spec'd fast-suite bake is
     # 128x128; everything else in the operator path stays real.
     real_res = dict(baking.RESOLUTIONS)
     baking.RESOLUTIONS['1K'] = 128
     try:
-        run(ez_bake, baking, flowcore, readiness)
+        run(kiln, baking, flowcore, readiness)
     finally:
         baking.RESOLUTIONS.clear()
         baking.RESOLUTIONS.update(real_res)
-        ez_bake.unregister()
+        kiln.unregister()
 
 
-def run(ez_bake, baking, flowcore, readiness):
-    s = bpy.context.scene.ez_bake
+def run(kiln, baking, flowcore, readiness):
+    s = bpy.context.scene.kiln
 
     # --- build the pair -------------------------------------------------------
     # High: UV sphere with a sine/cosine radial displacement (~2.3k tris
@@ -103,7 +103,7 @@ def run(ez_bake, baking, flowcore, readiness):
     s.wire_normal_map = True
 
     tmp = tempfile.gettempdir()
-    out_dir = os.path.join(tmp, "ez_bake_suite", "textures")
+    out_dir = os.path.join(tmp, "kiln_suite", "textures")
     # Trailing separator -> "this directory, default file name"; the
     # nested non-existent dirs also exercise directory creation.
     s.output_path = out_dir + os.sep
@@ -137,7 +137,7 @@ def run(ez_bake, baking, flowcore, readiness):
 
     # --- THE bake --------------------------------------------------------------------
     t_bake = time.time()
-    result = bpy.ops.object.ez_bake_bake()
+    result = bpy.ops.object.kiln_bake()
     t_bake = time.time() - t_bake
     print("  info bake operator wall time: %.1fs" % t_bake)
     check("bake operator returned FINISHED", result == {'FINISHED'})
@@ -199,7 +199,7 @@ def run(ez_bake, baking, flowcore, readiness):
 
     # --- re-bake reuses datablocks (no .001 pile-up) ---------------------------------------------
     n_nodes = len(nt.nodes)
-    result = bpy.ops.object.ez_bake_bake()
+    result = bpy.ops.object.kiln_bake()
     check("re-bake FINISHED", result == {'FINISHED'})
     check("re-bake reused the image datablock (no Retopo_normal.001)",
           bpy.data.images.get("Retopo_normal.001") is None
@@ -216,7 +216,7 @@ def run(ez_bake, baking, flowcore, readiness):
     bpy.context.collection.objects.link(low_b)
     s.low_object = low_b
     s.wire_normal_map = False
-    result = bpy.ops.object.ez_bake_bake()
+    result = bpy.ops.object.kiln_bake()
     check("wire-off bake FINISHED", result == {'FINISHED'})
     mat_b = low_b.active_material
     check("material auto-created for the material-less low-poly",
@@ -234,7 +234,7 @@ def run(ez_bake, baking, flowcore, readiness):
     def expect_error(name, fragment, setup, teardown):
         setup()
         try:
-            bpy.ops.object.ez_bake_bake()
+            bpy.ops.object.kiln_bake()
             raised, msg = False, ""
         except RuntimeError as exc:
             raised, msg = True, str(exc)

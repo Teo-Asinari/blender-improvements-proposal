@@ -1,4 +1,4 @@
-# EZ-Bake
+# Kiln
 
 A **guided high-poly → low-poly normal-baking workflow** for Blender.
 Setting up a high→low normal bake by hand is roughly fifteen
@@ -13,7 +13,7 @@ wire the result through a Normal Map node into the BSDF. Forget any
 one of these and the bake is black, empty, sRGB-crushed or written
 into the void.
 
-EZ-Bake collapses all of it into **one sidebar panel** that presents
+Kiln collapses all of it into **one sidebar panel** that presents
 the pipeline as three sequential stages with status checkmarks, and
 one **Bake Normal Map** button that runs the whole gauntlet — with
 every failure reported as a clear, actionable message instead of a
@@ -27,19 +27,19 @@ it live in a minute.)*
 Legacy add-on packaging (`bl_info`), works on Blender 4.2+ / 5.x
 (probed throughout on 5.1.2):
 
-1. Zip the `ez_bake` folder (the folder itself, so the zip contains
-   `ez_bake/__init__.py`).
+1. Zip the `kiln` folder (the folder itself, so the zip contains
+   `kiln/__init__.py`).
 2. Blender: `Edit > Preferences > Add-ons > Install from Disk…`, pick
-   the zip, enable **EZ-Bake**.
+   the zip, enable **Kiln**.
 
 For development, symlink/copy the folder into your Blender
 `scripts/addons/` directory instead.
 
 ## Usage: the three stages
 
-Open the 3D viewport **sidebar** (press `N`) and pick the **EZ-Bake**
+Open the 3D viewport **sidebar** (press `N`) and pick the **Kiln**
 tab. The two main operators are also in the **Object menu** as
-*EZ-Bake: Create Low-Poly Candidate* and *EZ-Bake: Bake Normal Map*
+*Kiln: Create Low-Poly Candidate* and *Kiln: Bake Normal Map*
 (the prefix keeps them identifiable in F3 menu search, which matches
 substrings — searching "bake normal" still finds the entry).
 
@@ -77,7 +77,7 @@ the low-poly got there.
 > that deforms, treat it as a base to retopologize properly. Either
 > way the remesh has **no UVs** — stage 2 is next, always.
 
-Settings live at **scene level** (`Scene.ez_bake`), so the pair and
+Settings live at **scene level** (`Scene.kiln`), so the pair and
 all bake settings **survive save/load** — unlike a sibling add-on's
 WindowManager properties, which are deliberately runtime-only (right
 for a viewport toggle, wrong for a bake configuration that belongs to
@@ -203,7 +203,7 @@ surface), badly matched pairs (raise both — misses show as flat
 Headless suite against the real binary (WSL → Windows Blender):
 
 ```bash
-addons/ez_bake/tests/run_tests.sh
+addons/kiln/tests/run_tests.sh
 # optionally: run_tests.sh "/path/to/blender.exe"
 ```
 
@@ -241,7 +241,7 @@ unit-tests the pure logic (heuristic factors and linearity, path
 resolution branches, UV-degeneracy math, scale checks, decimate
 ratio) and pins `flowcore.py`'s bpy/gpu-free purity.
 `test_register.py` covers the register/unregister/re-register
-lifecycle, panel/menu discoverability (including the "EZ-Bake: "
+lifecycle, panel/menu discoverability (including the "Kiln: "
 prefix on the Object-menu entries and the stage-1 Existing/Generate
 source enum with its EXISTING default), the soft-integration probe
 (False without the siblings, flips True when a stand-in operator with
@@ -251,7 +251,7 @@ Scene properties, not WindowManager ones.
 
 ### GUI checklist (not coverable headless)
 
-1. Sidebar → **EZ-Bake** tab: three numbered stage boxes with
+1. Sidebar → **Kiln** tab: three numbered stage boxes with
    status icons; stage 2 and 3 show hints until both objects are
    picked. Stage 1's **Low Poly: Existing / Generate** switch swaps
    the picker for the Target Faces + generate controls and back —

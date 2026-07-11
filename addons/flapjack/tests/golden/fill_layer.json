@@ -1,0 +1,209 @@
+{
+ "trees": [
+  {
+   "interface": [
+    [
+     "Base Color",
+     "OUTPUT",
+     "NodeSocketColor"
+    ],
+    [
+     "Roughness",
+     "OUTPUT",
+     "NodeSocketFloat"
+    ]
+   ],
+   "key": "root",
+   "links": [
+    [
+     [
+      "ps:root:ch.base_color:blend.aa11bb22",
+      "Result_Color"
+     ],
+     [
+      "ps:root:out",
+      "Base Color"
+     ]
+    ],
+    [
+     [
+      "ps:root:ch.roughness:blend.aa11bb22",
+      "Result_Color"
+     ],
+     [
+      "ps:root:out",
+      "Roughness"
+     ]
+    ]
+   ],
+   "nodes": [
+    {
+     "bl_idname": "ShaderNodeMix",
+     "inputs": [
+      [
+       "Factor_Float",
+       0.75
+      ],
+      [
+       "A_Color",
+       [
+        0.8,
+        0.8,
+        0.8,
+        1.0
+       ]
+      ],
+      [
+       "B_Color",
+       [
+        0.4,
+        0.15,
+        0.05,
+        1.0
+       ]
+      ]
+     ],
+     "name": "ps:root:ch.base_color:blend.aa11bb22",
+     "props": [
+      [
+       "data_type",
+       "RGBA"
+      ],
+      [
+       "blend_type",
+       "MIX"
+      ],
+      [
+       "clamp_factor",
+       true
+      ],
+      [
+       "clamp_result",
+       false
+      ],
+      [
+       "location",
+       [
+        -300.0,
+        -0.0
+       ]
+      ]
+     ]
+    },
+    {
+     "bl_idname": "ShaderNodeMix",
+     "inputs": [
+      [
+       "Factor_Float",
+       0.75
+      ],
+      [
+       "A_Color",
+       [
+        0.5,
+        0.5,
+        0.5,
+        1.0
+       ]
+      ],
+      [
+       "B_Color",
+       [
+        0.85,
+        0.85,
+        0.85,
+        1.0
+       ]
+      ]
+     ],
+     "name": "ps:root:ch.roughness:blend.aa11bb22",
+     "props": [
+      [
+       "data_type",
+       "RGBA"
+      ],
+      [
+       "blend_type",
+       "MIX"
+      ],
+      [
+       "clamp_factor",
+       true
+      ],
+      [
+       "clamp_result",
+       false
+      ],
+      [
+       "location",
+       [
+        -300.0,
+        -320.0
+       ]
+      ]
+     ]
+    },
+    {
+     "bl_idname": "NodeGroupOutput",
+     "inputs": [],
+     "name": "ps:root:out",
+     "props": [
+      [
+       "location",
+       [
+        580.0,
+        0.0
+       ]
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "interface": [],
+   "key": "material",
+   "links": [
+    [
+     [
+      "ps:material:stack",
+      "Base Color"
+     ],
+     [
+      "Principled BSDF",
+      "Base Color"
+     ]
+    ],
+    [
+     [
+      "ps:material:stack",
+      "Roughness"
+     ],
+     [
+      "Principled BSDF",
+      "Roughness"
+     ]
+    ]
+   ],
+   "nodes": [
+    {
+     "bl_idname": "ShaderNodeGroup",
+     "inputs": [],
+     "name": "ps:material:stack",
+     "props": [
+      [
+       "node_tree",
+       "Flapjack Stack (Mat)"
+      ],
+      [
+       "location",
+       [
+        -460.0,
+        220.0
+       ]
+      ]
+     ]
+    }
+   ]
+  }
+ ]
+}

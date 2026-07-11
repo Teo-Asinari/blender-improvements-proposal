@@ -16,7 +16,7 @@ Interactive shortest-path UV seam marking in Edit Mode: click points on the mesh
 
 Viewport overlay that colors each UV island distinctly and/or drapes a texel-density checkerboard through the actual UVs — the default combined mode shows both at once (hue = island, checker scale = density). Islands can be computed from true UV connectivity or *predicted from seams live as you mark them*, no unwrap needed. Per-island density stats, deviation tint, live opacity controls. Drawn as a GPU overlay; the mesh is never modified.
 
-### [EZ-Bake](addons/ez_bake/) — v1.0.1
+### [Kiln](addons/kiln/) — v1.0.1
 
 A guided high-poly → low-poly normal-baking workflow in one sidebar panel: pair the sculpt with a retopo mesh (existing, or a generated QuadriFlow candidate), pass a bake-readiness checklist (UVs, scale, normals — with one-click fixes and shortcuts into the two add-ons above), then one button runs the whole bake gauntlet: Cycles switch, image/material/node targeting, selected-to-active with auto ray distances, save to `//textures/`, normal map wired into the material, everything restored afterward. Normals-only for now; other map types are structured TODOs.
 
@@ -27,7 +27,7 @@ A guided high-poly → low-poly normal-baking workflow in one sidebar panel: pai
 
 ## Approach
 
-Features are piloted as Python add-ons with agent-assisted development: each add-on carries a headless test suite (`tests/run_tests.sh`) that exercises the real Blender binary in `--background`, including — where the domain allows — real end-to-end assertions (e.g. EZ-Bake's suite performs an actual Cycles normal bake and checks the pixel statistics). API behavior is probed against the running binary rather than assumed; the traps found along the way are documented in the add-on READMEs.
+Features are piloted as Python add-ons with agent-assisted development: each add-on carries a headless test suite (`tests/run_tests.sh`) that exercises the real Blender binary in `--background`, including — where the domain allows — real end-to-end assertions (e.g. Kiln's suite performs an actual Cycles normal bake and checks the pixel statistics). API behavior is probed against the running binary rather than assumed; the traps found along the way are documented in the add-on READMEs.
 
 ## Status
 

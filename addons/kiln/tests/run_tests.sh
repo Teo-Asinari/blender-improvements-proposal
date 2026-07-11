@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the ez_bake headless test suite against the Windows Blender
+# Run the kiln headless test suite against the Windows Blender
 # binary from WSL. Blender always exits 0 even when a --python script
 # raises, so each test prints a sentinel and we grep for it.
 #
