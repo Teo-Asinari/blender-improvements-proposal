@@ -524,6 +524,27 @@ def take_pending_pixels():
     return arr, s.image_name
 
 
+def stats_log_path():
+    """Stable per-user log file for the machine-readable stat lines.
+
+    Console output is hidden by default on Windows, so every PROBE and
+    STROKE line is also appended here for later collection.
+    """
+    import os
+    return os.path.join(os.path.expanduser("~"), "gpu_paint_spike_stats.log")
+
+
+def _log_line(text):
+    print(text)
+    try:
+        import datetime
+        with open(stats_log_path(), "a", encoding="utf-8") as f:
+            f.write("%s %s\n" % (datetime.datetime.now().isoformat(
+                timespec="seconds"), text))
+    except OSError:
+        pass  # logging must never break painting
+
+
 def record_sync_stats(pixels_write_ms, image_update_ms):
     """Merge the CPU-side Image-write timings into the stroke stats and
     print the machine-readable per-stroke summary line."""
@@ -540,10 +561,10 @@ def record_sync_stats(pixels_write_ms, image_update_ms):
                                   + stats.get("to_numpy_ms", 0.0)
                                   + pixels_write_ms + image_update_ms)
     _last_stroke_stats = stats
-    print("GPU_PAINT_SPIKE_STROKE "
-          + " ".join("%s=%s" % (k, ("%.4f" % v) if isinstance(v, float)
-                                else v)
-                     for k, v in sorted(stats.items())))
+    _log_line("GPU_PAINT_SPIKE_STROKE "
+              + " ".join("%s=%s" % (k, ("%.4f" % v) if isinstance(v, float)
+                                    else v)
+                         for k, v in sorted(stats.items())))
 
 
 # ---------------------------------------------------------------------------
@@ -655,7 +676,7 @@ def _ensure_gpu(s):
     if s.probe_lines is None:
         s.probe_lines = _probe_capabilities()
         for line in s.probe_lines:
-            print("GPU_PAINT_SPIKE_PROBE %s" % line)
+            _log_line("GPU_PAINT_SPIKE_PROBE %s" % line)
 
     s.dab_shader = gpu.shader.create_from_info(dab_shader_create_info())
     s.prepass_shader = gpu.shader.create_from_info(
