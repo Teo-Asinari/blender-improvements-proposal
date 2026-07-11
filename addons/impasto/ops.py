@@ -12,6 +12,7 @@ from bpy.props import EnumProperty, StringProperty
 from . import compat
 from . import engine
 from . import model
+from . import paint
 
 DEFAULT_IMAGE_SIZE = 2048
 
@@ -390,6 +391,42 @@ class IMPASTO_OT_stack_rebuild(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class IMPASTO_OT_paint_activate(bpy.types.Operator):
+    """Use the active Impasto paint layer as Blender's native brush canvas
+    and enter Texture Paint mode"""
+    bl_idname = "impasto.paint_activate"
+    bl_label = "Impasto: Paint Active Layer"
+    bl_options = {'REGISTER'}
+
+    @classmethod
+    def poll(cls, context):
+        _, tree = _context_stack(context)
+        layer = tree.impasto.active_layer() if tree else None
+        return layer is not None and layer.layer_type == 'PAINT'
+
+    def execute(self, context):
+        _, tree = _context_stack(context)
+        layer = tree.impasto.active_layer()
+        try:
+            repaired = paint.activate_paint_target(context, layer)
+        except paint.PaintTargetError as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        obj = context.object
+        try:
+            if obj.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+            bpy.ops.object.mode_set(mode='TEXTURE_PAINT')
+        except RuntimeError as exc:
+            self.report({'ERROR'}, "Could not enter Texture Paint mode: %s" % exc)
+            return {'CANCELLED'}
+        message = "Painting %s" % layer.label
+        if repaired:
+            message += " (image colorspace repaired)"
+        self.report({'INFO'}, message)
+        return {'FINISHED'}
+
+
 _classes = (
     IMPASTO_OT_stack_init,
     IMPASTO_OT_stack_remove,
@@ -399,6 +436,7 @@ _classes = (
     IMPASTO_OT_binding_add,
     IMPASTO_OT_binding_remove,
     IMPASTO_OT_stack_rebuild,
+    IMPASTO_OT_paint_activate,
 )
 
 

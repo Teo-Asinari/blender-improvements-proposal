@@ -6,10 +6,9 @@ pass-through groups, channel bindings, paint-mask graph structure, minimal node
 reconciliation, and a small 3D Viewport sidebar for creating and arranging the
 stack without working directly in the Shader Editor.
 
-> **Development status:** Phase 1 prototype, not a finished painting add-on.
-> Paint layers, native-brush canvas switching, the full channel registry,
-> templates, channel isolation, smart masks, bake-down/export, and GPU strokes
-> belong to later phases.
+> **Development status:** Phase 1 stack foundation plus the first Phase 3
+> native-paint workflow. Paint layers work with Blender's native brush; masks,
+> channel isolation, bake-down/export, and GPU strokes remain later work.
 
 ## Phase 1 scope
 
@@ -43,16 +42,49 @@ For local development, copy or symlink `addons/impasto/` into Blender's
 `scripts/addons/` directory. Do not include `tests/` or `__pycache__/` in a
 release archive.
 
-## Basic Phase 1 usage
+## Paint with Blender's native brush
 
 1. Select a mesh with a material that uses nodes and contains a Principled
    BSDF.
 2. Open the 3D Viewport sidebar with `N`, then choose the **Impasto** tab.
 3. Create a new layer stack.
-4. Add Fill or Group layers, bind available channels, and adjust layer order,
+4. Add a Paint layer. It creates a transparent 2048 x 2048 image using the
+   mesh's currently active UV map.
+5. Select that layer and click **Paint Active Layer**. Impasto makes its image
+   Blender's explicit image-paint canvas and enters Texture Paint mode.
+6. Use Blender's normal Texture Paint brushes. Strokes update the image sampled
+   by the generated Impasto layer graph, so they appear through the material.
+7. Add Fill or Group layers, bind available channels, and adjust layer order,
    opacity, blend mode, and visibility.
-5. Use **Rebuild Stack** only to repair or explicitly regenerate the compiled
+8. Use **Rebuild Stack** only to repair or explicitly regenerate the compiled
    graph; ordinary uniform edits should not require it.
+
+Selecting another Paint layer switches the canvas but does not force a mode
+change. The explicit button is the safe way to enter Texture Paint. If a layer's
+stored UV map or image was deleted, activation stops and reports what is missing
+instead of allowing Blender to paint into a different target.
+
+Native paint is currently single-image: one stroke changes the selected paint
+layer's shared image. GPU multi-channel painting is still a separate experiment.
+Native brush undo is Blender's normal paint undo and stack operators use normal
+operator undo.
+
+### GUI acceptance checklist
+
+Headless tests verify target setup and graph wiring, but cannot synthesize a
+real viewport brush stroke. Before packaging a release, verify interactively:
+
+- create a stack on a UV-unwrapped mesh and add two Paint layers;
+- click **Paint Active Layer**, paint a visible stroke in Material Preview,
+  and confirm it appears in the Impasto material;
+- select the other layer, confirm its image becomes the canvas, and paint a
+  visually distinct stroke without changing the first image;
+- undo and redo each native stroke, then undo a stack operation, confirming the
+  two Blender undo paths interleave normally;
+- save, reopen, select the paint layer, and confirm activation restores its
+  saved image and UV target;
+- delete or rename the stored UV map and confirm activation reports the missing
+  UV rather than painting elsewhere.
 
 Impasto owns its generated root and per-layer node groups. Treat those graphs
 as build artifacts: edit the stack through Impasto rather than manually

@@ -20,6 +20,10 @@ if "model" in locals():
     snapshot = importlib.reload(snapshot)
     engine = importlib.reload(engine)
     props = importlib.reload(props)
+    if "paint" in locals():
+        paint = importlib.reload(paint)
+    else:
+        from . import paint
     ops = importlib.reload(ops)
     ui = importlib.reload(ui)
 else:
@@ -30,6 +34,7 @@ else:
     from . import snapshot
     from . import engine
     from . import props
+    from . import paint
     from . import ops
     from . import ui
 

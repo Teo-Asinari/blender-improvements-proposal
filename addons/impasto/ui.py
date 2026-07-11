@@ -98,6 +98,16 @@ class IMPASTO_PT_main(bpy.types.Panel):
                 row.prop(layer, "blend_mode", text="")
                 row.prop(layer, "opacity", slider=True)
                 self._draw_bindings(box, state, layer)
+                if layer.layer_type == 'PAINT':
+                    image = bpy.data.images.get(layer.image_name)
+                    row = box.row(align=True)
+                    row.label(text=image.name if image else "Missing image",
+                              icon='IMAGE_DATA' if image else 'ERROR')
+                    row = box.row()
+                    row.scale_y = 1.25
+                    row.operator(ops.IMPASTO_OT_paint_activate.bl_idname,
+                                 text="Paint Active Layer",
+                                 icon='TPAINT_HLT')
             else:
                 box.prop(layer, "opacity", slider=True)
 
@@ -153,6 +163,7 @@ class IMPASTO_MT_main(bpy.types.Menu):
                              text="Impasto: Add Fill Layer")
         op.layer_type = 'FILL'
         layout.operator(ops.IMPASTO_OT_stack_rebuild.bl_idname)
+        layout.operator(ops.IMPASTO_OT_paint_activate.bl_idname)
         layout.operator(ops.IMPASTO_OT_stack_remove.bl_idname)
 
 

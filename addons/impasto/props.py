@@ -150,6 +150,16 @@ def _active_index_update(self, context):
         self.active_layer_uid = self.layers[self.active_index].name
     else:
         self.active_layer_uid = ""
+    # Selection switches the native canvas but never forces a mode change.
+    # A callback cannot report errors usefully, so invalid/non-paint targets
+    # are left for the explicit paint operator to explain.
+    layer = self.active_layer()
+    if layer is not None and layer.layer_type == 'PAINT':
+        try:
+            from . import paint
+            paint.activate_paint_target(context, layer)
+        except paint.PaintTargetError:
+            pass
 
 
 class ImpastoStack(bpy.types.PropertyGroup):
