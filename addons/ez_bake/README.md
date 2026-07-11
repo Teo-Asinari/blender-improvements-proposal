@@ -37,24 +37,38 @@ For development, symlink/copy the folder into your Blender
 
 ## Usage: the three stages
 
-Open the 3D viewport **sidebar** (press `N`) and pick the **Bake
-Flow** tab. The two main operators are also in the **Object menu**
-(so F3 menu search finds *Create Low-Poly Candidate* and *Bake Normal
-Map*).
+Open the 3D viewport **sidebar** (press `N`) and pick the **EZ-Bake**
+tab. The two main operators are also in the **Object menu** as
+*EZ-Bake: Create Low-Poly Candidate* and *EZ-Bake: Bake Normal Map*
+(the prefix keeps them identifiable in F3 menu search, which matches
+substrings — searching "bake normal" still finds the entry).
 
 ### Stage 1 — High / Low pair
 
-Pick your **High-Poly** (the dense sculpt, the source of detail) and
-your **Low-Poly** (the retopologized bake target). Both pickers only
-list mesh objects.
+Pick your **High-Poly** (the dense sculpt, the source of detail),
+then tell the panel where the low-poly comes from with the
+**Low Poly: Existing / Generate** switch. The two modes show
+different controls — never both at once:
 
-No low-poly yet? Set **Target Faces** and hit **Create Low-Poly
-Candidate**: it duplicates the high-poly's *evaluated* surface
-(modifiers applied — a Multires sculpt is captured at its visible
-detail) and remeshes it with **QuadriFlow** to approximately the
-target face count. If QuadriFlow fails (it can choke on non-manifold
-input) or is unavailable, a **Decimate** modifier fallback runs
-instead, and the report tells you which path was used.
+- **Existing** (the default) — a single **Low-Poly** object picker.
+  Use this when you already have a retopologized bake target. Both
+  pickers only list mesh objects.
+- **Generate** — no picker; instead **Target Faces** and a
+  **Generate from High (QuadriFlow)** button. It duplicates the
+  high-poly's *evaluated* surface (modifiers applied — a Multires
+  sculpt is captured at its visible detail) and remeshes it with
+  **QuadriFlow** to approximately the target face count. If
+  QuadriFlow fails (it can choke on non-manifold input) or is
+  unavailable, a **Decimate** modifier fallback runs instead, and the
+  report tells you which path was used.
+
+Either way, the **Low-Poly picker is the single source of truth** for
+the bake: on success, Generate assigns the new `<high>_low` object to
+the picker and the switch flips back to **Existing**, so you land on
+the picker, visibly filled with the fresh candidate. **Target Faces**
+only matters for generation. Stage readiness is the same in both
+modes — the pair is complete once both objects are set, no matter how
+the low-poly got there.
 
 > **The candidate is a starting point, not animation-grade topology.**
 > QuadriFlow produces an even, seam-free quad grid with no regard for
@@ -216,7 +230,10 @@ low-poly, unsaved-file output path). `test_retopo.py` covers the real
 QuadriFlow run (face count in the target ballpark, all-quads, UVs
 dropped, evaluated-mesh duplication with a Subsurf applied) plus the
 Decimate fallback under simulated QuadriFlow failure *and* absence
-(monkeypatching the module's two seams). `test_readiness.py` drives
+(monkeypatching the module's two seams), and asserts a successful
+generate fills the Low-Poly picker and flips the stage-1 source
+switch back to Existing (while a failed one leaves it on Generate).
+`test_readiness.py` drives
 every checklist state on constructed meshes, in Object and Edit Mode
 (probed on 5.1.2: the Mesh UV arrays are empty while the edit bmesh
 owns the data, so Edit Mode reads go through bmesh). `test_core.py`
@@ -224,7 +241,9 @@ unit-tests the pure logic (heuristic factors and linearity, path
 resolution branches, UV-degeneracy math, scale checks, decimate
 ratio) and pins `flowcore.py`'s bpy/gpu-free purity.
 `test_register.py` covers the register/unregister/re-register
-lifecycle, panel/menu discoverability, the soft-integration probe
+lifecycle, panel/menu discoverability (including the "EZ-Bake: "
+prefix on the Object-menu entries and the stage-1 Existing/Generate
+source enum with its EXISTING default), the soft-integration probe
 (False without the siblings, flips True when a stand-in operator with
 the sibling's exact idname registers, never raises), and proves the
 scene-level settings **survive save/reopen** — the reason they are
@@ -234,10 +253,14 @@ Scene properties, not WindowManager ones.
 
 1. Sidebar → **EZ-Bake** tab: three numbered stage boxes with
    status icons; stage 2 and 3 show hints until both objects are
-   picked.
-2. Pick a high-poly sculpt, hit **Create Low-Poly Candidate**: a
-   `<name>_low` object appears, selected and active; the info bar
-   names the path used (QuadriFlow or Decimate fallback).
+   picked. Stage 1's **Low Poly: Existing / Generate** switch swaps
+   the picker for the Target Faces + generate controls and back —
+   the two are never shown together.
+2. Pick a high-poly sculpt, switch **Low Poly** to **Generate**, hit
+   **Generate from High (QuadriFlow)**: a `<name>_low` object appears,
+   selected and active; the info bar names the path used (QuadriFlow
+   or Decimate fallback); the switch snaps back to **Existing** with
+   the picker showing the new object.
 3. The checklist shows red ✗ rows (no UVs) — with the sibling
    add-ons enabled, the **Mark Seams (interactive)** and **Toggle
    Island/Density Overlay** buttons appear; with them disabled, no

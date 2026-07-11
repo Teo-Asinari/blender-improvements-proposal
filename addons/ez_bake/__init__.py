@@ -24,7 +24,7 @@ a bake configuration).
 bl_info = {
     "name": "EZ-Bake",
     "author": "Teo Asinari",
-    "version": (1, 0, 0),
+    "version": (1, 0, 1),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N) > EZ-Bake tab",
     "description": "Guided high-poly to low-poly normal baking: pair "
@@ -95,6 +95,22 @@ class EZBakeSettings(bpy.types.PropertyGroup):
                     "bake ONTO",
         type=bpy.types.Object,
         poll=_mesh_object_poll,
+    )
+    low_source: EnumProperty(
+        name="Low Poly",
+        description="Where the low-poly bake target comes from. This "
+                    "only switches what stage 1 shows - the Low-Poly "
+                    "picker is always the source of truth for the bake",
+        items=(
+            ('EXISTING', "Existing",
+             "Pick an already-retopologized mesh as the bake target"),
+            ('GENERATE', "Generate",
+             "Generate a starting-point candidate from the high-poly "
+             "(QuadriFlow remesh; Decimate fallback). On success the "
+             "result fills the Low-Poly picker and this switches back "
+             "to Existing"),
+        ),
+        default='EXISTING',
     )
     target_faces: IntProperty(
         name="Target Faces",
@@ -200,6 +216,11 @@ class OBJECT_OT_ez_bake_create_lowpoly(bpy.types.Operator):
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
         s.low_object = low
+        # Land the user on a self-evident state: switch stage 1 back to
+        # the Existing view so the picker is visible and visibly filled
+        # with the fresh candidate. Real RNA property assignment (never
+        # an idprop write like s["low_source"] = ...).
+        s.low_source = 'EXISTING'
         readiness.invalidate()
         if method == 'QUADRIFLOW':
             self.report({'INFO'},
@@ -368,11 +389,22 @@ class VIEW3D_PT_ez_bake(bpy.types.Panel):
         box.label(text="1  High / Low Pair",
                   icon='CHECKMARK' if pair_ok else 'RADIOBUT_OFF')
         box.prop(s, "high_object")
-        box.prop(s, "low_object")
-        col = box.column(align=True)
-        col.prop(s, "target_faces")
-        col.operator(OBJECT_OT_ez_bake_create_lowpoly.bl_idname,
-                     icon='MOD_REMESH')
+        # Low-poly source switch: showing the picker AND the generator
+        # side by side read as contradictory ("if this creates the
+        # retopo mesh, why is there a selector?"), so stage 1 shows one
+        # or the other. The picker stays the source of truth either
+        # way: generating just fills it and switches back to Existing.
+        row = box.row(align=True)
+        row.label(text="Low Poly:")
+        row.prop(s, "low_source", expand=True)
+        if s.low_source == 'EXISTING':
+            box.prop(s, "low_object")
+        else:
+            col = box.column(align=True)
+            col.prop(s, "target_faces")
+            col.operator(OBJECT_OT_ez_bake_create_lowpoly.bl_idname,
+                         text="Generate from High (QuadriFlow)",
+                         icon='MOD_REMESH')
         if s.high_object == s.low_object and s.high_object is not None:
             box.label(text="High and low are the same object",
                       icon='ERROR')
@@ -442,10 +474,15 @@ class VIEW3D_PT_ez_bake(bpy.types.Panel):
 
 
 def _menu_draw(self, context):
-    """Object menu entries so F3 search finds the operators."""
+    """Object menu entries so F3 search finds the operators. The menu
+    text carries an "EZ-Bake: " prefix because these entries appear
+    without the panel's stage context (a bare "Bake Normal Map" in the
+    Object menu doesn't say whose); the panel buttons stay short."""
     self.layout.separator()
-    self.layout.operator(OBJECT_OT_ez_bake_create_lowpoly.bl_idname)
-    self.layout.operator(OBJECT_OT_ez_bake_bake.bl_idname)
+    self.layout.operator(OBJECT_OT_ez_bake_create_lowpoly.bl_idname,
+                         text="EZ-Bake: Create Low-Poly Candidate")
+    self.layout.operator(OBJECT_OT_ez_bake_bake.bl_idname,
+                         text="EZ-Bake: Bake Normal Map")
 
 
 # ---------------------------------------------------------------------------

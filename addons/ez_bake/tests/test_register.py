@@ -40,7 +40,7 @@ def main():
     check("bl_info name/author/version",
           ez_bake.bl_info.get("name") == "EZ-Bake"
           and ez_bake.bl_info.get("author") == "Teo Asinari"
-          and ez_bake.bl_info.get("version") == (1, 0, 0))
+          and ez_bake.bl_info.get("version") == (1, 0, 1))
 
     # --- register -------------------------------------------------------------
     ez_bake.register()
@@ -66,6 +66,12 @@ def main():
     check("bake type enum is NORMAL-only for now, default NORMAL",
           {i.identifier for i in props["bake_type"].enum_items}
           == {'NORMAL'} and props["bake_type"].default == 'NORMAL')
+    check("low-poly source enum EXISTING/GENERATE, default EXISTING "
+          "(stage 1 shows picker or generator, never both)",
+          {i.identifier for i in props["low_source"].enum_items}
+          == {'EXISTING', 'GENERATE'}
+          and props["low_source"].default == 'EXISTING'
+          and s.low_source == 'EXISTING')
     check("high/low are Object pointers",
           props["high_object"].type == 'POINTER'
           and props["low_object"].type == 'POINTER'
@@ -97,6 +103,34 @@ def main():
             return False
     check("Object menu has the F3-searchable entries",
           menu_has_entry(bpy.types.VIEW3D_MT_object))
+
+    # Menu entries appear without the panel's stage context, so their
+    # text must carry the "EZ-Bake: " prefix (F3 menu search matches
+    # substrings, so "Bake Normal Map" still finds the prefixed entry).
+    # Drive _menu_draw with a recording layout stub.
+    class _RecordingLayout:
+        def __init__(self):
+            self.entries = []
+
+        def separator(self):
+            pass
+
+        def operator(self, idname, text="", **kw):
+            self.entries.append((idname, text))
+
+    class _FakeMenu:
+        layout = _RecordingLayout()
+
+    fake = _FakeMenu()
+    ez_bake._menu_draw(fake, bpy.context)
+    labels = dict(fake.layout.entries)
+    check("menu entries are prefixed 'EZ-Bake: ' (context-free menu "
+          "text; panel buttons stay short)",
+          labels.get("object.ez_bake_create_lowpoly")
+          == "EZ-Bake: Create Low-Poly Candidate"
+          and labels.get("object.ez_bake_bake")
+          == "EZ-Bake: Bake Normal Map",
+          "got %r" % (fake.layout.entries,))
 
     # --- soft integration probes ------------------------------------------------------
     # Probed on 5.1.2: hasattr(bpy.ops.mesh, "<anything>") is ALWAYS
@@ -135,6 +169,11 @@ def main():
           "sibling_op_available" in draw_src
           and "SEAM_TOOL_OT_TYPE" in draw_src
           and "OVERLAY_OT_TYPE" in draw_src)
+    check("panel draw branches stage 1 on low_source (picker in "
+          "EXISTING, generator in GENERATE - never both)",
+          "low_source" in draw_src
+          and "'EXISTING'" in draw_src
+          and "Generate from High (QuadriFlow)" in draw_src)
     pkg_src = open(os.path.join(_ADDON_DIR, "__init__.py")).read()
     check("no cross-imports of the sibling packages",
           "import seam_path_tool" not in pkg_src

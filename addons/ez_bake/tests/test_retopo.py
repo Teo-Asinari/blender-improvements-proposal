@@ -58,10 +58,14 @@ def run(ez_bake, retopo):
           bpy.ops.object.ez_bake_create_lowpoly.poll())
 
     s.target_faces = 200
+    s.low_source = 'GENERATE'   # as the panel's Generate mode sets it
     result = bpy.ops.object.ez_bake_create_lowpoly()
     check("create-lowpoly returned FINISHED", result == {'FINISHED'})
     low = s.low_object
     check("low-poly pointer was set to the new object", low is not None)
+    check("success flips low_source back to EXISTING (user lands on "
+          "the filled picker, not the generator)",
+          s.low_source == 'EXISTING')
     check("low-poly named <high>_low", low.name == "Sculpt_low")
     faces = len(low.data.polygons)
     check("QuadriFlow face count in ballpark of target 200 (100..400)",
@@ -98,6 +102,7 @@ def run(ez_bake, retopo):
         raise RuntimeError("simulated non-manifold failure")
 
     retopo._run_quadriflow = boom
+    s.low_source = 'GENERATE'
     try:
         result = bpy.ops.object.ez_bake_create_lowpoly()
     finally:
@@ -108,6 +113,8 @@ def run(ez_bake, retopo):
     check("fallback produced a fresh candidate object",
           low2 is not None and low2 != low
           and low2.name.startswith("Sculpt_low"))
+    check("fallback path also flips low_source back to EXISTING",
+          s.low_source == 'EXISTING')
     faces = len(low2.data.polygons)
     check("Decimate face count in ballpark of target 200 (100..400; "
           "ratio derived from the triangulated count)",
@@ -145,6 +152,7 @@ def run(ez_bake, retopo):
     empty_ob = bpy.data.objects.new("Empty", empty_me)
     bpy.context.collection.objects.link(empty_ob)
     s.high_object = empty_ob
+    s.low_source = 'GENERATE'
     try:
         bpy.ops.object.ez_bake_create_lowpoly()
         raised = False
@@ -154,6 +162,9 @@ def run(ez_bake, retopo):
         msg = str(exc)
     check("empty high-poly -> actionable error, no traceback",
           raised and "no faces" in msg, "got %r" % msg)
+    check("failed generate leaves low_source on GENERATE (user stays "
+          "in the mode they were using)",
+          s.low_source == 'GENERATE')
 
 
 try:
