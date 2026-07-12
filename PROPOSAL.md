@@ -94,9 +94,10 @@ Before executing a voxel remesh, Blender should provide an interactive, mesh-rel
 
 #### Proposed Interaction
 
+- **No remesh by default when adding the Remesh modifier.** Today the modifier evaluates immediately on add, with the datablock default voxel size (`0.1`) — on a dense or badly-scaled mesh this can stall Blender or exhaust memory before the user has entered a sensible value. The modifier should arrive in a pending (non-evaluating) state, or with a mesh-derived safe initial size, and only compute once the user confirms the voxel size.
 - Show the voxel size together with estimated voxel counts along the mesh bounding-box axes, approximate domain size, and a coarse cost or memory-risk indicator.
 - Let the user adjust voxel size interactively in the viewport before computation begins.
-- Draw a bounded visual aid: a voxel-sized sample box, a sparse 3D grid clipped to the object bounds, or representative grid slices that avoid drawing every voxel.
+- **Draw a mesh-relative visual guide for the voxel size** — a voxel-sized sample box on the surface, a sparse 3D grid clipped to the object bounds, or representative grid slices — so the user can *see* the cell size against the mesh instead of judging an abstract number. Never draw every voxel. Applies to both the sculpt-mode overlay and the modifier panel.
 - Clearly flag both extremes: voxels too coarse to preserve the form and voxel counts likely to cause excessive computation or memory use.
 - Offer a mesh-relative suggested size and require confirmation above a configurable safety threshold. Warnings should not impose a hard limit.
 - Preserve a fast path for experienced users who intentionally repeat the last settings.

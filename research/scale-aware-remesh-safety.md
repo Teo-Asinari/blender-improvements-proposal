@@ -22,6 +22,12 @@ Because this path sees geometry produced earlier in the stack, a trustworthy est
 
 The two paths can share arithmetic, but only through an interface that explicitly identifies the coordinate space and geometry source. “Cover every entry point,” as proposed, should mean consistent risk language and interaction goals—not one indiscriminate estimator.
 
+#### Deferred first evaluation (no remesh on add)
+
+Adding the Remesh modifier evaluates it immediately with the datablock default `voxel_size = 0.1`, before the user has had any chance to enter a mesh-appropriate value. The proposal is that the modifier should not remesh by default: it should arrive pending, or with a safe mesh-derived initial size, and first compute on explicit confirmation.
+
+An add-on can approximate this only through a wrapper operator (e.g. “Add Remesh Modifier (Safe)”) that adds the modifier with `show_viewport = False`, or with an initial voxel size derived from the evaluated bounds, then re-enables display once the user confirms. It cannot intercept the native Add Modifier menu, so the native path still evaluates on add — changing that default (a pending state, or a first-run sizing prompt) is Blender-core work. Note that toggling `show_viewport` back on is itself the expensive event; the confirmation UI must present the risk estimate *before* that toggle.
+
 Authoritative references: [Sculpt Remesh manual](https://docs.blender.org/manual/en/dev/sculpt_paint/sculpting/tool_settings/remesh.html), [Remesh modifier manual](https://docs.blender.org/manual/en/dev/modeling/modifiers/generate/remesh.html), [Mesh Python API](https://docs.blender.org/api/5.0/bpy.types.Mesh.html), and [RemeshModifier Python API](https://docs.blender.org/api/current/bpy.types.RemeshModifier.html).
 
 ## Defaults and scale semantics
