@@ -32,6 +32,7 @@ status=0
 run_one "$TESTS_DIR/test_integration.py" "IMPASTO_INTEGRATION_PASSED" || status=1
 run_one "$TESTS_DIR/test_native_paint.py" "IMPASTO_NATIVE_PAINT_PASSED" || status=1
 run_one "$TESTS_DIR/test_scalar_channels.py" "IMPASTO_SCALAR_CHANNELS_PASSED" || status=1
+run_one "$TESTS_DIR/test_rendered_semantics.py" "IMPASTO_RENDERED_SEMANTICS_PASSED" || status=1
 run_one "$TESTS_DIR/test_normal_paint.py" "IMPASTO_NORMAL_PAINT_PASSED" || status=1
 run_one "$TESTS_DIR/test_persistence.py" "IMPASTO_PERSISTENCE_PASSED" || status=1
 run_one "$TESTS_DIR/test_restore.py" "IMPASTO_RESTORE_PASSED" || status=1

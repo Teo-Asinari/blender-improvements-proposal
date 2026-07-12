@@ -70,7 +70,7 @@ CHANNELS = (
     # Tangent-space normals are painted/stored in their conventional encoded
     # RGB form.  The root compiler blends those encoded colors, then decodes
     # the result exactly once with ShaderNodeNormalMap.
-    _c("normal", "Normal", "Normal", "COLOR", "Non-Color",
+    _c("normal", "Tangent Normal (RGB)", "Normal", "COLOR", "Non-Color",
        (0.5, 0.5, 1.0, 1.0), "Core"),
     # height is the one special channel: its chain feeds a single Bump
     # node at chain end -> Principled Normal (A2).
@@ -544,7 +544,8 @@ def _compile_root(model, grace):
             if not _participates(model, layer, binding, grace):
                 continue
             blend = n_blend(key, layer.uid)
-            props = (("data_type", "RGBA"),
+            scalar_channel = ch.kind == "SCALAR"
+            props = (("data_type", "FLOAT" if scalar_channel else "RGBA"),
                      ("blend_type", effective_blend(layer, binding)),
                      ("clamp_factor", True),
                      ("clamp_result", False),
@@ -557,7 +558,9 @@ def _compile_root(model, grace):
             if not use_fac_node:
                 inputs.append(("Factor_Float", fac))
             if prev is None:
-                inputs.append(("A_Color", seed_rgba(ch)))
+                inputs.append(("A_Float" if scalar_channel else "A_Color",
+                               (float(ch.default_value[0]) if scalar_channel
+                                else seed_rgba(ch))))
             shared_ok = (binding.mode == "SHARED"
                          and layer.uid in treed_uids
                          and layer.layer_type == "PAINT"
@@ -566,17 +569,23 @@ def _compile_root(model, grace):
                 used_uids.add(layer.uid)
                 links.append(LinkSpec((n_root_layer(layer.uid),
                                        "ch:%s" % key),
-                                      (blend, "B_Color")))
+                                      (blend, "B_Float" if scalar_channel
+                                       else "B_Color")))
             elif binding.mode == "COLOR":
-                inputs.append(("B_Color",
-                               tuple(float(x) for x in binding.color)))
+                inputs.append(("B_Float" if scalar_channel else "B_Color",
+                               (float(binding.color[0]) if scalar_channel
+                                else tuple(float(x)
+                                           for x in binding.color))))
             elif binding.mode == "VALUE":
                 v = float(binding.value)
-                inputs.append(("B_Color", (v, v, v, 1.0)))
+                inputs.append(("B_Float" if scalar_channel else "B_Color",
+                               v if scalar_channel else (v, v, v, 1.0)))
             else:
                 # SHARED with a missing image: substitute the channel
                 # default so the material stays valid (design §4.9).
-                inputs.append(("B_Color", seed_rgba(ch)))
+                inputs.append(("B_Float" if scalar_channel else "B_Color",
+                               (float(ch.default_value[0]) if scalar_channel
+                                else seed_rgba(ch))))
             nodes.append(NodeSpec(blend, "ShaderNodeMix", props,
                                   tuple(inputs)))
             if use_fac_node:
@@ -592,23 +601,13 @@ def _compile_root(model, grace):
                 links.append(LinkSpec((n_fac(key, layer.uid), "Value"),
                                       (blend, "Factor_Float")))
             if prev is not None:
-                links.append(LinkSpec(prev, (blend, "A_Color")))
-            prev = (blend, "Result_Color")
+                links.append(LinkSpec(prev,
+                                      (blend, "A_Float" if scalar_channel
+                                       else "A_Color")))
+            prev = (blend, "Result_Float" if scalar_channel
+                    else "Result_Color")
             chain_i += 1
         max_chain = max(max_chain, chain_i)
-
-        # Never rely on Blender's implicit Color -> Float coercion for PBR
-        # scalars.  Extracting Red is exact for our grayscale scalar sources:
-        # black=0 and white=1, preserving Principled's roughness/metallic/etc.
-        scalar = None
-        if prev is not None and ch.kind == "SCALAR":
-            scalar = (n_scalar_out(key), "Red")
-            nodes.append(NodeSpec(
-                n_scalar_out(key), "ShaderNodeSeparateColor",
-                (("mode", "RGB"),
-                 ("location", (-300.0 + 260.0 * chain_i,
-                               -320.0 * ci))), ()))
-            links.append(LinkSpec(prev, (n_scalar_out(key), "Color")))
 
         if key == "normal":
             if prev is not None:
@@ -626,15 +625,14 @@ def _compile_root(model, grace):
                     n_bump(), "ShaderNodeBump",
                     (("location", (-300.0 + 260.0 * chain_i,
                                    -320.0 * ci)),), ()))
-                links.append(LinkSpec(scalar, (n_bump(), "Height")))
+                links.append(LinkSpec(prev, (n_bump(), "Height")))
                 bump_signal = (n_bump(), "Normal")
             # no participants: "Normal" output stays unlinked and the
             # material tree emits no Normal link (a linked zero-vector
             # would break shading).
         else:
             if prev is not None:
-                links.append(LinkSpec(scalar or prev,
-                                      (n_root_out(), ch.label)))
+                links.append(LinkSpec(prev, (n_root_out(), ch.label)))
             else:
                 out_inputs.append((ch.label, seed_native(ch)))
 

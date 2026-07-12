@@ -64,20 +64,32 @@ change. The explicit button is the safe way to enter Texture Paint. If a layer's
 stored UV map or image was deleted, activation stops and reports what is missing
 instead of allowing Blender to paint into a different target.
 
-Native paint is currently single-image: one stroke changes the selected paint
-layer's shared image. GPU multi-channel painting is still a separate experiment.
+Native paint is currently one image and one PBR channel per Paint layer. Use
+**Add Channel Paint Layer** to create a dedicated Base Color, Roughness,
+Metallic, Height, or Tangent Normal image with the correct colorspace. Impasto
+rejects a second shared channel on the same native Paint layer: Blender's native
+brush cannot deposit independent values into multiple PBR channels in one
+stroke. GPU multi-channel painting is still a separate experiment.
 
 ### Normal and height painting
 
-**Normal** bindings treat the paint image as a tangent-space normal map. Images
+**Tangent Normal (RGB)** bindings treat the paint image as an absolute
+tangent-space normal map. Images
 are stored as **Non-Color**, conventional encoded RGB `(0.5, 0.5, 1.0)` is a
 flat normal, and the compiled shader decodes the blended image through Blender's
-Normal Map node. For a dedicated normal layer, remove its Base Color binding,
-add Normal, activate the layer, and paint/import encoded tangent-normal colors.
+Normal Map node. Create a dedicated Tangent Normal channel Paint layer, activate
+it, and paint/import encoded tangent-normal colors.
 Blender's ordinary color brush does not generate sculpt-like normals from brush
-pressure; it deposits the encoded RGB color you choose.
+pressure; it deposits the encoded RGB direction you choose. Repeating the same
+stroke therefore does not accumulate additional relief. Use a Height Detail
+layer for brush-built relief, and reserve Tangent Normal for painting/importing
+encoded normal directions.
 
-**Height** remains a grayscale scalar: black is 0, white is 1, and the result
+**Height Detail** is a grayscale derivative field centered on neutral mid-gray.
+The **Raise** and **Lower** buttons configure Blender's native brush to ADD or
+SUBTRACT white, so repeated strokes accumulate above or below 0.5. Constant
+black, gray, or white regions are all geometrically flat; visible bump comes
+from spatial gradients and stroke falloff, not the absolute shade. The result
 feeds Blender's Bump node. When Normal and Height are both present, the decoded
 tangent normal feeds the Bump node's Normal input, and the combined result drives
 Principled. Multiple Normal layers currently use an approximate MIX of encoded

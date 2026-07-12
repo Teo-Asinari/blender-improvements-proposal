@@ -58,12 +58,13 @@ def _active_uv_map(context):
     return ""
 
 
-def new_layer_image(name, colorspace, size=DEFAULT_IMAGE_SIZE):
+def new_layer_image(name, colorspace, size=DEFAULT_IMAGE_SIZE,
+                    generated_color=(0.0, 0.0, 0.0, 0.0)):
     """Registry-driven image creation (design §5.3): colorspace comes
-    from the channel table, canvases start fully transparent, and a
-    fake user protects paint data while a layer is hidden/pruned."""
+    from the channel table, the caller chooses the channel-neutral canvas,
+    and a fake user protects paint data while a layer is hidden/pruned."""
     img = bpy.data.images.new(name, size, size, alpha=True)
-    img.generated_color = (0.0, 0.0, 0.0, 0.0)
+    img.generated_color = generated_color
     img.use_fake_user = True
     compat.set_image_colorspace(img, colorspace)
     return img
@@ -215,6 +216,12 @@ class IMPASTO_OT_layer_add(bpy.types.Operator):
                ('FILL', "Fill", "Constant color/value layer"),
                ('GROUP', "Group", "Organizational group")),
         default='PAINT')
+    channel_key: EnumProperty(
+        name="Initial Channel",
+        items=tuple((ch.key, ch.label, "Paint a dedicated %s image" % ch.label)
+                    for ch in model.CHANNELS),
+        default="base_color",
+        description="Channel initially bound to a new Paint layer")
 
     @classmethod
     def poll(cls, context):
@@ -226,7 +233,10 @@ class IMPASTO_OT_layer_add(bpy.types.Operator):
         uid = _unique_uid(state)
         count = sum(1 for ly in state.layers
                     if ly.layer_type == self.layer_type) + 1
-        base = {'PAINT': "Paint Layer", 'FILL': "Fill Layer",
+        initial = model.CHANNEL_MAP.get(self.channel_key,
+                                        model.CHANNEL_MAP["base_color"])
+        base = {'PAINT': ("Height Detail" if initial.key == "height"
+                          else "Paint Layer"), 'FILL': "Fill Layer",
                 'GROUP': "Group"}[self.layer_type]
         with engine.stack_edit_session(tree):
             ly = state.layers.add()
@@ -234,13 +244,17 @@ class IMPASTO_OT_layer_add(bpy.types.Operator):
             ly.label = "%s %d" % (base, count)
             ly.layer_type = self.layer_type
             if self.layer_type == 'PAINT':
-                ch = model.CHANNEL_MAP["base_color"]
+                ch = initial
+                generated = ((0.5, 0.5, 0.5, 1.0)
+                             if ch.key == "height"
+                             else (0.0, 0.0, 0.0, 0.0))
                 img = new_layer_image("Impasto %s %s" % (ly.label, uid),
-                                      ch.colorspace)
+                                      ch.colorspace,
+                                      generated_color=generated)
                 ly.image_name = img.name
                 ly.uv_map = _active_uv_map(context)
                 b = ly.bindings.add()
-                b.name = "base_color"    # SHARED by default
+                b.name = ch.key
             elif self.layer_type == 'FILL':
                 ch = model.CHANNEL_MAP["base_color"]
                 b = ly.bindings.add()
@@ -336,6 +350,13 @@ class IMPASTO_OT_binding_add(bpy.types.Operator):
         with engine.stack_edit_session(tree):
             b = ly.bindings.get(self.channel_key)
             if b is None:
+                if (ly.layer_type == 'PAINT'
+                        and any(existing.mode == 'SHARED'
+                                for existing in ly.bindings)):
+                    self.report({"WARNING"},
+                                "Native Paint layers use one channel image; "
+                                "add a dedicated %s Paint layer" % ch.label)
+                    return {'CANCELLED'}
                 b = ly.bindings.add()
                 b.name = self.channel_key
                 if ly.layer_type == 'PAINT':
@@ -429,6 +450,41 @@ class IMPASTO_OT_paint_activate(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class IMPASTO_OT_detail_paint(bpy.types.Operator):
+    """Activate a Height Detail canvas and configure an accumulating native
+    brush. Raise adds white; Lower subtracts white around neutral gray."""
+    bl_idname = "impasto.detail_paint"
+    bl_label = "Impasto: Paint Height Detail"
+    bl_options = {'REGISTER'}
+
+    direction: EnumProperty(
+        items=(('RAISE', "Raise", "Repeated strokes build raised detail"),
+               ('LOWER', "Lower", "Repeated strokes build recessed detail")),
+        default='RAISE')
+
+    @classmethod
+    def poll(cls, context):
+        _, tree = _context_stack(context)
+        layer = tree.impasto.active_layer() if tree else None
+        return (layer is not None and layer.layer_type == 'PAINT'
+                and any(b.enabled and b.name == 'height'
+                        for b in layer.bindings))
+
+    def execute(self, context):
+        result = bpy.ops.impasto.paint_activate()
+        if result != {'FINISHED'}:
+            return result
+        brush = context.scene.tool_settings.image_paint.brush
+        if brush is None:
+            self.report({'ERROR'}, "No Texture Paint brush is active")
+            return {'CANCELLED'}
+        brush.blend = 'ADD' if self.direction == 'RAISE' else 'SUB'
+        brush.color = (1.0, 1.0, 1.0)
+        self.report({'INFO'}, "%s height detail; repeated strokes accumulate"
+                    % self.direction.title())
+        return {'FINISHED'}
+
+
 _classes = (
     IMPASTO_OT_stack_init,
     IMPASTO_OT_stack_remove,
@@ -439,6 +495,7 @@ _classes = (
     IMPASTO_OT_binding_remove,
     IMPASTO_OT_stack_rebuild,
     IMPASTO_OT_paint_activate,
+    IMPASTO_OT_detail_paint,
 )
 
 

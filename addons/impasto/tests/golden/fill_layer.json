@@ -28,17 +28,7 @@
     [
      [
       "ps:root:ch.roughness:blend.aa11bb22",
-      "Result_Color"
-     ],
-     [
-      "ps:root:ch.roughness:scalar",
-      "Color"
-     ]
-    ],
-    [
-     [
-      "ps:root:ch.roughness:scalar",
-      "Red"
+      "Result_Float"
      ],
      [
       "ps:root:out",
@@ -108,29 +98,19 @@
        0.75
       ],
       [
-       "A_Color",
-       [
-        0.5,
-        0.5,
-        0.5,
-        1.0
-       ]
+       "A_Float",
+       0.5
       ],
       [
-       "B_Color",
-       [
-        0.85,
-        0.85,
-        0.85,
-        1.0
-       ]
+       "B_Float",
+       0.85
       ]
      ],
      "name": "ps:root:ch.roughness:blend.aa11bb22",
      "props": [
       [
        "data_type",
-       "RGBA"
+       "FLOAT"
       ],
       [
        "blend_type",
@@ -148,24 +128,6 @@
        "location",
        [
         -300.0,
-        -320.0
-       ]
-      ]
-     ]
-    },
-    {
-     "bl_idname": "ShaderNodeSeparateColor",
-     "inputs": [],
-     "name": "ps:root:ch.roughness:scalar",
-     "props": [
-      [
-       "mode",
-       "RGB"
-      ],
-      [
-       "location",
-       [
-        -40.0,
         -320.0
        ]
       ]

@@ -403,8 +403,8 @@ def test_material_tree():
     check("height chain present -> Normal linked via Bump",
           ("Principled BSDF", "Normal") in dsts)
     root = _tree(spec, "root")
-    check("height uses explicit scalar extraction before Bump",
-          any(l.src == (model.n_scalar_out("height"), "Red")
+    check("height remains native float through Bump",
+          any(l.src[1] == "Result_Float"
               and l.dst == (model.n_bump(), "Height")
               for l in root.links))
     spec2 = model.compile_stack(fx_fill())
@@ -417,13 +417,23 @@ def test_material_tree():
     out = next(n for n in root2.nodes if n.name == "ps:root:out")
     check("fill fixture: both channels have participants (no seeds on "
           "the group output)", dict(out.inputs) == {})
-    rough_scalar = next(n for n in root2.nodes
-                        if n.name == model.n_scalar_out("roughness"))
-    check("roughness uses explicit RGB scalar extraction",
-          rough_scalar.bl_idname == "ShaderNodeSeparateColor"
-          and (model.n_scalar_out("roughness"), "Red") in
-          {link.src for link in root2.links
-           if link.dst == (model.n_root_out(), "Roughness")})
+    rough_blend = next(n for n in root2.nodes
+                       if n.name.startswith("ps:root:ch.roughness:blend"))
+    check("roughness root chain uses native float Mix",
+          dict(rough_blend.props)["data_type"] == "FLOAT"
+          and any(link.src == (rough_blend.name, "Result_Float")
+                  and link.dst == (model.n_root_out(), "Roughness")
+                  for link in root2.links))
+    check("scalar COLOR fallback is a float, never an RGBA tuple",
+          dict(model.compile_stack(model.StackModel(
+              root_tree_name="Scalar color fallback",
+              channels=("roughness",),
+              layers=(model.LayerModel(
+                  uid="dd44ee55", label="fallback", layer_type="FILL",
+                  bindings=(model.BindingModel(
+                      key="roughness", mode="COLOR",
+                      color=(0.25, 0.5, 0.75, 1.0)),)),))).trees[-1]
+              .nodes[-2].inputs).get("B_Float") == 0.25)
 
     normal_layer = model.LayerModel(
         uid="bb22cc33", label="Normal paint", layer_type="PAINT",

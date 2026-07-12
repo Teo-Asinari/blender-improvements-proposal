@@ -187,17 +187,7 @@
     [
      [
       "ps:root:ch.roughness:blend.aa11bb22",
-      "Result_Color"
-     ],
-     [
-      "ps:root:ch.roughness:scalar",
-      "Color"
-     ]
-    ],
-    [
-     [
-      "ps:root:ch.roughness:scalar",
-      "Red"
+      "Result_Float"
      ],
      [
       "ps:root:out",
@@ -211,7 +201,7 @@
      ],
      [
       "ps:root:ch.height:blend.c3a91f02",
-      "B_Color"
+      "B_Float"
      ]
     ],
     [
@@ -237,17 +227,7 @@
     [
      [
       "ps:root:ch.height:blend.c3a91f02",
-      "Result_Color"
-     ],
-     [
-      "ps:root:ch.height:scalar",
-      "Color"
-     ]
-    ],
-    [
-     [
-      "ps:root:ch.height:scalar",
-      "Red"
+      "Result_Float"
      ],
      [
       "ps:root:ch.height:bump",
@@ -398,29 +378,19 @@
        1.0
       ],
       [
-       "A_Color",
-       [
-        0.5,
-        0.5,
-        0.5,
-        1.0
-       ]
+       "A_Float",
+       0.5
       ],
       [
-       "B_Color",
-       [
-        0.3,
-        0.3,
-        0.3,
-        1.0
-       ]
+       "B_Float",
+       0.3
       ]
      ],
      "name": "ps:root:ch.roughness:blend.aa11bb22",
      "props": [
       [
        "data_type",
-       "RGBA"
+       "FLOAT"
       ],
       [
        "blend_type",
@@ -444,41 +414,18 @@
      ]
     },
     {
-     "bl_idname": "ShaderNodeSeparateColor",
-     "inputs": [],
-     "name": "ps:root:ch.roughness:scalar",
-     "props": [
-      [
-       "mode",
-       "RGB"
-      ],
-      [
-       "location",
-       [
-        -40.0,
-        -320.0
-       ]
-      ]
-     ]
-    },
-    {
      "bl_idname": "ShaderNodeMix",
      "inputs": [
       [
-       "A_Color",
-       [
-        0.5,
-        0.5,
-        0.5,
-        1.0
-       ]
+       "A_Float",
+       0.5
       ]
      ],
      "name": "ps:root:ch.height:blend.c3a91f02",
      "props": [
       [
        "data_type",
-       "RGBA"
+       "FLOAT"
       ],
       [
        "blend_type",
@@ -520,24 +467,6 @@
        [
         -370.0,
         -470.0
-       ]
-      ]
-     ]
-    },
-    {
-     "bl_idname": "ShaderNodeSeparateColor",
-     "inputs": [],
-     "name": "ps:root:ch.height:scalar",
-     "props": [
-      [
-       "mode",
-       "RGB"
-      ],
-      [
-       "location",
-       [
-        -40.0,
-        -640.0
        ]
       ]
      ]

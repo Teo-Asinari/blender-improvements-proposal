@@ -75,9 +75,18 @@ class IMPASTO_PT_main(bpy.types.Panel):
         op = col.operator(ops.IMPASTO_OT_layer_add.bl_idname, text="",
                           icon='BRUSH_DATA')
         op.layer_type = 'PAINT'
+        op.channel_key = 'base_color'
+        op = col.operator(ops.IMPASTO_OT_layer_add.bl_idname, text="",
+                          icon='RNDCURVE')
+        op.layer_type = 'PAINT'
+        op.channel_key = 'height'
         op = col.operator(ops.IMPASTO_OT_layer_add.bl_idname, text="",
                           icon='SNAP_FACE')
         op.layer_type = 'FILL'
+        layout.operator_menu_enum(ops.IMPASTO_OT_layer_add.bl_idname,
+                                  "channel_key",
+                                  text="Add Channel Paint Layer",
+                                  icon='ADD')
         col.operator(ops.IMPASTO_OT_layer_remove.bl_idname, text="",
                      icon='TRASH')
         col.separator()
@@ -103,11 +112,31 @@ class IMPASTO_PT_main(bpy.types.Panel):
                     row = box.row(align=True)
                     row.label(text=image.name if image else "Missing image",
                               icon='IMAGE_DATA' if image else 'ERROR')
-                    row = box.row()
-                    row.scale_y = 1.25
-                    row.operator(ops.IMPASTO_OT_paint_activate.bl_idname,
-                                 text="Paint Active Layer",
-                                 icon='TPAINT_HLT')
+                    is_height = any(b.enabled and b.name == 'height'
+                                    for b in layer.bindings)
+                    is_normal = any(b.enabled and b.name == 'normal'
+                                    for b in layer.bindings)
+                    if is_height:
+                        box.label(text="Height: repeated strokes accumulate",
+                                  icon='INFO')
+                        row = box.row(align=True)
+                        op = row.operator(
+                            ops.IMPASTO_OT_detail_paint.bl_idname,
+                            text="Raise", icon='TRIA_UP')
+                        op.direction = 'RAISE'
+                        op = row.operator(
+                            ops.IMPASTO_OT_detail_paint.bl_idname,
+                            text="Lower", icon='TRIA_DOWN')
+                        op.direction = 'LOWER'
+                    else:
+                        if is_normal:
+                            box.label(text="RGB normal: absolute direction",
+                                      icon='INFO')
+                        row = box.row()
+                        row.scale_y = 1.25
+                        row.operator(ops.IMPASTO_OT_paint_activate.bl_idname,
+                                     text="Paint Active Layer",
+                                     icon='TPAINT_HLT')
             else:
                 box.prop(layer, "opacity", slider=True)
 

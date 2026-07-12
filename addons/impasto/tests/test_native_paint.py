@@ -102,6 +102,36 @@ try:
           not bpy.ops.impasto.paint_activate.poll())
     check("non-paint selection preserves canvas", settings.canvas is canvas_before)
 
+    # Dedicated Height Detail layers start from neutral mid-gray and expose
+    # additive Raise/Lower brush modes so repeated strokes build relief.
+    check("add dedicated height detail", bpy.ops.impasto.layer_add(
+        layer_type="PAINT", channel_key="height") == {"FINISHED"})
+    detail_layer = tree.impasto.active_layer()
+    detail_image = bpy.data.images[detail_layer.image_name]
+    check("height detail is single-channel",
+          [b.name for b in detail_layer.bindings] == ["height"])
+    check("height detail image is neutral opaque mid-gray",
+          tuple(detail_image.generated_color) == (0.5, 0.5, 0.5, 1.0))
+    check("height detail image is Non-Color",
+          detail_image.colorspace_settings.name
+          == compat.resolve_colorspace(detail_image, "Non-Color"))
+    check("raise detail activates", bpy.ops.impasto.detail_paint(
+        direction="RAISE") == {"FINISHED"})
+    brush = settings.brush
+    check("raise detail configures accumulating ADD brush",
+          brush is not None and brush.blend == "ADD"
+          and tuple(brush.color) == (1.0, 1.0, 1.0))
+    check("lower detail activates", bpy.ops.impasto.detail_paint(
+        direction="LOWER") == {"FINISHED"})
+    check("lower detail configures accumulating SUB brush",
+          brush.blend == "SUB")
+
+    # Native canvas data cannot safely represent independent PBR channels in
+    # one image; a second shared binding must be rejected.
+    check("mixed paint-channel binding rejected",
+          bpy.ops.impasto.binding_add(channel_key="roughness")
+          == {"CANCELLED"})
+
     # Re-select by stable uid and prove the target can be restored from stored
     # layer/image/UV state after a real .blend save and reopen.
     paint_index = next(i for i, layer in enumerate(tree.impasto.layers)

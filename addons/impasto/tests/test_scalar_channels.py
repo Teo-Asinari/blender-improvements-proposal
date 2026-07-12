@@ -83,26 +83,26 @@ try:
           layer_scalar.bl_idname == "ShaderNodeSeparateColor")
     root_layer = root.nodes[model.n_root_layer(layer.name)]
     blend = root.nodes[model.n_blend("roughness", layer.name)]
-    check("image color reaches roughness blend",
+    check("image scalar reaches native-float roughness blend",
           any(link.from_node.name == root_layer.name
               and link.to_node.name == blend.name
               and link.from_socket.name == "ch:roughness"
-              and link.to_socket.identifier == "B_Color"
+              and link.to_socket.identifier == "B_Float"
               for link in root.links))
+    check("roughness blend data type is FLOAT", blend.data_type == "FLOAT")
     factor = socket(blend.inputs, "Factor_Float")
     check("roughness blend is gated by paint alpha", factor.is_linked)
     fac_node = root.nodes[model.n_fac("roughness", layer.name)]
     check("roughness binding opacity is uninverted",
           socket(fac_node.inputs, "Value_001").default_value == 1.0)
 
-    root_scalar = root.nodes[model.n_scalar_out("roughness")]
-    check("root roughness uses explicit red extraction",
-          root_scalar.bl_idname == "ShaderNodeSeparateColor"
-          and any(link.from_node.name == root_scalar.name
-                  and link.from_socket.name == "Red"
+    check("native-float result reaches root without Color conversion",
+          any(link.from_node.name == blend.name
+                  and link.from_socket.identifier == "Result_Float"
                   and link.to_node.name == root_out.name
                   and link.to_socket.name == "Roughness"
-                  for link in root.links))
+              for link in root.links)
+          and root.nodes.get(model.n_scalar_out("roughness")) is None)
 
     # Neutral black/white must preserve the scalar endpoints exactly.
     for value in (0.0, 1.0):
