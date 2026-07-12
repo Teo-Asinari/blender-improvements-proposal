@@ -600,6 +600,76 @@ def preview_shader_create_info():
 
 
 # ---------------------------------------------------------------------------
+# Stroke payload planning (pure; headless-testable)
+#
+# One logical Impasto Paint layer deposits into several channels per
+# stroke. Each channel's payload carries the value the dab shader
+# writes into that channel's MRT attachment plus the blend class the
+# batch planner groups by: material channels alpha-blend (MIX), Height
+# accumulates (ADD — RAISE adds, LOWER subtracts, both around the
+# neutral 0.5 canvas). COLOR-kind channels are stored sRGB-encoded in
+# their Image datablocks, and the GPU path writes raw stored values,
+# so their brush values are encoded here; scalar/Non-Color channels
+# pass through raw.
+# ---------------------------------------------------------------------------
+
+# Channels the multi-channel brush can deposit into, in registry order.
+# Other channels (emission, subsurface, ...) stay native-paint-only.
+GPU_PAINT_CHANNEL_KEYS = ("base_color", "metallic", "roughness",
+                          "normal", "height")
+
+
+def linear_to_srgb(v):
+    """Scene-linear component -> sRGB-encoded component (IEC 61966-2-1).
+    COLOR-kind canvases store encoded values; painting the raw linear
+    swatch would render brighter than picked."""
+    v = max(0.0, float(v))
+    if v <= 0.0031308:
+        return v * 12.92
+    return 1.055 * v ** (1.0 / 2.4) - 0.055
+
+
+def stroke_payloads(channel_keys, brush):
+    """MRT payload per channel key, aligned with ``channel_keys``.
+
+    ``brush`` is a plain dict of the layer's brush properties:
+    ``color`` (linear RGB), ``roughness``, ``metallic``, ``normal``
+    (encoded RGB), ``height_strength``, ``height_direction``
+    ('RAISE'|'LOWER'), optional ``strength`` (dab alpha, default 1.0).
+    Pure — the operator snapshots PropertyGroups into the dict."""
+    strength = float(brush.get("strength", 1.0))
+    payloads = []
+    for key in channel_keys:
+        if key not in GPU_PAINT_CHANNEL_KEYS:
+            raise ValueError("unpaintable channel %r" % key)
+        if key == "base_color":
+            value = tuple(linear_to_srgb(c)
+                          for c in brush.get("color", (0.8, 0.2, 0.1)))
+            blend = "MIX"
+        elif key == "roughness":
+            r = float(brush.get("roughness", 0.5))
+            value = (r, r, r)
+            blend = "MIX"
+        elif key == "metallic":
+            m = float(brush.get("metallic", 0.0))
+            value = (m, m, m)
+            blend = "MIX"
+        elif key == "normal":
+            value = tuple(float(c) for c in
+                          brush.get("normal", (0.5, 0.5, 1.0)))
+            blend = "MIX"
+        else:   # height: signed additive step around the 0.5 canvas
+            step = float(brush.get("height_strength", 0.05))
+            if brush.get("height_direction", "RAISE") == "LOWER":
+                step = -step
+            value = (step, step, step)
+            blend = "ADD"
+        payloads.append({"value": value, "strength": strength,
+                         "blend": blend})
+    return payloads
+
+
+# ---------------------------------------------------------------------------
 # Session state
 # ---------------------------------------------------------------------------
 
@@ -1747,7 +1817,7 @@ def _draw_preview(s):
 
 
 def _overlay_text_lines(s):
-    lines = ["GPU Paint Spike — painting  (RMB / Esc to stop)"]
+    lines = ["Impasto GPU paint — LMB paints  (RMB / Esc to stop)"]
     if s.error is not None:
         lines.append("ERROR (see console): %s"
                      % s.error.strip().splitlines()[-1][:80])

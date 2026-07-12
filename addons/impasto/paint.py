@@ -41,18 +41,26 @@ def maybe_switch_material_preview(context, enabled=None):
     return True
 
 
-def _target_colorspace(layer):
-    """Colorspace required by the first enabled shared channel binding."""
-    bindings = {b.name: b for b in layer.bindings
-                if b.enabled and b.mode == 'SHARED'}
-    for channel in model.CHANNELS:
-        if channel.key in bindings:
-            return channel.colorspace
-    return "sRGB"
+def paint_binding(layer, channel_key=""):
+    """The binding whose canvas native painting edits: the named
+    channel, or the first enabled SHARED binding in registry order.
+    Returns None when the layer has no paintable binding."""
+    candidates = [b for b in layer.bindings
+                  if b.enabled and b.mode == 'SHARED'
+                  and b.name in model.CHANNEL_MAP]
+    if channel_key:
+        for b in candidates:
+            if b.name == channel_key:
+                return b
+        return None
+    candidates.sort(key=lambda b: model.CHANNEL_ORDER[b.name])
+    return candidates[0] if candidates else None
 
 
-def activate_paint_target(context, layer):
-    """Make ``layer`` Blender's image-mode texture-paint canvas.
+def activate_paint_target(context, layer, channel_key=""):
+    """Make one of ``layer``'s channel canvases Blender's image-mode
+    texture-paint canvas (``channel_key`` selects which; empty picks
+    the first enabled SHARED binding in registry order).
 
     This deliberately does not enter Texture Paint mode.  Layer selection is
     safe in Object/Edit mode; mode changes happen only through the explicit
@@ -63,9 +71,17 @@ def activate_paint_target(context, layer):
         raise PaintTargetError("Select the mesh that owns this Impasto stack")
     if layer is None or layer.layer_type != 'PAINT':
         raise PaintTargetError("The active Impasto layer is not a paint layer")
-    image = bpy.data.images.get(layer.image_name)
+    binding = paint_binding(layer, channel_key)
+    if binding is None:
+        raise PaintTargetError(
+            "The active paint layer has no paintable %s binding"
+            % (model.CHANNEL_MAP[channel_key].label if channel_key
+               in model.CHANNEL_MAP else "channel"))
+    channel = model.CHANNEL_MAP[binding.name]
+    image = bpy.data.images.get(binding.image_name or layer.image_name)
     if image is None:
-        raise PaintTargetError("The active paint layer's image is missing")
+        raise PaintTargetError("The %s canvas of the active paint layer "
+                               "is missing" % channel.label)
 
     uv_layers = obj.data.uv_layers
     if not uv_layers:
@@ -76,7 +92,7 @@ def activate_paint_target(context, layer):
         raise PaintTargetError("Paint layer UV map %r is missing" % uv_name)
     uv_layers.active = uv
 
-    wanted = compat.resolve_colorspace(image, _target_colorspace(layer))
+    wanted = compat.resolve_colorspace(image, channel.colorspace)
     repaired = image.colorspace_settings.name != wanted
     if repaired:
         image.colorspace_settings.name = wanted
@@ -88,8 +104,10 @@ def activate_paint_target(context, layer):
     # Keep Blender's conventional active image-node target aligned too.  The
     # explicit canvas above is authoritative, but selecting the generated
     # source node makes Image Editor/tool integrations show the same image.
+    source_name = (model.n_binding_src(layer.name, binding.name)
+                   if binding.image_name else model.n_src(layer.name))
     layer_tree = bpy.data.node_groups.get(model.layer_tree_name(layer.name))
-    source = (layer_tree.nodes.get(model.n_src(layer.name))
+    source = (layer_tree.nodes.get(source_name)
               if layer_tree is not None else None)
     if source is not None:
         for node in layer_tree.nodes:

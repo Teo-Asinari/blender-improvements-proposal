@@ -272,12 +272,27 @@ def _ensure_timer():
 
 
 # ---------------------------------------------------------------------------
-# migrations (A5): machinery live from v0, zero migrations registered.
+# migrations (A5): machinery live from v0.
 # Each entry: (from_schema, callable(stack_state)) applied in order
 # while schema_version matches, then the stack is re-stamped.
 # ---------------------------------------------------------------------------
 
-MIGRATIONS = ()
+def _migrate_1_per_binding_canvases(state):
+    """Schema 1 -> 2: SHARED Paint bindings own their canvas explicitly.
+
+    Legacy layers stored one canvas on the layer; the compiler still
+    honors that fallback, so this migration only normalizes stored
+    state — it copies the layer canvas into SHARED bindings that lack
+    one and creates no images, so it is loss-free and idempotent."""
+    for ly in state.layers:
+        if ly.layer_type != 'PAINT' or not ly.image_name:
+            continue
+        for b in ly.bindings:
+            if b.mode == 'SHARED' and not b.image_name:
+                b.image_name = ly.image_name
+
+
+MIGRATIONS = ((1, _migrate_1_per_binding_canvases),)
 
 
 def run_migrations(tree):

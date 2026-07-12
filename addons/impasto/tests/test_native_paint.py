@@ -33,8 +33,17 @@ def activate():
 
 
 def active_source_node(layer):
+    """The generated image node for the layer's first binding: the
+    per-binding node when the binding owns its canvas (schema 2), the
+    legacy layer-canvas node otherwise."""
     tree = bpy.data.node_groups.get(model.layer_tree_name(layer.name))
-    return tree, tree.nodes.get(model.n_src(layer.name)) if tree else None
+    if tree is None:
+        return None, None
+    binding = layer.bindings[0] if len(layer.bindings) else None
+    name = (model.n_binding_src(layer.name, binding.name)
+            if binding is not None and binding.image_name
+            else model.n_src(layer.name))
+    return tree, tree.nodes.get(name)
 
 
 try:
@@ -148,11 +157,22 @@ try:
     check("lower detail configures accumulating SUB brush",
           brush.blend == "SUB")
 
-    # Native canvas data cannot safely represent independent PBR channels in
-    # one image; a second shared binding must be rejected.
-    check("mixed paint-channel binding rejected",
+    # One logical layer, separate per-channel canvases: a second channel
+    # binding creates its own image (never a shared multi-channel canvas).
+    check("second channel binding accepted",
           bpy.ops.impasto.binding_add(channel_key="roughness")
-          == {"CANCELLED"})
+          == {"FINISHED"})
+    rough_binding = detail_layer.bindings.get("roughness")
+    check("second channel owns a dedicated canvas",
+          rough_binding is not None and rough_binding.image_name
+          and rough_binding.image_name != detail_layer.image_name)
+    rough_image = bpy.data.images.get(rough_binding.image_name)
+    check("dedicated canvas matches the layer's resolution",
+          rough_image is not None
+          and tuple(rough_image.size) == tuple(detail_image.size))
+    check("dedicated scalar canvas is Non-Color",
+          rough_image.colorspace_settings.name
+          == compat.resolve_colorspace(rough_image, "Non-Color"))
 
     # Re-select by stable uid and prove the target can be restored from stored
     # layer/image/UV state after a real .blend save and reopen.

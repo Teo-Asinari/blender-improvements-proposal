@@ -6,9 +6,12 @@ pass-through groups, channel bindings, paint-mask graph structure, minimal node
 reconciliation, and a small 3D Viewport sidebar for creating and arranging the
 stack without working directly in the Shader Editor.
 
-> **Development status:** Phase 1 stack foundation plus the first Phase 3
-> native-paint workflow. Paint layers work with Blender's native brush; masks,
-> channel isolation, bake-down/export, and GPU strokes remain later work.
+> **Development status:** Phase 1 stack foundation, the Phase 3
+> native-paint workflow, and the first multi-channel painting milestone:
+> one logical Paint layer with a separate canvas per channel, painted
+> either natively (one channel at a time) or with the experimental GPU
+> brush (all channels in one stroke). Masks, channel isolation, and
+> bake-down/export remain later work.
 
 ## Phase 1 scope
 
@@ -64,12 +67,57 @@ change. The explicit button is the safe way to enter Texture Paint. If a layer's
 stored UV map or image was deleted, activation stops and reports what is missing
 instead of allowing Blender to paint into a different target.
 
-Native paint is currently one image and one PBR channel per Paint layer. Use
-**Add Channel Paint Layer** to create a dedicated Base Color, Roughness,
-Metallic, Height, or Tangent Normal image with the correct colorspace. Impasto
-rejects a second shared channel on the same native Paint layer: Blender's native
-brush cannot deposit independent values into multiple PBR channels in one
-stroke. GPU multi-channel painting is still a separate experiment.
+### One layer, one canvas per channel
+
+A Paint layer is one logical layer whose bindings each own a dedicated
+image (`binding.image_name`), created with the correct colorspace: color
+channels sRGB, scalars and tangent normals Non-Color, Height seeded at
+opaque neutral mid-gray. Adding a channel to a Paint layer (the `+`
+rows in the Channels list, or **Add Channel Paint Layer** for a fresh
+single-channel layer) creates that channel's canvas at the layer's
+existing resolution, so all canvases of one layer stay equal-sized.
+
+Blender's native brush still edits exactly one image at a time: each
+painted channel row shows a brush button that makes that channel's
+canvas the native paint target, and **Paint Active Layer** picks the
+layer's first painted channel. One native stroke lands in one channel —
+that is the deliberate single-channel editing path.
+
+Files saved by earlier Impasto versions stored a single canvas on the
+layer; they keep working unchanged, and opening them migrates the
+stored state to per-channel form automatically (schema 1 to 2, no
+images are created or altered).
+
+### GPU multi-channel painting (experimental)
+
+**GPU Paint All Channels** (layer panel, Object menu, or F3) rasterizes
+each brush dab once into every bound channel simultaneously — Base
+Color, Metallic, Roughness, Tangent Normal, and Height — using the
+layer's Multi-Channel Brush values. Material channels alpha-blend;
+Height is a separate additive pass driven by the same stroke, so
+**Raise/Lower** accumulate relief around the neutral mid-gray canvas
+exactly like the native Height brush. Left mouse paints, right mouse or
+Esc stops, and the channel canvases sync back on every pen lift.
+
+Notes and current limits:
+
+- Base Color brush values are sRGB-encoded on deposit so the painted
+  swatch renders as picked; blending still happens in stored space, not
+  scene-linear composited space.
+- GPU strokes are not undoable yet (native painting keeps Blender's
+  normal paint undo). Stop the session before undoing stack operations.
+- Occlusion is depth-prepass based; a stroke uses the view it was
+  painted in. Orbiting between strokes is fine.
+- If the GPU session fails on a backend/driver, Impasto reports once
+  and native painting is unaffected.
+
+**Resolution tradeoff:** new canvases default to 2048 x 2048, chosen so
+a four-channel GPU pen-lift sync (GPU readback + `Image.pixels` write
+per channel) stays within an interactive ~200 ms budget on measured
+hardware. The layer-creation operator offers 1K/2K/4K per layer; at 4K
+a four-channel pen lift measured ~417 ms, dominated by Blender's
+full-image `Image.pixels` write, which no add-on can shrink. Pick 4K
+only for hero assets where pen-lift latency is acceptable.
 
 ### Normal and height painting
 
@@ -114,7 +162,17 @@ real viewport brush stroke. Before packaging a release, verify interactively:
 - save, reopen, select the paint layer, and confirm activation restores its
   saved image and UV target;
 - delete or rename the stored UV map and confirm activation reports the missing
-  UV rather than painting elsewhere.
+  UV rather than painting elsewhere;
+- add Roughness and Height to a Base Color Paint layer, start **GPU Paint
+  All Channels**, and confirm one stroke changes color, roughness, and
+  relief together in Material Preview after pen lift;
+- confirm Raise strokes accumulate upward relief and Lower strokes recess
+  it, and that repeated strokes deepen the effect;
+- paint the front of a sphere with the GPU brush and confirm the back
+  stays clean (occlusion), then stop with RMB/Esc and confirm the
+  Image editor shows each channel's synced canvas;
+- confirm native per-channel brush buttons still edit exactly one
+  canvas each after a GPU session ends.
 
 Impasto owns its generated root and per-layer node groups. Treat those graphs
 as build artifacts: edit the stack through Impasto rather than manually

@@ -5,12 +5,14 @@ all are REGISTER | UNDO. Bulk edits run inside stack_edit_session so a
 whole operator costs exactly one compile+reconcile (design §4.7)."""
 
 import json
+import time
 
 import bpy
 from bpy.props import EnumProperty, StringProperty
 
 from . import compat
 from . import engine
+from . import gpu_engine
 from . import model
 from . import paint
 
@@ -68,6 +70,28 @@ def new_layer_image(name, colorspace, size=DEFAULT_IMAGE_SIZE,
     img.use_fake_user = True
     compat.set_image_colorspace(img, colorspace)
     return img
+
+
+def _channel_canvas_seed(ch):
+    """Fresh-canvas fill: Height accumulates around opaque neutral
+    mid-gray; every other channel starts transparent so unpainted
+    texels contribute nothing (alpha gates the root chain factor)."""
+    return ((0.5, 0.5, 0.5, 1.0) if ch.key == "height"
+            else (0.0, 0.0, 0.0, 0.0))
+
+
+def _layer_canvas_size(layer):
+    """Resolution of the layer's existing canvases, so every channel
+    image of one logical layer matches (a GPU MRT session requires
+    equal sizes). Falls back to the stack default."""
+    for b in layer.bindings:
+        img = bpy.data.images.get(b.image_name or layer.image_name)
+        if img is not None and img.size[0] > 0:
+            return img.size[0]
+    img = bpy.data.images.get(layer.image_name)
+    if img is not None and img.size[0] > 0:
+        return img.size[0]
+    return DEFAULT_IMAGE_SIZE
 
 
 class IMPASTO_OT_stack_init(bpy.types.Operator):
@@ -222,6 +246,16 @@ class IMPASTO_OT_layer_add(bpy.types.Operator):
                     for ch in model.CHANNELS),
         default="base_color",
         description="Channel initially bound to a new Paint layer")
+    canvas_size: EnumProperty(
+        name="Canvas Size",
+        items=(('1024', "1024 (1K)", ""),
+               ('2048', "2048 (2K)", "Default; four-channel GPU strokes "
+                "sync within the pen-lift budget"),
+               ('4096', "4096 (4K)", "Four-channel GPU pen-lift sync "
+                "exceeds 400 ms (Image.pixels writes; see README)")),
+        default='2048',
+        description="Resolution of every canvas this layer creates "
+                    "(later channel canvases inherit it)")
 
     @classmethod
     def poll(cls, context):
@@ -245,16 +279,17 @@ class IMPASTO_OT_layer_add(bpy.types.Operator):
             ly.layer_type = self.layer_type
             if self.layer_type == 'PAINT':
                 ch = initial
-                generated = ((0.5, 0.5, 0.5, 1.0)
-                             if ch.key == "height"
-                             else (0.0, 0.0, 0.0, 0.0))
                 img = new_layer_image("Impasto %s %s" % (ly.label, uid),
                                       ch.colorspace,
-                                      generated_color=generated)
+                                      size=int(self.canvas_size),
+                                      generated_color=_channel_canvas_seed(ch))
+                # Explicit per-binding canvas (schema 2). The layer slot
+                # mirrors the primary canvas for legacy compatibility.
                 ly.image_name = img.name
                 ly.uv_map = _active_uv_map(context)
                 b = ly.bindings.add()
                 b.name = ch.key
+                b.image_name = img.name
             elif self.layer_type == 'FILL':
                 ch = model.CHANNEL_MAP["base_color"]
                 b = ly.bindings.add()
@@ -326,8 +361,9 @@ class IMPASTO_OT_layer_move(bpy.types.Operator):
 
 
 class IMPASTO_OT_binding_add(bpy.types.Operator):
-    """Bind the active layer to a channel (paint layers share their
-    canvas; fill layers deposit the channel's default constant)"""
+    """Bind the active layer to a channel (paint layers get a dedicated
+    per-channel canvas; fill layers deposit the channel's default
+    constant)"""
     bl_idname = "impasto.binding_add"
     bl_label = "Impasto: Bind Channel"
     bl_options = {'REGISTER', 'UNDO'}
@@ -350,17 +386,20 @@ class IMPASTO_OT_binding_add(bpy.types.Operator):
         with engine.stack_edit_session(tree):
             b = ly.bindings.get(self.channel_key)
             if b is None:
-                if (ly.layer_type == 'PAINT'
-                        and any(existing.mode == 'SHARED'
-                                for existing in ly.bindings)):
-                    self.report({"WARNING"},
-                                "Native Paint layers use one channel image; "
-                                "add a dedicated %s Paint layer" % ch.label)
-                    return {'CANCELLED'}
                 b = ly.bindings.add()
                 b.name = self.channel_key
                 if ly.layer_type == 'PAINT':
+                    # One logical layer, separate per-channel canvases:
+                    # every SHARED binding owns an image sized to match
+                    # the layer's existing canvases (one GPU stroke can
+                    # then deposit into all of them at once).
                     b.mode = 'SHARED'
+                    img = new_layer_image(
+                        "Impasto %s %s %s" % (ly.label, ch.label, ly.name),
+                        ch.colorspace,
+                        size=_layer_canvas_size(ly),
+                        generated_color=_channel_canvas_seed(ch))
+                    b.image_name = img.name
                 elif ch.kind == 'COLOR':
                     b.mode = 'COLOR'
                     b.color = model.seed_rgba(ch)
@@ -415,11 +454,17 @@ class IMPASTO_OT_stack_rebuild(bpy.types.Operator):
 
 
 class IMPASTO_OT_paint_activate(bpy.types.Operator):
-    """Use the active Impasto paint layer as Blender's native brush canvas
-    and enter Texture Paint mode"""
+    """Use one of the active Impasto paint layer's channel canvases as
+    Blender's native brush canvas and enter Texture Paint mode"""
     bl_idname = "impasto.paint_activate"
     bl_label = "Impasto: Paint Active Layer"
     bl_options = {'REGISTER'}
+
+    channel_key: StringProperty(
+        name="Channel",
+        description="Channel canvas to paint natively; empty picks the "
+                    "layer's first enabled painted channel",
+        default="")
 
     @classmethod
     def poll(cls, context):
@@ -431,7 +476,8 @@ class IMPASTO_OT_paint_activate(bpy.types.Operator):
         _, tree = _context_stack(context)
         layer = tree.impasto.active_layer()
         try:
-            repaired = paint.activate_paint_target(context, layer)
+            repaired = paint.activate_paint_target(context, layer,
+                                                   self.channel_key)
         except paint.PaintTargetError as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
@@ -444,7 +490,10 @@ class IMPASTO_OT_paint_activate(bpy.types.Operator):
             self.report({'ERROR'}, "Could not enter Texture Paint mode: %s" % exc)
             return {'CANCELLED'}
         paint.maybe_switch_material_preview(context)
+        binding = paint.paint_binding(layer, self.channel_key)
         message = "Painting %s" % layer.label
+        if binding is not None:
+            message += " (%s)" % model.CHANNEL_MAP[binding.name].label
         if repaired:
             message += " (image colorspace repaired)"
         self.report({'INFO'}, message)
@@ -472,7 +521,7 @@ class IMPASTO_OT_detail_paint(bpy.types.Operator):
                         for b in layer.bindings))
 
     def execute(self, context):
-        result = bpy.ops.impasto.paint_activate()
+        result = bpy.ops.impasto.paint_activate(channel_key='height')
         if result != {'FINISHED'}:
             return result
         brush = context.scene.tool_settings.image_paint.brush
@@ -486,6 +535,233 @@ class IMPASTO_OT_detail_paint(bpy.types.Operator):
         return {'FINISHED'}
 
 
+def gpu_paint_targets(layer):
+    """Ordered (channel key, Image) pairs one GPU stroke deposits into:
+    the layer's enabled SHARED bindings of GPU-paintable channels whose
+    canvas exists, in registry order (payloads align by index)."""
+    pairs = []
+    for ch in model.CHANNELS:
+        if ch.key not in gpu_engine.GPU_PAINT_CHANNEL_KEYS:
+            continue
+        b = layer.bindings.get(ch.key)
+        if b is None or not b.enabled or b.mode != 'SHARED':
+            continue
+        image = bpy.data.images.get(b.image_name or layer.image_name)
+        if image is not None:
+            pairs.append((ch.key, image))
+    return pairs
+
+
+def _gpu_brush(layer):
+    """Snapshot the layer's brush PropertyGroup values into the plain
+    dict gpu_engine.stroke_payloads consumes (pure seam)."""
+    return {"color": tuple(layer.paint_color),
+            "roughness": layer.paint_roughness,
+            "metallic": layer.paint_metallic,
+            "normal": tuple(layer.paint_normal),
+            "height_strength": layer.paint_height_strength,
+            "height_direction": layer.paint_height_direction}
+
+
+class IMPASTO_OT_gpu_paint(bpy.types.Operator):
+    """Paint every bound channel of the active Impasto paint layer with
+    one GPU stroke (LMB paints, RMB or Esc stops; canvases sync on
+    pen-lift). Strokes are not undoable yet — see the README"""
+    bl_idname = "impasto.gpu_paint"
+    bl_label = "Impasto: GPU Paint All Channels"
+    bl_options = {'REGISTER'}
+
+    # The modal loop never touches gpu: it enqueues dabs / tags redraws
+    # and writes finished readbacks into the Image datablocks. All GPU
+    # work happens in gpu_engine's POST_VIEW draw callback.
+
+    @classmethod
+    def poll(cls, context):
+        if gpu_engine.session_active():
+            return False   # one session at a time
+        _, tree = _context_stack(context)
+        layer = tree.impasto.active_layer() if tree else None
+        obj = context.object
+        return (obj is not None and obj.type == 'MESH'
+                and layer is not None and layer.layer_type == 'PAINT')
+
+    def invoke(self, context, event):
+        if context.area is None or context.area.type != 'VIEW_3D':
+            self.report({'ERROR'},
+                        "Run from a 3D Viewport (Impasto sidebar)")
+            return {'CANCELLED'}
+        # The modal loop needs region-relative mouse coordinates; the
+        # panel button invokes from the UI region, so find WINDOW.
+        region = next((r for r in context.area.regions
+                       if r.type == 'WINDOW'), None)
+        if region is None:
+            self.report({'ERROR'}, "No drawable viewport region found")
+            return {'CANCELLED'}
+
+        _, tree = _context_stack(context)
+        layer = tree.impasto.active_layer()
+        targets = gpu_paint_targets(layer)
+        if not targets:
+            self.report({'ERROR'},
+                        "The active layer has no paintable channel canvas")
+            return {'CANCELLED'}
+        sizes = {tuple(img.size) for _key, img in targets}
+        if len(sizes) != 1 or any(w != h for w, h in sizes):
+            self.report({'ERROR'},
+                        "Channel canvases must share one square "
+                        "resolution; got %s"
+                        % sorted("%dx%d" % s for s in sizes))
+            return {'CANCELLED'}
+
+        obj = context.object
+        if obj.mode != 'OBJECT':
+            try:
+                bpy.ops.object.mode_set(mode='OBJECT')
+            except RuntimeError as exc:
+                self.report({'ERROR'},
+                            "Could not enter Object Mode: %s" % exc)
+                return {'CANCELLED'}
+        if layer.uv_map:
+            uv = obj.data.uv_layers.get(layer.uv_map)
+            if uv is None:
+                self.report({'ERROR'}, "Paint layer UV map %r is missing"
+                            % layer.uv_map)
+                return {'CANCELLED'}
+            obj.data.uv_layers.active = uv
+
+        keys = [key for key, _img in targets]
+        images = [img for _key, img in targets]
+        payloads = gpu_engine.stroke_payloads(keys, _gpu_brush(layer))
+        settings = {
+            "radius": layer.brush_radius,
+            "hardness": layer.brush_hardness,
+            "occlusion": True,
+            "subrect": True,
+            "preview_index": (keys.index(layer.preview_channel)
+                              if layer.preview_channel in keys else 0),
+        }
+        if not gpu_engine.start_session(obj, images, region,
+                                        payloads=payloads,
+                                        settings=settings):
+            self.report({'ERROR'}, "Mesh has no UV map or faces")
+            return {'CANCELLED'}
+        paint.maybe_switch_material_preview(context)
+
+        self._region = region
+        self._radius = layer.brush_radius
+        self._stopping = False
+        self._timer = context.window_manager.event_timer_add(
+            0.05, window=context.window)
+        context.window_manager.modal_handler_add(self)
+        region.tag_redraw()
+        self.report({'INFO'},
+                    "GPU painting %s — LMB paints, RMB/Esc stops"
+                    % ", ".join(model.CHANNEL_MAP[k].label for k in keys))
+        return {'RUNNING_MODAL'}
+
+    # -- helpers -----------------------------------------------------------
+
+    def _mouse_region(self, event):
+        return (event.mouse_x - self._region.x,
+                event.mouse_y - self._region.y)
+
+    def _inside_region(self, event):
+        rx, ry = self._mouse_region(event)
+        return (0 <= rx < self._region.width
+                and 0 <= ry < self._region.height)
+
+    def _apply_pending_sync(self):
+        """Write a finished stroke's readback into the channel Image
+        datablocks — always here, never in a draw callback."""
+        pending = gpu_engine.take_pending_pixels()
+        if pending is None:
+            return
+        write_ms = 0.0
+        update_ms = 0.0
+        for arr, image_name in pending:
+            image = bpy.data.images.get(image_name)
+            if image is None:
+                continue
+            t0 = time.perf_counter()
+            image.pixels.foreach_set(arr)
+            t1 = time.perf_counter()
+            image.update()
+            t2 = time.perf_counter()
+            write_ms += (t1 - t0) * 1000.0
+            update_ms += (t2 - t1) * 1000.0
+        gpu_engine.record_sync_stats(write_ms, update_ms)
+        # Repaint the composed material and any Image editors.
+        for area in bpy.context.screen.areas:
+            if area.type in {'VIEW_3D', 'IMAGE_EDITOR'}:
+                area.tag_redraw()
+
+    def _finish(self, context):
+        gpu_engine.stop_session()
+        if self._timer is not None:
+            context.window_manager.event_timer_remove(self._timer)
+            self._timer = None
+        if self._region is not None:
+            self._region.tag_redraw()
+        return {'FINISHED'}
+
+    # -- modal loop ----------------------------------------------------------
+
+    def modal(self, context, event):
+        if not gpu_engine.session_active():
+            return self._finish(context)
+
+        self._apply_pending_sync()
+
+        if self._stopping:
+            if not gpu_engine.busy():
+                return self._finish(context)
+            self._region.tag_redraw()   # keep draw callbacks pumping
+            return {'RUNNING_MODAL'}
+
+        if gpu_engine.last_error() is not None:
+            # Latched GPU failure: stop cleanly; the console holds the
+            # traceback. Native painting stays fully available.
+            self.report({'WARNING'},
+                        "Impasto GPU paint failed — see console; "
+                        "native painting is unaffected")
+            return self._finish(context)
+
+        etype = event.type
+        if etype == 'LEFTMOUSE':
+            if event.value == 'PRESS' and self._inside_region(event):
+                rx, ry = self._mouse_region(event)
+                gpu_engine.begin_stroke(rx, ry, event.pressure)
+                self._region.tag_redraw()
+                return {'RUNNING_MODAL'}
+            if event.value == 'RELEASE' and gpu_engine.stroke_active():
+                gpu_engine.end_stroke()
+                self._region.tag_redraw()
+                return {'RUNNING_MODAL'}
+        elif etype == 'MOUSEMOVE' and gpu_engine.stroke_active():
+            rx, ry = self._mouse_region(event)
+            gpu_engine.move_stroke(rx, ry, event.pressure, self._radius)
+            self._region.tag_redraw()
+            return {'RUNNING_MODAL'}
+        elif etype in {'RIGHTMOUSE', 'ESC'} and event.value == 'PRESS':
+            if gpu_engine.stroke_active():
+                gpu_engine.end_stroke()
+            self._stopping = True
+            self._region.tag_redraw()
+            return {'RUNNING_MODAL'}
+        elif etype == 'TIMER':
+            return {'RUNNING_MODAL'}
+
+        # Orbit/zoom/pan and UI clicks pass through; the depth prepass
+        # re-renders itself at the next draw after any view change.
+        return {'PASS_THROUGH'}
+
+    def cancel(self, context):
+        gpu_engine.stop_session()
+        if getattr(self, "_timer", None) is not None:
+            context.window_manager.event_timer_remove(self._timer)
+            self._timer = None
+
+
 _classes = (
     IMPASTO_OT_stack_init,
     IMPASTO_OT_stack_remove,
@@ -497,6 +773,7 @@ _classes = (
     IMPASTO_OT_stack_rebuild,
     IMPASTO_OT_paint_activate,
     IMPASTO_OT_detail_paint,
+    IMPASTO_OT_gpu_paint,
 )
 
 

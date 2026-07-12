@@ -182,7 +182,9 @@ try:
     image.pixels[:] = pixels
     image.update()
     with engine.stack_edit_session(root):
+        # Schema 2: the binding owns the canvas; the layer slot mirrors it.
         detail.image_name = image.name
+        detail.bindings["height"].image_name = image.name
     engine.rebuild(root)
     emission_link(mat.node_tree, stack, principled, "Normal")
     varied_mean, varied_deviation = render_stats("height_varied")

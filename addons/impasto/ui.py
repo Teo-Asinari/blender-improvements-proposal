@@ -7,6 +7,7 @@ deliberately minimal for phase 1 (UX iterates with the user)."""
 import bpy
 
 from . import engine
+from . import gpu_engine
 from . import model
 from . import ops
 
@@ -108,41 +109,76 @@ class IMPASTO_PT_main(bpy.types.Panel):
                 row.prop(layer, "opacity", slider=True)
                 self._draw_bindings(box, state, layer)
                 if layer.layer_type == 'PAINT':
-                    image = bpy.data.images.get(layer.image_name)
-                    row = box.row(align=True)
-                    row.label(text=image.name if image else "Missing image",
-                              icon='IMAGE_DATA' if image else 'ERROR')
-                    is_height = any(b.enabled and b.name == 'height'
-                                    for b in layer.bindings)
-                    is_normal = any(b.enabled and b.name == 'normal'
-                                    for b in layer.bindings)
-                    if is_height:
-                        box.label(text="Height: repeated strokes accumulate",
-                                  icon='INFO')
-                        row = box.row(align=True)
-                        op = row.operator(
-                            ops.IMPASTO_OT_detail_paint.bl_idname,
-                            text="Raise", icon='TRIA_UP')
-                        op.direction = 'RAISE'
-                        op = row.operator(
-                            ops.IMPASTO_OT_detail_paint.bl_idname,
-                            text="Lower", icon='TRIA_DOWN')
-                        op.direction = 'LOWER'
-                    else:
-                        if is_normal:
-                            box.label(text="RGB normal: absolute direction",
-                                      icon='INFO')
-                        row = box.row()
-                        row.scale_y = 1.25
-                        row.operator(ops.IMPASTO_OT_paint_activate.bl_idname,
-                                     text="Paint Active Layer",
-                                     icon='TPAINT_HLT')
+                    self._draw_paint_tools(box, layer)
             else:
                 box.prop(layer, "opacity", slider=True)
 
         layout.separator()
         layout.operator(ops.IMPASTO_OT_stack_rebuild.bl_idname,
                         text="Rebuild", icon='FILE_REFRESH')
+
+    def _draw_paint_tools(self, box, layer):
+        bound = [b.name for b in layer.bindings
+                 if b.enabled and b.mode == 'SHARED'
+                 and b.name in model.CHANNEL_MAP]
+        image = bpy.data.images.get(layer.image_name)
+        row = box.row(align=True)
+        row.label(text=image.name if image else "Missing image",
+                  icon='IMAGE_DATA' if image else 'ERROR')
+        if 'normal' in bound:
+            box.label(text="RGB normal: absolute direction", icon='INFO')
+        if 'height' in bound:
+            box.label(text="Height: repeated strokes accumulate",
+                      icon='INFO')
+            row = box.row(align=True)
+            op = row.operator(ops.IMPASTO_OT_detail_paint.bl_idname,
+                              text="Raise", icon='TRIA_UP')
+            op.direction = 'RAISE'
+            op = row.operator(ops.IMPASTO_OT_detail_paint.bl_idname,
+                              text="Lower", icon='TRIA_DOWN')
+            op.direction = 'LOWER'
+        if any(k != 'height' for k in bound) or not bound:
+            row = box.row()
+            row.scale_y = 1.25
+            op = row.operator(ops.IMPASTO_OT_paint_activate.bl_idname,
+                              text="Paint Active Layer",
+                              icon='TPAINT_HLT')
+            op.channel_key = ""
+
+        gpu_keys = [k for k in bound
+                    if k in gpu_engine.GPU_PAINT_CHANNEL_KEYS]
+        if gpu_keys:
+            col = box.column(align=True)
+            col.label(text="Multi-Channel Brush", icon='BRUSH_DATA')
+            if 'base_color' in gpu_keys:
+                col.prop(layer, "paint_color", text="Color")
+            if 'roughness' in gpu_keys:
+                col.prop(layer, "paint_roughness", slider=True)
+            if 'metallic' in gpu_keys:
+                col.prop(layer, "paint_metallic", slider=True)
+            if 'normal' in gpu_keys:
+                col.prop(layer, "paint_normal", text="Normal")
+            if 'height' in gpu_keys:
+                row = col.row(align=True)
+                row.prop(layer, "paint_height_direction", expand=True)
+                col.prop(layer, "paint_height_strength")
+            row = col.row(align=True)
+            row.prop(layer, "brush_radius")
+            row.prop(layer, "brush_hardness", slider=True)
+            col.prop(layer, "preview_channel")
+            row = box.row()
+            row.scale_y = 1.25
+            row.enabled = not gpu_engine.session_active()
+            row.operator(ops.IMPASTO_OT_gpu_paint.bl_idname,
+                         text="GPU Paint All Channels",
+                         icon='BRUSH_DATA')
+            if gpu_engine.session_active():
+                box.label(text="GPU painting… RMB/Esc stops",
+                          icon='BRUSH_DATA')
+            err = gpu_engine.last_error()
+            if err:
+                box.label(text="GPU paint failed — see console",
+                          icon='ERROR')
 
     def _draw_bindings(self, box, state, layer):
         col = box.column(align=True)
@@ -170,6 +206,11 @@ class IMPASTO_PT_main(bpy.types.Panel):
                 sub.prop(binding, "color", text="")
             elif binding.mode == 'VALUE':
                 sub.prop(binding, "value", text="")
+            elif layer.layer_type == 'PAINT':
+                # Native single-channel edit of this channel's canvas.
+                op = sub.operator(ops.IMPASTO_OT_paint_activate.bl_idname,
+                                  text="", icon='TPAINT_HLT', emboss=False)
+                op.channel_key = c.name
             else:
                 sub.label(text="painted")
             sub.prop(binding, "opacity", text="", slider=True)
@@ -193,6 +234,7 @@ class IMPASTO_MT_main(bpy.types.Menu):
         op.layer_type = 'FILL'
         layout.operator(ops.IMPASTO_OT_stack_rebuild.bl_idname)
         layout.operator(ops.IMPASTO_OT_paint_activate.bl_idname)
+        layout.operator(ops.IMPASTO_OT_gpu_paint.bl_idname)
         layout.operator(ops.IMPASTO_OT_stack_remove.bl_idname)
 
 

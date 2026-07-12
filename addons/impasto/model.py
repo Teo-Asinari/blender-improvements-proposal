@@ -21,7 +21,11 @@ import json
 import secrets
 from dataclasses import dataclass, field
 
-SCHEMA_VERSION = 1
+# 1: original single-canvas Paint layers (layer.image_name only).
+# 2: per-binding canvases — every SHARED PAINT binding carries its own
+#    image_name (engine.py migrates 1 -> 2 by copying the layer canvas
+#    into bindings that lack one; compile keeps the legacy fallback).
+SCHEMA_VERSION = 2
 
 NODE_PREFIX = "ps:"
 LAYER_TREE_PREFIX = ".Impasto Layer "
