@@ -19,6 +19,7 @@ if "model" in locals():
     reconcile = importlib.reload(reconcile)
     snapshot = importlib.reload(snapshot)
     engine = importlib.reload(engine)
+    gpu_engine = importlib.reload(gpu_engine)
     props = importlib.reload(props)
     if "paint" in locals():
         paint = importlib.reload(paint)
@@ -33,6 +34,7 @@ else:
     from . import reconcile
     from . import snapshot
     from . import engine
+    from . import gpu_engine
     from . import props
     from . import paint
     from . import ops

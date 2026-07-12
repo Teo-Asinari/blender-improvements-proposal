@@ -146,6 +146,7 @@ def seed_native(ch):
 @dataclass(frozen=True)
 class BindingModel:
     key: str                 # channel key
+    image_name: str = ""     # PAINT: per-channel canvas; legacy fallback below
     enabled: bool = True
     mode: str = "SHARED"     # SHARED | VALUE | COLOR
     value: float = 0.0
@@ -274,6 +275,22 @@ def n_out(uid):
 
 def n_scalar_src(uid):
     return "ps:%s:src.scalar" % uid
+
+
+def n_binding_src(uid, key):
+    return "ps:%s:ch.%s:src" % (uid, key)
+
+
+def n_binding_uv(uid, key):
+    return "ps:%s:ch.%s:uv" % (uid, key)
+
+
+def n_binding_scalar(uid, key):
+    return "ps:%s:ch.%s:scalar" % (uid, key)
+
+
+def n_binding_gate(uid, key, i):
+    return "ps:%s:ch.%s:gate.%d" % (uid, key, i)
 
 
 def n_mask_src(uid, muid):
@@ -410,6 +427,11 @@ def _binding_for(layer, key):
     return None
 
 
+def binding_image(layer, binding):
+    """Resolve a PAINT binding canvas with legacy layer compatibility."""
+    return binding.image_name or layer.image_name
+
+
 # ---------------------------------------------------------------------------
 # compile_stack — the pure function (design §4.1/§4.3)
 # ---------------------------------------------------------------------------
@@ -422,47 +444,59 @@ def _compile_layer_tree(layer):
         (b.key for b in layer.bindings
          if b.mode == "SHARED" and b.key in CHANNEL_MAP),
         key=lambda k: CHANNEL_ORDER[k])
+    gate_keys = sorted((b.key for b in layer.bindings if b.key in CHANNEL_MAP),
+                       key=lambda k: CHANNEL_ORDER[k])
     interface = tuple(
         [SocketSpec("ch:%s" % k, "OUTPUT",
                     _SOCKET_TYPE_BY_KIND[CHANNEL_MAP[k].kind])
          for k in shared_keys]
-        + [SocketSpec("mask", "OUTPUT", "NodeSocketFloat")])
+        + [SocketSpec("mask:%s" % k, "OUTPUT", "NodeSocketFloat")
+           for k in gate_keys])
 
-    img_ok = layer.layer_type == "PAINT" and bool(layer.image_name)
-    if img_ok:
-        if layer.uv_map:
-            nodes.append(NodeSpec(n_uv(uid), "ShaderNodeUVMap",
-                                  (("uv_map", layer.uv_map),
-                                   ("location", (-820.0, 0.0))), ()))
-        nodes.append(NodeSpec(n_src(uid), "ShaderNodeTexImage",
-                              (("image", layer.image_name),
-                               ("location", (-560.0, 0.0))), ()))
-        if layer.uv_map:
-            links.append(LinkSpec((n_uv(uid), "UV"),
-                                  (n_src(uid), "Vector")))
-        scalar_keys = [k for k in shared_keys
-                       if CHANNEL_MAP[k].kind == "SCALAR"]
-        if scalar_keys:
-            nodes.append(NodeSpec(n_scalar_src(uid),
-                                  "ShaderNodeSeparateColor",
-                                  (("mode", "RGB"),
-                                   ("location", (-260.0, 80.0))), ()))
-            links.append(LinkSpec((n_src(uid), "Color"),
-                                  (n_scalar_src(uid), "Color")))
-        for k in shared_keys:
-            source = ((n_scalar_src(uid), "Red")
-                      if CHANNEL_MAP[k].kind == "SCALAR"
-                      else (n_src(uid), "Color"))
-            links.append(LinkSpec(source,
-                                  (n_out(uid), "ch:%s" % k)))
+    channel_alpha = {}
+    emitted_sources = set()
+    emitted_scalars = set()
+    if layer.layer_type == "PAINT":
+        for row, k in enumerate(gate_keys):
+            b = _binding_for(layer, k)
+            image_name = binding_image(layer, b)
+            if not image_name:
+                continue
+            y = -220.0 * row
+            src_name = (n_binding_src(uid, k) if b.image_name else n_src(uid))
+            uv_name = (n_binding_uv(uid, k) if b.image_name else n_uv(uid))
+            if src_name not in emitted_sources and layer.uv_map:
+                nodes.append(NodeSpec(uv_name, "ShaderNodeUVMap",
+                                      (("uv_map", layer.uv_map),
+                                       ("location", (-820.0, y))), ()))
+            if src_name not in emitted_sources:
+                nodes.append(NodeSpec(src_name, "ShaderNodeTexImage",
+                                      (("image", image_name),
+                                       ("location", (-560.0, y))), ()))
+                if layer.uv_map:
+                    links.append(LinkSpec((uv_name, "UV"),
+                                          (src_name, "Vector")))
+                emitted_sources.add(src_name)
+            source = (src_name, "Color")
+            if b.mode == "SHARED" and CHANNEL_MAP[k].kind == "SCALAR":
+                scalar_name = (n_binding_scalar(uid, k) if b.image_name
+                               else n_scalar_src(uid))
+                if scalar_name not in emitted_scalars:
+                    nodes.append(NodeSpec(scalar_name, "ShaderNodeSeparateColor",
+                                          (("mode", "RGB"),
+                                           ("location", (-260.0, y))), ()))
+                    links.append(LinkSpec(source, (scalar_name, "Color")))
+                    emitted_scalars.add(scalar_name)
+                source = (scalar_name, "Red")
+            if b.mode == "SHARED":
+                links.append(LinkSpec(source, (n_out(uid), "ch:%s" % k)))
+            channel_alpha[k] = (src_name, "Alpha")
 
     # Mask chain: paint alpha (if any) x each visible image mask, where
     # invert + opacity fold into one MULTIPLY_ADD per mask (a*m + b):
     # normal: a=op, b=1-op; inverted: a=-op, b=1. Both knobs are
     # therefore uniform writes, never structure.
-    factors = []
-    if img_ok:
-        factors.append((n_src(uid), "Alpha"))
+    mask_factors = []
     mask_y = -340.0
     for m in layer.masks:
         if not (m.visible and m.image_name):
@@ -485,23 +519,24 @@ def _compile_layer_tree(layer):
                               (("Value_001", a), ("Value_002", b))))
         links.append(LinkSpec((n_mask_src(uid, m.uid), "Color"),
                               (n_mask_op(uid, m.uid), "Value")))
-        factors.append((n_mask_op(uid, m.uid), "Value"))
+        mask_factors.append((n_mask_op(uid, m.uid), "Value"))
         mask_y -= 340.0
 
-    cur = factors[0] if factors else None
-    for i, nxt in enumerate(factors[1:]):
-        mul = n_mask_mul(uid, i)
-        nodes.append(NodeSpec(mul, "ShaderNodeMath",
-                              (("operation", "MULTIPLY"),
-                               ("location", (0.0, -340.0 * (i + 1))),),
-                              ()))
-        links.append(LinkSpec(cur, (mul, "Value")))
-        links.append(LinkSpec(nxt, (mul, "Value_001")))
-        cur = (mul, "Value")
-    if cur is not None:
-        links.append(LinkSpec(cur, (n_out(uid), "mask")))
-    else:
-        inputs_on_out.append(("mask", 1.0))
+    for k in gate_keys:
+        factors = ([channel_alpha[k]] if k in channel_alpha else []) + mask_factors
+        cur = factors[0] if factors else None
+        for i, nxt in enumerate(factors[1:]):
+            mul = n_binding_gate(uid, k, i)
+            nodes.append(NodeSpec(mul, "ShaderNodeMath",
+                                  (("operation", "MULTIPLY"),
+                                   ("location", (0.0, -340.0 * (i + 1))),), ()))
+            links.append(LinkSpec(cur, (mul, "Value")))
+            links.append(LinkSpec(nxt, (mul, "Value_001")))
+            cur = (mul, "Value")
+        if cur is not None:
+            links.append(LinkSpec(cur, (n_out(uid), "mask:%s" % k)))
+        else:
+            inputs_on_out.append(("mask:%s" % k, 1.0))
 
     nodes.append(NodeSpec(n_out(uid), "NodeGroupOutput",
                           (("location", (320.0, 0.0)),),
@@ -553,7 +588,10 @@ def _compile_root(model, grace):
                                    -320.0 * ci)))
             fac = const_factor(model, layer, binding)
             inputs = []
-            use_fac_node = (binding.use_masks and _mask_signal(layer)
+            use_fac_node = (binding.use_masks
+                            and (bool(binding_image(layer, binding))
+                                 or any(m.visible and m.image_name
+                                        for m in layer.masks))
                             and layer.uid in treed_uids)
             if not use_fac_node:
                 inputs.append(("Factor_Float", fac))
@@ -564,7 +602,7 @@ def _compile_root(model, grace):
             shared_ok = (binding.mode == "SHARED"
                          and layer.uid in treed_uids
                          and layer.layer_type == "PAINT"
-                         and bool(layer.image_name))
+                         and bool(binding_image(layer, binding)))
             if shared_ok:
                 used_uids.add(layer.uid)
                 links.append(LinkSpec((n_root_layer(layer.uid),
@@ -596,7 +634,8 @@ def _compile_root(model, grace):
                      ("location", (-300.0 + 260.0 * chain_i - 70.0,
                                    -320.0 * ci + 170.0))),
                     (("Value_001", fac),)))
-                links.append(LinkSpec((n_root_layer(layer.uid), "mask"),
+                links.append(LinkSpec((n_root_layer(layer.uid),
+                                       "mask:%s" % key),
                                       (n_fac(key, layer.uid), "Value")))
                 links.append(LinkSpec((n_fac(key, layer.uid), "Value"),
                                       (blend, "Factor_Float")))

@@ -152,8 +152,10 @@ def fx_paint_mask():
                 uid="c3a91f02", label="Scratches", layer_type="PAINT",
                 image_name="FJ Scratches", uv_map="UVMap",
                 bindings=(
-                    model.BindingModel(key="base_color"),
-                    model.BindingModel(key="roughness"),
+                    model.BindingModel(key="base_color",
+                                       image_name="FJ Scratches Color"),
+                    model.BindingModel(key="roughness",
+                                       image_name="FJ Scratches Roughness"),
                 ),
                 masks=(
                     model.MaskModel(uid="9be1d1c4", label="Edge mask",
@@ -230,6 +232,38 @@ def test_determinism():
     b = json.dumps(model.spec_to_jsonable(
         model.compile_stack(fx_group())), sort_keys=True)
     check("same model -> byte-identical spec", a == b)
+
+
+def test_multichannel_paint_images():
+    stack = fx_paint_mask()
+    layer = stack.layers[0]
+    tree = _tree(model.compile_stack(stack), layer.uid)
+    props = {n.name: dict(n.props) for n in tree.nodes}
+    check("base color binding has its own image node",
+          props[model.n_binding_src(layer.uid, "base_color")]["image"]
+          == "FJ Scratches Color")
+    check("roughness binding has its own image node",
+          props[model.n_binding_src(layer.uid, "roughness")]["image"]
+          == "FJ Scratches Roughness")
+    check("scalar binding stays native float via red extraction",
+          any(link.src == (model.n_binding_scalar(layer.uid, "roughness"),
+                           "Red")
+              and link.dst == (model.n_out(layer.uid), "ch:roughness")
+              for link in tree.links))
+    check("each channel has an independent alpha/mask gate",
+          {s.name for s in tree.interface if s.name.startswith("mask:")}
+          == {"mask:base_color", "mask:roughness"})
+
+    legacy = model.LayerModel(
+        uid="legacy01", layer_type="PAINT", image_name="Legacy Canvas",
+        bindings=(model.BindingModel(key="base_color"),))
+    legacy_tree = _tree(model.compile_stack(model.StackModel(
+        root_tree_name="Legacy", channels=("base_color",),
+        layers=(legacy,))), legacy.uid)
+    legacy_src = next(n for n in legacy_tree.nodes
+                      if n.name == model.n_src(legacy.uid))
+    check("legacy layer canvas remains compiler-compatible",
+          dict(legacy_src.props)["image"] == "Legacy Canvas")
 
 
 def _tree(spec, key):
@@ -470,15 +504,14 @@ def test_layer_tree_shape():
     spec = model.compile_stack(fx_paint_mask())
     lt = _tree(spec, "c3a91f02")
     names = {s.name for s in lt.interface}
-    check("layer interface = shared ch sockets + one mask socket",
-          names == {"ch:base_color", "ch:roughness", "mask"})
+    check("layer interface = shared ch sockets + per-channel mask sockets",
+          names == {"ch:base_color", "ch:roughness",
+                    "mask:base_color", "mask:roughness"})
     node_names = {n.name for n in lt.nodes}
     check("layer tree nodes include explicit scalar extraction",
-          node_names == {"ps:c3a91f02:uv", "ps:c3a91f02:src",
-                         "ps:c3a91f02:src.scalar",
-                         "ps:c3a91f02:mask.9be1d1c4:src",
-                         "ps:c3a91f02:mask.9be1d1c4:op",
-                         "ps:c3a91f02:mask:mul.0", "ps:c3a91f02:out"},
+          model.n_binding_scalar("c3a91f02", "roughness") in node_names
+          and model.n_binding_src("c3a91f02", "base_color") in node_names
+          and model.n_binding_src("c3a91f02", "roughness") in node_names,
           "got %s" % node_names)
     interfaces = {s.name: s.socket_type for s in lt.interface}
     check("shared roughness is a float, not implicit color coercion",
@@ -549,6 +582,7 @@ def main():
     test_registry()
     test_goldens()
     test_determinism()
+    test_multichannel_paint_images()
     test_locality_on_reorder()
     test_uniform_invariant()
     test_prune_and_toggle_equivalence()

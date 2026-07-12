@@ -13,7 +13,12 @@
      "NodeSocketFloat"
     ],
     [
-     "mask",
+     "mask:base_color",
+     "OUTPUT",
+     "NodeSocketFloat"
+    ],
+    [
+     "mask:roughness",
      "OUTPUT",
      "NodeSocketFloat"
     ]
@@ -22,27 +27,17 @@
    "links": [
     [
      [
-      "ps:c3a91f02:uv",
+      "ps:c3a91f02:ch.base_color:uv",
       "UV"
      ],
      [
-      "ps:c3a91f02:src",
+      "ps:c3a91f02:ch.base_color:src",
       "Vector"
      ]
     ],
     [
      [
-      "ps:c3a91f02:src",
-      "Color"
-     ],
-     [
-      "ps:c3a91f02:src.scalar",
-      "Color"
-     ]
-    ],
-    [
-     [
-      "ps:c3a91f02:src",
+      "ps:c3a91f02:ch.base_color:src",
       "Color"
      ],
      [
@@ -52,7 +47,27 @@
     ],
     [
      [
-      "ps:c3a91f02:src.scalar",
+      "ps:c3a91f02:ch.roughness:uv",
+      "UV"
+     ],
+     [
+      "ps:c3a91f02:ch.roughness:src",
+      "Vector"
+     ]
+    ],
+    [
+     [
+      "ps:c3a91f02:ch.roughness:src",
+      "Color"
+     ],
+     [
+      "ps:c3a91f02:ch.roughness:scalar",
+      "Color"
+     ]
+    ],
+    [
+     [
+      "ps:c3a91f02:ch.roughness:scalar",
       "Red"
      ],
      [
@@ -72,11 +87,11 @@
     ],
     [
      [
-      "ps:c3a91f02:src",
+      "ps:c3a91f02:ch.base_color:src",
       "Alpha"
      ],
      [
-      "ps:c3a91f02:mask:mul.0",
+      "ps:c3a91f02:ch.base_color:gate.0",
       "Value"
      ]
     ],
@@ -86,18 +101,48 @@
       "Value"
      ],
      [
-      "ps:c3a91f02:mask:mul.0",
+      "ps:c3a91f02:ch.base_color:gate.0",
       "Value_001"
      ]
     ],
     [
      [
-      "ps:c3a91f02:mask:mul.0",
+      "ps:c3a91f02:ch.base_color:gate.0",
       "Value"
      ],
      [
       "ps:c3a91f02:out",
-      "mask"
+      "mask:base_color"
+     ]
+    ],
+    [
+     [
+      "ps:c3a91f02:ch.roughness:src",
+      "Alpha"
+     ],
+     [
+      "ps:c3a91f02:ch.roughness:gate.0",
+      "Value"
+     ]
+    ],
+    [
+     [
+      "ps:c3a91f02:mask.9be1d1c4:op",
+      "Value"
+     ],
+     [
+      "ps:c3a91f02:ch.roughness:gate.0",
+      "Value_001"
+     ]
+    ],
+    [
+     [
+      "ps:c3a91f02:ch.roughness:gate.0",
+      "Value"
+     ],
+     [
+      "ps:c3a91f02:out",
+      "mask:roughness"
      ]
     ]
    ],
@@ -105,7 +150,7 @@
     {
      "bl_idname": "ShaderNodeUVMap",
      "inputs": [],
-     "name": "ps:c3a91f02:uv",
+     "name": "ps:c3a91f02:ch.base_color:uv",
      "props": [
       [
        "uv_map",
@@ -115,7 +160,7 @@
        "location",
        [
         -820.0,
-        0.0
+        -0.0
        ]
       ]
      ]
@@ -123,17 +168,53 @@
     {
      "bl_idname": "ShaderNodeTexImage",
      "inputs": [],
-     "name": "ps:c3a91f02:src",
+     "name": "ps:c3a91f02:ch.base_color:src",
      "props": [
       [
        "image",
-       "FJ Scratches"
+       "FJ Scratches Color"
       ],
       [
        "location",
        [
         -560.0,
-        0.0
+        -0.0
+       ]
+      ]
+     ]
+    },
+    {
+     "bl_idname": "ShaderNodeUVMap",
+     "inputs": [],
+     "name": "ps:c3a91f02:ch.roughness:uv",
+     "props": [
+      [
+       "uv_map",
+       "UVMap"
+      ],
+      [
+       "location",
+       [
+        -820.0,
+        -220.0
+       ]
+      ]
+     ]
+    },
+    {
+     "bl_idname": "ShaderNodeTexImage",
+     "inputs": [],
+     "name": "ps:c3a91f02:ch.roughness:src",
+     "props": [
+      [
+       "image",
+       "FJ Scratches Roughness"
+      ],
+      [
+       "location",
+       [
+        -560.0,
+        -220.0
        ]
       ]
      ]
@@ -141,7 +222,7 @@
     {
      "bl_idname": "ShaderNodeSeparateColor",
      "inputs": [],
-     "name": "ps:c3a91f02:src.scalar",
+     "name": "ps:c3a91f02:ch.roughness:scalar",
      "props": [
       [
        "mode",
@@ -151,7 +232,7 @@
        "location",
        [
         -260.0,
-        80.0
+        -220.0
        ]
       ]
      ]
@@ -204,7 +285,25 @@
     {
      "bl_idname": "ShaderNodeMath",
      "inputs": [],
-     "name": "ps:c3a91f02:mask:mul.0",
+     "name": "ps:c3a91f02:ch.base_color:gate.0",
+     "props": [
+      [
+       "operation",
+       "MULTIPLY"
+      ],
+      [
+       "location",
+       [
+        0.0,
+        -340.0
+       ]
+      ]
+     ]
+    },
+    {
+     "bl_idname": "ShaderNodeMath",
+     "inputs": [],
+     "name": "ps:c3a91f02:ch.roughness:gate.0",
      "props": [
       [
        "operation",
@@ -263,7 +362,7 @@
     [
      [
       "ps:root:layer.c3a91f02",
-      "mask"
+      "mask:base_color"
      ],
      [
       "ps:root:ch.base_color:fac.c3a91f02",
@@ -313,7 +412,7 @@
     [
      [
       "ps:root:layer.c3a91f02",
-      "mask"
+      "mask:roughness"
      ],
      [
       "ps:root:ch.roughness:fac.c3a91f02",

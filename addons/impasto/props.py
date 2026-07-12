@@ -65,6 +65,11 @@ def _blend_items():
 class ImpastoBinding(bpy.types.PropertyGroup):
     """Per-layer-per-channel participation (R1). SPARSE: a layer only
     has bindings for channels it touches. name = channel key."""
+    image_name: StringProperty(
+        name="Image",
+        description="Paint canvas for this channel; empty uses the layer's "
+                    "legacy shared canvas",
+        update=_structural)
     enabled: BoolProperty(
         name="Enabled",
         description="Whether this layer deposits into this channel "
@@ -138,6 +143,37 @@ class ImpastoLayer(bpy.types.PropertyGroup):
     uv_map: StringProperty(update=_structural)
     bindings: CollectionProperty(type=ImpastoBinding)
     masks: CollectionProperty(type=ImpastoMask)
+    paint_color: FloatVectorProperty(
+        name="Base Color", subtype='COLOR', size=3, min=0.0, max=1.0,
+        default=(0.8, 0.2, 0.1))
+    paint_roughness: FloatProperty(
+        name="Roughness", default=0.5, min=0.0, max=1.0,
+        subtype='FACTOR')
+    paint_metallic: FloatProperty(
+        name="Metallic", default=0.0, min=0.0, max=1.0,
+        subtype='FACTOR')
+    paint_normal: FloatVectorProperty(
+        name="Tangent Normal", subtype='COLOR', size=3,
+        min=0.0, max=1.0, default=(0.5, 0.5, 1.0))
+    paint_height_strength: FloatProperty(
+        name="Height Step", default=0.05, min=0.0, soft_max=0.25)
+    paint_height_direction: EnumProperty(
+        name="Height", items=(('RAISE', "Raise", "Add height"),
+                              ('LOWER', "Lower", "Subtract height")),
+        default='RAISE')
+    brush_radius: FloatProperty(
+        name="Radius", default=50.0, min=1.0, soft_max=500.0,
+        subtype='PIXEL')
+    brush_hardness: FloatProperty(
+        name="Hardness", default=0.5, min=0.0, max=0.999,
+        subtype='FACTOR')
+    preview_channel: EnumProperty(
+        name="Preview", items=(('base_color', "Base Color", ""),
+                               ('roughness', "Roughness", ""),
+                               ('metallic', "Metallic", ""),
+                               ('height', "Height", ""),
+                               ('normal', "Normal", "")),
+        default='base_color')
 
 
 class ImpastoChannel(bpy.types.PropertyGroup):
@@ -191,6 +227,20 @@ class ImpastoMaterialState(bpy.types.PropertyGroup):
     stack_tree: StringProperty(default="")
 
 
+class ImpastoPreferences(bpy.types.AddonPreferences):
+    bl_idname = __package__
+
+    auto_material_preview: BoolProperty(
+        name="Switch Active Viewport to Material Preview",
+        description="When Impasto painting starts from Solid shading, switch "
+                    "only the invoking 3D Viewport to Material Preview so the "
+                    "composed PBR material is visible",
+        default=True)
+
+    def draw(self, context):
+        self.layout.prop(self, "auto_material_preview")
+
+
 _classes = (
     ImpastoBinding,
     ImpastoMask,
@@ -198,6 +248,7 @@ _classes = (
     ImpastoChannel,
     ImpastoStack,
     ImpastoMaterialState,
+    ImpastoPreferences,
 )
 
 

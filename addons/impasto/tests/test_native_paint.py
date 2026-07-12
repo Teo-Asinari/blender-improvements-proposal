@@ -10,6 +10,7 @@ import sys
 import tempfile
 import traceback
 from pathlib import Path
+from types import SimpleNamespace
 
 import bpy
 
@@ -18,7 +19,7 @@ if ADDONS not in sys.path:
     sys.path.insert(0, ADDONS)
 
 import impasto
-from impasto import compat, engine, model
+from impasto import compat, engine, model, paint
 
 
 def check(name, condition, detail=""):
@@ -38,6 +39,27 @@ def active_source_node(layer):
 
 try:
     impasto.register()
+    fake_shading = SimpleNamespace(type="SOLID")
+    fake_area = SimpleNamespace(
+        type="VIEW_3D",
+        spaces=SimpleNamespace(active=SimpleNamespace(shading=fake_shading)))
+    check("active Solid viewport switches to Material Preview",
+          paint.maybe_switch_material_preview(
+              SimpleNamespace(area=fake_area), enabled=True)
+          and fake_shading.type == "MATERIAL")
+    fake_shading.type = "SOLID"
+    check("material-preview opt-out preserves Solid shading",
+          not paint.maybe_switch_material_preview(
+              SimpleNamespace(area=fake_area), enabled=False)
+          and fake_shading.type == "SOLID")
+    other_shading = SimpleNamespace(type="SOLID")
+    check("non-3D areas are never changed",
+          not paint.maybe_switch_material_preview(
+              SimpleNamespace(area=SimpleNamespace(
+                  type="IMAGE_EDITOR", spaces=SimpleNamespace(
+                      active=SimpleNamespace(shading=other_shading)))),
+              enabled=True)
+          and other_shading.type == "SOLID")
     bpy.ops.mesh.primitive_cube_add()
     obj = bpy.context.object
     uv = obj.data.uv_layers.new(name="PaintUV")

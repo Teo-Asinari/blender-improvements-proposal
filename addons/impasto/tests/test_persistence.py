@@ -45,10 +45,15 @@ try:
         paint.layer_type = "PAINT"
         binding = paint.bindings.add()
         binding.name = "roughness"
+        canvas = bpy.data.images.new("Persisted Roughness Canvas", 8, 8,
+                                     alpha=True)
+        binding.image_name = canvas.name
     tree_name = tree.name
     uids = tuple(ly.name for ly in tree.impasto.layers)
     types = tuple(ly.layer_type for ly in tree.impasto.layers)
     bindings = tuple(tuple(b.name for b in ly.bindings) for ly in tree.impasto.layers)
+    binding_images = tuple(tuple(b.image_name for b in ly.bindings)
+                           for ly in tree.impasto.layers)
     mat_name = mat.name
 
     victim_name = model.n_root_out()
@@ -69,6 +74,9 @@ try:
     check("UID order persisted", tuple(ly.name for ly in tree.impasto.layers) == uids)
     check("layer types persisted", tuple(ly.layer_type for ly in tree.impasto.layers) == types)
     check("bindings persisted", tuple(tuple(b.name for b in ly.bindings) for ly in tree.impasto.layers) == bindings)
+    check("per-binding images persisted",
+          tuple(tuple(b.image_name for b in ly.bindings)
+                for ly in tree.impasto.layers) == binding_images)
     check("load handler self-healed removed node", tree.nodes.get(victim_name) is not None)
     check("self-healed graph converges cleanly", not engine.reconcile_stack(tree).errors)
     print("IMPASTO_PERSISTENCE_PASSED")

@@ -443,6 +443,7 @@ class IMPASTO_OT_paint_activate(bpy.types.Operator):
         except RuntimeError as exc:
             self.report({'ERROR'}, "Could not enter Texture Paint mode: %s" % exc)
             return {'CANCELLED'}
+        paint.maybe_switch_material_preview(context)
         message = "Painting %s" % layer.label
         if repaired:
             message += " (image colorspace repaired)"

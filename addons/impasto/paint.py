@@ -16,6 +16,31 @@ class PaintTargetError(RuntimeError):
     """The active Impasto layer cannot be used as a paint canvas."""
 
 
+def maybe_switch_material_preview(context, enabled=None):
+    """Switch only the invoking VIEW_3D from Solid to Material Preview.
+
+    Solid shading displays the active paint canvas rather than Impasto's
+    composed shader and a transparent canvas can make the object disappear.
+    Never touch other areas/viewports; return whether a switch occurred.
+    """
+    area = getattr(context, "area", None)
+    if area is None or area.type != 'VIEW_3D':
+        return False
+    if enabled is None:
+        addon = context.preferences.addons.get(__package__)
+        enabled = (addon is None
+                   or getattr(addon.preferences,
+                              "auto_material_preview", True))
+    if not enabled:
+        return False
+    space = getattr(area.spaces, "active", None)
+    shading = getattr(space, "shading", None)
+    if shading is None or shading.type != 'SOLID':
+        return False
+    shading.type = 'MATERIAL'
+    return True
+
+
 def _target_colorspace(layer):
     """Colorspace required by the first enabled shared channel binding."""
     bindings = {b.name: b for b in layer.bindings

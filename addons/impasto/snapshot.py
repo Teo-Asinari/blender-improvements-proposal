@@ -12,6 +12,7 @@ from . import model
 def _snapshot_binding(b):
     return model.BindingModel(
         key=b.name,
+        image_name=b.image_name,
         enabled=b.enabled,
         mode=b.mode,
         value=b.value,
