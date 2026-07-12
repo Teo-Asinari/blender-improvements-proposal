@@ -397,6 +397,11 @@ def test_material_tree():
           and ("Principled BSDF", "Roughness") in dsts)
     check("height chain present -> Normal linked via Bump",
           ("Principled BSDF", "Normal") in dsts)
+    root = _tree(spec, "root")
+    check("height uses explicit scalar extraction before Bump",
+          any(l.src == (model.n_scalar_out("height"), "Red")
+              and l.dst == (model.n_bump(), "Height")
+              for l in root.links))
     spec2 = model.compile_stack(fx_fill())
     mat2 = _tree(spec2, "material")
     check("no height channel -> no Normal link",
@@ -407,6 +412,13 @@ def test_material_tree():
     out = next(n for n in root2.nodes if n.name == "ps:root:out")
     check("fill fixture: both channels have participants (no seeds on "
           "the group output)", dict(out.inputs) == {})
+    rough_scalar = next(n for n in root2.nodes
+                        if n.name == model.n_scalar_out("roughness"))
+    check("roughness uses explicit RGB scalar extraction",
+          rough_scalar.bl_idname == "ShaderNodeSeparateColor"
+          and (model.n_scalar_out("roughness"), "Red") in
+          {link.src for link in root2.links
+           if link.dst == (model.n_root_out(), "Roughness")})
 
 
 def test_layer_tree_shape():
@@ -416,12 +428,19 @@ def test_layer_tree_shape():
     check("layer interface = shared ch sockets + one mask socket",
           names == {"ch:base_color", "ch:roughness", "mask"})
     node_names = {n.name for n in lt.nodes}
-    check("layer tree nodes: uv, src, mask src, mask op, mul, out",
+    check("layer tree nodes include explicit scalar extraction",
           node_names == {"ps:c3a91f02:uv", "ps:c3a91f02:src",
+                         "ps:c3a91f02:src.scalar",
                          "ps:c3a91f02:mask.9be1d1c4:src",
                          "ps:c3a91f02:mask.9be1d1c4:op",
                          "ps:c3a91f02:mask:mul.0", "ps:c3a91f02:out"},
           "got %s" % node_names)
+    interfaces = {s.name: s.socket_type for s in lt.interface}
+    check("shared roughness is a float, not implicit color coercion",
+          interfaces["ch:roughness"] == "NodeSocketFloat")
+    check("grayscale endpoints preserve scalar polarity",
+          ((0.0, 0.0, 0.0, 1.0)[0],
+           (1.0, 1.0, 1.0, 1.0)[0]) == (0.0, 1.0))
     opn = next(n for n in lt.nodes if n.name.endswith(":op"))
     ins = dict(opn.inputs)
     check("inverted 0.8-opacity mask folds to a=-0.8 b=1.0 "

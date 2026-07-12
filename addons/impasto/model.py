@@ -266,6 +266,10 @@ def n_out(uid):
     return "ps:%s:out" % uid
 
 
+def n_scalar_src(uid):
+    return "ps:%s:src.scalar" % uid
+
+
 def n_mask_src(uid, muid):
     return "ps:%s:mask.%s:src" % (uid, muid)
 
@@ -300,6 +304,10 @@ def n_fac(key, uid):
 
 def n_bump():
     return "ps:root:ch.height:bump"
+
+
+def n_scalar_out(key):
+    return "ps:root:ch.%s:scalar" % key
 
 
 def n_material_stack():
@@ -405,7 +413,8 @@ def _compile_layer_tree(layer):
          if b.mode == "SHARED" and b.key in CHANNEL_MAP),
         key=lambda k: CHANNEL_ORDER[k])
     interface = tuple(
-        [SocketSpec("ch:%s" % k, "OUTPUT", "NodeSocketColor")
+        [SocketSpec("ch:%s" % k, "OUTPUT",
+                    _SOCKET_TYPE_BY_KIND[CHANNEL_MAP[k].kind])
          for k in shared_keys]
         + [SocketSpec("mask", "OUTPUT", "NodeSocketFloat")])
 
@@ -421,8 +430,20 @@ def _compile_layer_tree(layer):
         if layer.uv_map:
             links.append(LinkSpec((n_uv(uid), "UV"),
                                   (n_src(uid), "Vector")))
-        for k in shared_keys:
+        scalar_keys = [k for k in shared_keys
+                       if CHANNEL_MAP[k].kind == "SCALAR"]
+        if scalar_keys:
+            nodes.append(NodeSpec(n_scalar_src(uid),
+                                  "ShaderNodeSeparateColor",
+                                  (("mode", "RGB"),
+                                   ("location", (-260.0, 80.0))), ()))
             links.append(LinkSpec((n_src(uid), "Color"),
+                                  (n_scalar_src(uid), "Color")))
+        for k in shared_keys:
+            source = ((n_scalar_src(uid), "Red")
+                      if CHANNEL_MAP[k].kind == "SCALAR"
+                      else (n_src(uid), "Color"))
+            links.append(LinkSpec(source,
                                   (n_out(uid), "ch:%s" % k)))
 
     # Mask chain: paint alpha (if any) x each visible image mask, where
@@ -559,13 +580,26 @@ def _compile_root(model, grace):
             chain_i += 1
         max_chain = max(max_chain, chain_i)
 
+        # Never rely on Blender's implicit Color -> Float coercion for PBR
+        # scalars.  Extracting Red is exact for our grayscale scalar sources:
+        # black=0 and white=1, preserving Principled's roughness/metallic/etc.
+        scalar = None
+        if prev is not None and ch.kind == "SCALAR":
+            scalar = (n_scalar_out(key), "Red")
+            nodes.append(NodeSpec(
+                n_scalar_out(key), "ShaderNodeSeparateColor",
+                (("mode", "RGB"),
+                 ("location", (-300.0 + 260.0 * chain_i,
+                               -320.0 * ci))), ()))
+            links.append(LinkSpec(prev, (n_scalar_out(key), "Color")))
+
         if key == "height":
             if prev is not None:
                 nodes.append(NodeSpec(
                     n_bump(), "ShaderNodeBump",
                     (("location", (-300.0 + 260.0 * chain_i,
                                    -320.0 * ci)),), ()))
-                links.append(LinkSpec(prev, (n_bump(), "Height")))
+                links.append(LinkSpec(scalar, (n_bump(), "Height")))
                 links.append(LinkSpec((n_bump(), "Normal"),
                                       (n_root_out(), "Normal")))
             # no participants: "Normal" output stays unlinked and the
@@ -573,7 +607,8 @@ def _compile_root(model, grace):
             # would break shading).
         else:
             if prev is not None:
-                links.append(LinkSpec(prev, (n_root_out(), ch.label)))
+                links.append(LinkSpec(scalar or prev,
+                                      (n_root_out(), ch.label)))
             else:
                 out_inputs.append((ch.label, seed_native(ch)))
 

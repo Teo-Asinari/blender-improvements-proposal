@@ -31,6 +31,16 @@
       "Result_Color"
      ],
      [
+      "ps:root:ch.roughness:scalar",
+      "Color"
+     ]
+    ],
+    [
+     [
+      "ps:root:ch.roughness:scalar",
+      "Red"
+     ],
+     [
       "ps:root:out",
       "Roughness"
      ]
@@ -138,6 +148,24 @@
        "location",
        [
         -300.0,
+        -320.0
+       ]
+      ]
+     ]
+    },
+    {
+     "bl_idname": "ShaderNodeSeparateColor",
+     "inputs": [],
+     "name": "ps:root:ch.roughness:scalar",
+     "props": [
+      [
+       "mode",
+       "RGB"
+      ],
+      [
+       "location",
+       [
+        -40.0,
         -320.0
        ]
       ]

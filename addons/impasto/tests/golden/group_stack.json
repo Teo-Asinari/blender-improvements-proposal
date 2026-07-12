@@ -10,7 +10,7 @@
     [
      "ch:height",
      "OUTPUT",
-     "NodeSocketColor"
+     "NodeSocketFloat"
     ],
     [
      "mask",
@@ -26,14 +26,24 @@
       "Color"
      ],
      [
-      "ps:c3a91f02:out",
-      "ch:base_color"
+      "ps:c3a91f02:src.scalar",
+      "Color"
      ]
     ],
     [
      [
       "ps:c3a91f02:src",
       "Color"
+     ],
+     [
+      "ps:c3a91f02:out",
+      "ch:base_color"
+     ]
+    ],
+    [
+     [
+      "ps:c3a91f02:src.scalar",
+      "Red"
      ],
      [
       "ps:c3a91f02:out",
@@ -66,6 +76,24 @@
        [
         -560.0,
         0.0
+       ]
+      ]
+     ]
+    },
+    {
+     "bl_idname": "ShaderNodeSeparateColor",
+     "inputs": [],
+     "name": "ps:c3a91f02:src.scalar",
+     "props": [
+      [
+       "mode",
+       "RGB"
+      ],
+      [
+       "location",
+       [
+        -260.0,
+        80.0
        ]
       ]
      ]
@@ -162,6 +190,16 @@
       "Result_Color"
      ],
      [
+      "ps:root:ch.roughness:scalar",
+      "Color"
+     ]
+    ],
+    [
+     [
+      "ps:root:ch.roughness:scalar",
+      "Red"
+     ],
+     [
       "ps:root:out",
       "Roughness"
      ]
@@ -200,6 +238,16 @@
      [
       "ps:root:ch.height:blend.c3a91f02",
       "Result_Color"
+     ],
+     [
+      "ps:root:ch.height:scalar",
+      "Color"
+     ]
+    ],
+    [
+     [
+      "ps:root:ch.height:scalar",
+      "Red"
      ],
      [
       "ps:root:ch.height:bump",
@@ -396,6 +444,24 @@
      ]
     },
     {
+     "bl_idname": "ShaderNodeSeparateColor",
+     "inputs": [],
+     "name": "ps:root:ch.roughness:scalar",
+     "props": [
+      [
+       "mode",
+       "RGB"
+      ],
+      [
+       "location",
+       [
+        -40.0,
+        -320.0
+       ]
+      ]
+     ]
+    },
+    {
      "bl_idname": "ShaderNodeMix",
      "inputs": [
       [
@@ -454,6 +520,24 @@
        [
         -370.0,
         -470.0
+       ]
+      ]
+     ]
+    },
+    {
+     "bl_idname": "ShaderNodeSeparateColor",
+     "inputs": [],
+     "name": "ps:root:ch.height:scalar",
+     "props": [
+      [
+       "mode",
+       "RGB"
+      ],
+      [
+       "location",
+       [
+        -40.0,
+        -640.0
        ]
       ]
      ]
