@@ -66,6 +66,24 @@ instead of allowing Blender to paint into a different target.
 
 Native paint is currently single-image: one stroke changes the selected paint
 layer's shared image. GPU multi-channel painting is still a separate experiment.
+
+### Normal and height painting
+
+**Normal** bindings treat the paint image as a tangent-space normal map. Images
+are stored as **Non-Color**, conventional encoded RGB `(0.5, 0.5, 1.0)` is a
+flat normal, and the compiled shader decodes the blended image through Blender's
+Normal Map node. For a dedicated normal layer, remove its Base Color binding,
+add Normal, activate the layer, and paint/import encoded tangent-normal colors.
+Blender's ordinary color brush does not generate sculpt-like normals from brush
+pressure; it deposits the encoded RGB color you choose.
+
+**Height** remains a grayscale scalar: black is 0, white is 1, and the result
+feeds Blender's Bump node. When Normal and Height are both present, the decoded
+tangent normal feeds the Bump node's Normal input, and the combined result drives
+Principled. Multiple Normal layers currently use an approximate MIX of encoded
+normal colors before decoding. This is useful for masks and simple overlays but
+is not mathematically exact RNM normal blending; keep full-strength detail maps
+on separate layers conservative until RNM/UDN blending is implemented.
 Native brush undo is Blender's normal paint undo and stack operators use normal
 operator undo.
 

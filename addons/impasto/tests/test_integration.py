@@ -37,7 +37,7 @@ try:
     check("stack discoverable", tree is not None)
     check("material group exists",
           mat.node_tree.nodes.get(model.n_material_stack()) is not None)
-    check("four standard channels", len(tree.impasto.channels) == 4)
+    check("five standard channels", len(tree.impasto.channels) == 5)
     check("initial reconcile clean",
           engine._last_deltas is not None
           and not engine._last_deltas.errors,

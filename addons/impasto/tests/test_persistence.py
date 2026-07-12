@@ -28,7 +28,7 @@ try:
     check("stack init", bpy.ops.impasto.stack_init(template="PRINCIPLED_STANDARD") == {"FINISHED"})
     mat = obj.active_material
     tree = engine.find_stack_for_material(mat)
-    check("stack state available", tree is not None and len(tree.impasto.channels) == 4)
+    check("stack state available", tree is not None and len(tree.impasto.channels) == 5)
     # Build representative stored state directly. Operator undo semantics are
     # covered separately; this test isolates serialization and load_post.
     with engine.stack_edit_session(tree):

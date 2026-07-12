@@ -78,7 +78,7 @@ def test_purity():
 
 def test_registry():
     keys = [c.key for c in model.CHANNELS]
-    check("registry has the 12 standard channels", len(keys) == 12,
+    check("registry has the 13 standard channels", len(keys) == 13,
           "got %d" % len(keys))
     check("registry keys unique", len(set(keys)) == len(keys))
     bad_sockets = [c.key for c in model.CHANNELS
@@ -88,6 +88,11 @@ def test_registry():
           not bad_sockets, "bad: %s" % bad_sockets)
     check("height is the socketless special channel",
           model.CHANNEL_MAP["height"].socket == "")
+    check("normal is encoded tangent RGB stored as Non-Color",
+          model.CHANNEL_MAP["normal"].kind == "COLOR"
+          and model.CHANNEL_MAP["normal"].colorspace == "Non-Color"
+          and model.CHANNEL_MAP["normal"].default_value
+          == (0.5, 0.5, 1.0, 1.0))
     check("colorspaces restricted to sRGB / Non-Color",
           all(c.colorspace in ("sRGB", "Non-Color")
               for c in model.CHANNELS))
@@ -419,6 +424,36 @@ def test_material_tree():
           and (model.n_scalar_out("roughness"), "Red") in
           {link.src for link in root2.links
            if link.dst == (model.n_root_out(), "Roughness")})
+
+    normal_layer = model.LayerModel(
+        uid="bb22cc33", label="Normal paint", layer_type="PAINT",
+        image_name="Normal.png", uv_map="UVMap",
+        bindings=(model.BindingModel(key="normal", mode="SHARED"),))
+    normal_height = model.StackModel(
+        root_tree_name="Impasto Stack (Normals)",
+        channels=("normal", "height"),
+        layers=(normal_layer, model.LayerModel(
+            uid="cc33dd44", label="Height", layer_type="FILL",
+            bindings=(model.BindingModel(key="height", mode="VALUE",
+                                         value=0.5),))),
+        material=model.MaterialModel("Principled BSDF"))
+    normal_spec = model.compile_stack(normal_height)
+    normal_root = _tree(normal_spec, "root")
+    normal_nodes = {node.name: node for node in normal_root.nodes}
+    check("normal chain decodes encoded RGB with tangent Normal Map",
+          normal_nodes[model.n_normal_map()].bl_idname
+          == "ShaderNodeNormalMap"
+          and dict(normal_nodes[model.n_normal_map()].props)["space"]
+          == "TANGENT")
+    normal_links = {(link.src, link.dst) for link in normal_root.links}
+    check("decoded normal feeds Bump Normal before Height reaches output",
+          ((model.n_normal_map(), "Normal"),
+           (model.n_bump(), "Normal")) in normal_links
+          and ((model.n_bump(), "Normal"),
+               (model.n_root_out(), "Normal")) in normal_links)
+    check("normal and height share exactly one root Normal output",
+          [socket.name for socket in normal_root.interface].count("Normal")
+          == 1)
 
 
 def test_layer_tree_shape():

@@ -26,7 +26,7 @@ try:
     check("stack init", bpy.ops.impasto.stack_init(template="PRINCIPLED_STANDARD") == {"FINISHED"})
     mat = obj.active_material
     tree = engine.find_stack_for_material(mat)
-    check("stack state available", tree is not None and len(tree.impasto.channels) == 4)
+    check("stack state available", tree is not None and len(tree.impasto.channels) == 5)
     check("fill add", bpy.ops.impasto.layer_add(layer_type="FILL") == {"FINISHED"})
     check("one layer", len(tree.impasto.layers) == 1)
     if not bpy.ops.ed.undo.poll():

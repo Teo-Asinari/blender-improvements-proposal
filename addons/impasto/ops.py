@@ -131,6 +131,8 @@ class IMPASTO_OT_stack_init(bpy.types.Operator):
                        if k != "height"]
             if "height" in keys:
                 targets.append("Normal")
+            # Normal and Height converge on the same Principled socket.
+            targets = list(dict.fromkeys(targets))
             for sock_name in targets:
                 sock = compat.find_socket(principled.inputs, sock_name)
                 if sock is None:

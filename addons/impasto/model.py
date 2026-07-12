@@ -67,6 +67,11 @@ CHANNELS = (
        (0.0,), "Core"),
     _c("roughness", "Roughness", "Roughness", "SCALAR", "Non-Color",
        (0.5,), "Core"),
+    # Tangent-space normals are painted/stored in their conventional encoded
+    # RGB form.  The root compiler blends those encoded colors, then decodes
+    # the result exactly once with ShaderNodeNormalMap.
+    _c("normal", "Normal", "Normal", "COLOR", "Non-Color",
+       (0.5, 0.5, 1.0, 1.0), "Core"),
     # height is the one special channel: its chain feeds a single Bump
     # node at chain end -> Principled Normal (A2).
     _c("height", "Height", "", "SCALAR", "Non-Color",
@@ -97,8 +102,9 @@ CHANNEL_ORDER = {c.key: i for i, c in enumerate(CHANNELS)}
 # A template is nothing but a named list of channel keys (design §3.2).
 TEMPLATES = {
     "Principled — Standard": ("base_color", "metallic", "roughness",
-                              "height"),
-    "Principled — Full": ("base_color", "metallic", "roughness", "height",
+                              "normal", "height"),
+    "Principled — Full": ("base_color", "metallic", "roughness", "normal",
+                          "height",
                           "alpha", "emission_color", "emission_strength",
                           "sss_weight", "sss_radius"),
     "Emissive prop": ("base_color", "roughness", "emission_color",
@@ -306,6 +312,10 @@ def n_bump():
     return "ps:root:ch.height:bump"
 
 
+def n_normal_map():
+    return "ps:root:ch.normal:decode"
+
+
 def n_scalar_out(key):
     return "ps:root:ch.%s:scalar" % key
 
@@ -510,12 +520,19 @@ def _compile_root(model, grace):
     chan_keys = [k for k in model.channels if k in CHANNEL_MAP]
     chan_keys.sort(key=lambda k: CHANNEL_ORDER[k])
     max_chain = 0
+    normal_interface_added = False
+    normal_signal = None
+    bump_signal = None
     for ci, key in enumerate(chan_keys):
         ch = CHANNEL_MAP[key]
-        out_name = "Normal" if key == "height" else ch.label
-        out_type = ("NodeSocketVector" if key == "height"
-                    else _SOCKET_TYPE_BY_KIND[ch.kind])
-        interface.append(SocketSpec(out_name, "OUTPUT", out_type))
+        if key in {"normal", "height"}:
+            if not normal_interface_added:
+                interface.append(SocketSpec("Normal", "OUTPUT",
+                                            "NodeSocketVector"))
+                normal_interface_added = True
+        else:
+            interface.append(SocketSpec(ch.label, "OUTPUT",
+                                        _SOCKET_TYPE_BY_KIND[ch.kind]))
 
         # bottom -> top: collection index 0 is the TOP of the stack
         prev = None
@@ -593,15 +610,24 @@ def _compile_root(model, grace):
                                -320.0 * ci))), ()))
             links.append(LinkSpec(prev, (n_scalar_out(key), "Color")))
 
-        if key == "height":
+        if key == "normal":
+            if prev is not None:
+                nodes.append(NodeSpec(
+                    n_normal_map(), "ShaderNodeNormalMap",
+                    (("space", "TANGENT"),
+                     ("location", (-300.0 + 260.0 * chain_i,
+                                   -320.0 * ci))),
+                    (("Strength", 1.0),)))
+                links.append(LinkSpec(prev, (n_normal_map(), "Color")))
+                normal_signal = (n_normal_map(), "Normal")
+        elif key == "height":
             if prev is not None:
                 nodes.append(NodeSpec(
                     n_bump(), "ShaderNodeBump",
                     (("location", (-300.0 + 260.0 * chain_i,
                                    -320.0 * ci)),), ()))
                 links.append(LinkSpec(scalar, (n_bump(), "Height")))
-                links.append(LinkSpec((n_bump(), "Normal"),
-                                      (n_root_out(), "Normal")))
+                bump_signal = (n_bump(), "Normal")
             # no participants: "Normal" output stays unlinked and the
             # material tree emits no Normal link (a linked zero-vector
             # would break shading).
@@ -611,6 +637,17 @@ def _compile_root(model, grace):
                                       (n_root_out(), ch.label)))
             else:
                 out_inputs.append((ch.label, seed_native(ch)))
+
+    # Decode tangent normals before applying height.  Blender's Bump node
+    # accepts an existing tangent normal, so both channels compose into the
+    # one vector that drives Principled rather than competing for its socket.
+    if normal_signal is not None and bump_signal is not None:
+        links.append(LinkSpec(normal_signal, (n_bump(), "Normal")))
+        links.append(LinkSpec(bump_signal, (n_root_out(), "Normal")))
+    elif normal_signal is not None:
+        links.append(LinkSpec(normal_signal, (n_root_out(), "Normal")))
+    elif bump_signal is not None:
+        links.append(LinkSpec(bump_signal, (n_root_out(), "Normal")))
 
     instance_nodes = [
         NodeSpec(n_root_layer(ly.uid), "ShaderNodeGroup",
@@ -634,6 +671,14 @@ def _height_has_chain(model, grace):
     return False
 
 
+def _normal_has_chain(model, grace):
+    for layer in model.layers:
+        b = _binding_for(layer, "normal")
+        if b is not None and _participates(model, layer, b, grace):
+            return True
+    return False
+
+
 def _compile_material(model, grace):
     if model.material is None:
         return None
@@ -646,8 +691,11 @@ def _compile_material(model, grace):
     chan_keys.sort(key=lambda k: CHANNEL_ORDER[k])
     for key in chan_keys:
         ch = CHANNEL_MAP[key]
-        if key == "height":
-            if _height_has_chain(model, grace):
+        if key in {"normal", "height"}:
+            if ((_normal_has_chain(model, grace)
+                 or _height_has_chain(model, grace))
+                    and not any(link.dst == (pn, "Normal")
+                                for link in links)):
                 links.append(LinkSpec((n_material_stack(), "Normal"),
                                       (pn, "Normal")))
         else:
