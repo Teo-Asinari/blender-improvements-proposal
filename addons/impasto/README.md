@@ -112,6 +112,10 @@ Height is a separate additive pass driven by the same stroke, so
 **Raise/Lower** accumulate relief around the neutral mid-gray canvas
 exactly like the native Height brush. Left mouse paints, right mouse or
 Esc stops, and the channel canvases sync back on every pen lift.
+The panel lists the exact target channels and includes their count in the
+button label. Multi-channel painting operates on bindings of the **selected
+Paint layer**; use the `+` channel rows on that same layer to add simultaneous
+targets. Separate Paint layers are intentionally separate strokes.
 
 Notes and current limits:
 

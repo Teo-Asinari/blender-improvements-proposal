@@ -225,7 +225,16 @@ try:
     check("no session leaked by the declined invoke",
           not gpu_engine.session_active())
 
+    # Reload/disable safety: an active session must not outlive the add-on.
+    check("reload-safety session starts", gpu_engine.start_session(
+        obj, images, None,
+        payloads=gpu_engine.stroke_payloads(("base_color", "height"),
+                                            brush),
+        settings={"radius": 40.0, "hardness": 0.5}))
+    check("reload-safety precondition", gpu_engine.session_active())
     impasto.unregister()
+    check("unregister tears down the GPU session",
+          not gpu_engine.session_active())
     print("IMPASTO_GPU_PAINT_PASSED")
 except Exception:
     traceback.print_exc()

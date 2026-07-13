@@ -895,5 +895,9 @@ def register():
 
 
 def unregister():
+    # A modal GPU session owns viewport draw handlers and GPU resources.
+    # Tear it down before unregistering its operator classes so an add-on
+    # reload cannot leave a stale, invisible session behind.
+    gpu_engine.stop_session()
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)

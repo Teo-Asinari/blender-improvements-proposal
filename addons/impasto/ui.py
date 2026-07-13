@@ -159,11 +159,16 @@ class IMPASTO_PT_main(bpy.types.Panel):
                               icon='TPAINT_HLT')
             op.channel_key = ""
 
-        gpu_keys = [k for k in bound
-                    if k in gpu_engine.GPU_PAINT_CHANNEL_KEYS]
+        gpu_keys = [key for key, _image in ops.gpu_paint_targets(layer)]
         if gpu_keys:
             col = box.column(align=True)
             col.label(text="Multi-Channel Brush", icon='BRUSH_DATA')
+            col.label(text="Targets (%d): %s" % (
+                len(gpu_keys), ", ".join(
+                    model.CHANNEL_MAP[k].label for k in gpu_keys)))
+            if len(gpu_keys) == 1:
+                col.label(text="Add channels below for simultaneous paint",
+                          icon='INFO')
             if 'base_color' in gpu_keys:
                 col.prop(layer, "paint_color", text="Color")
             if 'roughness' in gpu_keys:
@@ -183,9 +188,11 @@ class IMPASTO_PT_main(bpy.types.Panel):
             row = box.row()
             row.scale_y = 1.25
             row.enabled = not gpu_engine.session_active()
-            row.operator(ops.IMPASTO_OT_gpu_paint.bl_idname,
-                         text="GPU Paint All Channels",
-                         icon='BRUSH_DATA')
+            row.operator(
+                ops.IMPASTO_OT_gpu_paint.bl_idname,
+                text=("GPU Paint %d Channel%s" %
+                      (len(gpu_keys), "s" if len(gpu_keys) != 1 else "")),
+                icon='BRUSH_DATA')
             if gpu_engine.session_active():
                 box.label(text="GPU painting… RMB/Esc stops",
                           icon='BRUSH_DATA')

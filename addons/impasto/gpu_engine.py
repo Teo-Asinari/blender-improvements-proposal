@@ -916,6 +916,8 @@ def start_session(obj, images, region, channels=None, payloads=None,
     s.uvs = uvs
     s.tri_uv_bboxes = triangle_uv_bboxes(uvs)
     _session = s
+    _log_line("GPU_PAINT_SPIKE_START channels=%d size=%d"
+              % (channel_count, images[0].size[0]))
     _add_handlers()
     return True
 
