@@ -6,7 +6,7 @@ Enhancements to Blender's sculpting, texture painting, and UX workflows — insp
 
 ## Add-ons (working today)
 
-All three are tested against **Blender 5.1.2**, ship with headless test suites that run against a real Blender binary, and install by copying the folder (minus `tests/`) into your `scripts/addons/` directory. See each add-on's README for details.
+All four are tested against **Blender 5.1.2**, ship with headless test suites that run against a real Blender binary, and install by copying the folder (minus `tests/`) into your `scripts/addons/` directory. See each add-on's README for details.
 
 ### [Seam Path Tool](addons/seam_path_tool/) — v1.4.0
 
@@ -19,6 +19,10 @@ Viewport overlay that colors each UV island distinctly and/or drapes a texel-den
 ### [Kiln](addons/kiln/) — v1.0.1
 
 A guided high-poly → low-poly normal-baking workflow in one sidebar panel: pair the sculpt with a retopo mesh (existing, or a generated QuadriFlow candidate), pass a bake-readiness checklist (UVs, scale, normals — with one-click fixes and shortcuts into the two add-ons above), then one button runs the whole bake gauntlet: Cycles switch, image/material/node targeting, selected-to-active with auto ray distances, save to `//textures/`, normal map wired into the material, everything restored afterward. Normals-only for now; other map types are structured TODOs.
+
+### [Calipers](addons/calipers/) — v1.0.0
+
+Scale-aware voxel-remesh preview and safety (the Proposal §5 prototype). A sidebar panel shows, for both the sculpt-mode Voxel Remesh and the Remesh modifier, what the current voxel size actually means for your mesh: cell counts along each axis, a green/yellow/red cost band, and warnings for unapplied or non-uniform scale. "Add Remesh Modifier (Safe)" adds the modifier *without* computing anything until you've seen the estimate and confirmed; a preflight dialog does the same for the destructive operation. A viewport guide draws a voxel-sized sample cell and sparse grid slices against the mesh so the size is judged visually, never by the bare number.
 
 ## Documents
 

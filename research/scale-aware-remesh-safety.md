@@ -113,6 +113,8 @@ An add-on wrapper cannot guarantee safety when the native operator is invoked di
 
 ## Verification caveats
 
+> **Update (2026-07-12):** the prototype shipped as [`addons/calipers/`](../addons/calipers/), and its probes verified this document against a live Blender 5.1.2. Confirmed: the 0.1/0.0 defaults, object-space voxel semantics, original-mesh geometry source for the destructive op, immediate evaluation on modifier add, and the safe-add technique (disable `show_viewport` in the same execution → no evaluation). Corrected: native C operators are not exposed as `bpy.types.OBJECT_OT_*` (probe via `bpy.ops...get_rna_type()`); `Modifier.show_viewport`'s RNA default is False despite factory-add creating it True; `remesh_voxel_size` hard_min is 0.0 and the native op raises RuntimeError there; modifier `adaptivity` is RNA-unbounded; zero-extent (flat) meshes remesh fine; the op uses shape-key basis coordinates and destroys the keys; `evaluated_get().bound_box` is not tight to evaluated geometry (scan `to_mesh()` vertices for tight bounds). Details in `addons/calipers/PROGRESS.md`.
+
 This research was performed without a local Blender source checkout or executable, so live Blender 5.1 RNA introspection and performance measurements were not available. Before implementation:
 
 - verify all defaults against the exact targeted Blender 5.1 build with `bl_rna.properties[...]`;
