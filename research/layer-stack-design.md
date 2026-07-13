@@ -903,6 +903,25 @@ implementation-agent run with tests green at the end).
 **Total ≈ 24 sessions; MVP ≈ 10.** Phase 1 is the long pole and the only
 phase with architectural risk; everything after it is additive by design.
 
+### Added post-MVP requirements
+
+1. **Subsurface and emission/luminosity painting.** Promote the registry's
+   existing SSS and Emission definitions into first-class native and GPU paint
+   targets. Emission Color and Strength remain distinct images so luminance is
+   not limited to the color channel; subsurface scalar/vector values retain
+   their native units and Non-Color semantics.
+2. **Stencils for every channel and texture application.** A brush-level image
+   stencil must modulate one logical stroke across all enabled channel targets,
+   preserving registration between Base Color, scalar PBR data, Tangent Normal,
+   Height, Emission, and Subsurface data. It must also provide a direct texture-
+   application workflow. Exact stencil projection, transform controls,
+   alpha-versus-luminance interpretation, tiling, and per-channel payload rules
+   are intentionally left open until the user workflow is specified verbally.
+
+These requirements extend phases 6–7 rather than changing the core stack
+schema: channel bindings already own independent images, while one resident
+stroke supplies synchronized coverage and channel-specific payloads.
+
 ---
 
 ## 12. Risks & open questions (ranked)

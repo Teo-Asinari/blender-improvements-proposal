@@ -251,6 +251,22 @@ Impasto owns its generated root and per-layer node groups. Treat those graphs
 as build artifacts: edit the stack through Impasto rather than manually
 rewiring generated nodes.
 
+## Roadmap additions
+
+- **Subsurface painting:** extend native and GPU multi-channel painting to the
+  Principled subsurface channels, with correct scalar/vector units,
+  colorspaces, neutral defaults, compositing, preview, and export behavior.
+- **Emission / luminosity painting:** paint Emission Color and Emission
+  Strength together or independently, and make the resident preview communicate
+  values above display white without silently clipping the stored strength.
+- **Cross-channel image stencils and texture application:** attach an image
+  stencil to the active brush and use it to modulate a stroke consistently
+  across every enabled channel. The same system should support deliberate
+  texture application, not only procedural round dabs. Projection, transform,
+  per-channel contribution, alpha/luminance interpretation, tiling, and
+  interaction details remain design-in-progress pending the intended workflow
+  description.
+
 ## Phase 1 acceptance gates
 
 Phase 1 is complete only when all of these pass:

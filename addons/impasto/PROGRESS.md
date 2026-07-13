@@ -1,5 +1,14 @@
 # Impasto — multi-channel painting milestone progress
 
+## Newly requested roadmap TODOs
+
+- Implement Subsurface painting.
+- Implement Emission Color plus Emission Strength (luminosity) painting.
+- Implement an image-stencil system that modifies synchronized brushstrokes
+  across every enabled channel and supports texture application. Projection,
+  transform, masking, and per-channel semantics await the user's detailed
+  workflow description.
+
 ## 0.5.1 — overlapping sidebar input routing
 
 - Explicitly gives Blender's visible UI, header, and toolbar regions priority
