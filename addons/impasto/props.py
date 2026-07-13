@@ -94,7 +94,10 @@ class ImpastoBinding(bpy.types.PropertyGroup):
                 "mode"),) + _blend_items(),
         default='LAYER', update=_structural)
     opacity: FloatProperty(
-        name="Opacity", default=1.0, min=0.0, max=1.0,
+        name="Channel Influence",
+        description="Layer-compositing influence for this channel; this "
+                    "does not change the value painted by the brush",
+        default=1.0, min=0.0, max=1.0,
         subtype='FACTOR', update=_uniform)
     use_masks: BoolProperty(
         name="Use Masks",
@@ -147,10 +150,16 @@ class ImpastoLayer(bpy.types.PropertyGroup):
         name="Base Color", subtype='COLOR', size=3, min=0.0, max=1.0,
         default=(0.8, 0.2, 0.1))
     paint_roughness: FloatProperty(
-        name="Roughness", default=0.5, min=0.0, max=1.0,
+        name="Stroke Roughness",
+        description="Grayscale roughness value written into this layer's "
+                    "Roughness image by GPU strokes",
+        default=0.5, min=0.0, max=1.0,
         subtype='FACTOR')
     paint_metallic: FloatProperty(
-        name="Metallic", default=0.0, min=0.0, max=1.0,
+        name="Stroke Metallic",
+        description="Grayscale metallic value written into this layer's "
+                    "Metallic image by GPU strokes",
+        default=0.0, min=0.0, max=1.0,
         subtype='FACTOR')
     paint_normal: FloatVectorProperty(
         name="Tangent Normal", subtype='COLOR', size=3,

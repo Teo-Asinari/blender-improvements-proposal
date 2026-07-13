@@ -117,6 +117,13 @@ button label. Multi-channel painting operates on bindings of the **selected
 Paint layer**; use the `+` channel rows on that same layer to add simultaneous
 targets. Separate Paint layers are intentionally separate strokes.
 
+The Metallic and Roughness controls in **Multi-Channel Brush** are stroke
+values: they are written as grayscale into those channel images. The
+**Influence** control beside each channel image is separate; it controls how
+strongly that image layer is composited and therefore appears as a Mix factor
+inside Impasto's generated node group. New images start transparent (visually
+blank) so an untouched Paint layer has no material effect.
+
 Notes and current limits:
 
 - Base Color brush values are sRGB-encoded on deposit so the painted

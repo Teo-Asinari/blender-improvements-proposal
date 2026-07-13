@@ -916,8 +916,12 @@ def start_session(obj, images, region, channels=None, payloads=None,
     s.uvs = uvs
     s.tri_uv_bboxes = triangle_uv_bboxes(uvs)
     _session = s
-    _log_line("GPU_PAINT_SPIKE_START channels=%d size=%d"
-              % (channel_count, images[0].size[0]))
+    keys = tuple(s.settings.get("channel_keys", ()))
+    targets = ",".join(
+        "%s:%s" % (keys[i] if i < len(keys) else i, image.name)
+        for i, image in enumerate(images))
+    _log_line("GPU_PAINT_SPIKE_START channels=%d size=%d targets=%s"
+              % (channel_count, images[0].size[0], targets))
     _add_handlers()
     return True
 
@@ -1778,6 +1782,7 @@ def _finalize_stroke_gpu(s):
     t_read = 0.0
     t_conv = 0.0
     path = None
+    alpha_max = [0.0] * n
     # 1x1 reads drain every batch before the atomic all-image finalize.
     t0 = time.perf_counter()
     for fb in s.paint_fbs:
@@ -1828,11 +1833,20 @@ def _finalize_stroke_gpu(s):
                         t0 = time.perf_counter()
                         view[ry:ry + rh, rx:rx + rw] = sub
                         t_conv += time.perf_counter() - t0
+                # Diagnose the actual dirty-region attachment content, not
+                # merely whether an Image.pixels write was attempted.
+                region_pixels = (view[ry:ry + rh, rx:rx + rw]
+                                 if rect is not None else view)
+                if region_pixels.size:
+                    alpha_max[target_index] = float(
+                        region_pixels[..., 3].max())
 
     stats["fb_read_ms"] = t_read * 1000.0
     stats["fb_read_avg_ch_ms"] = t_read * 1000.0 / n
     stats["readback_path"] = path or "none"
     stats["to_numpy_ms"] = t_conv * 1000.0
+    stats["alpha_max"] = ",".join("%.4f" % value
+                                   for value in alpha_max)
 
     if DEBUG_COMPARE_READS:
         # 0.1.0 A/B probe: GPUTexture.read() (returns the attachment's

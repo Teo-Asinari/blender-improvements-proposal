@@ -748,6 +748,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             "hardness": layer.brush_hardness,
             "occlusion": True,
             "subrect": True,
+            "channel_keys": tuple(keys),
             "preview_index": (keys.index(layer.preview_channel)
                               if layer.preview_channel in keys else 0),
         }

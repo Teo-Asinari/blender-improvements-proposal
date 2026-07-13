@@ -172,9 +172,11 @@ class IMPASTO_PT_main(bpy.types.Panel):
             if 'base_color' in gpu_keys:
                 col.prop(layer, "paint_color", text="Color")
             if 'roughness' in gpu_keys:
-                col.prop(layer, "paint_roughness", slider=True)
+                col.prop(layer, "paint_roughness", text="Stroke Roughness",
+                         slider=True)
             if 'metallic' in gpu_keys:
-                col.prop(layer, "paint_metallic", slider=True)
+                col.prop(layer, "paint_metallic", text="Stroke Metallic",
+                         slider=True)
             if 'normal' in gpu_keys:
                 col.prop(layer, "paint_normal", text="Normal")
             if 'height' in gpu_keys:
@@ -203,7 +205,7 @@ class IMPASTO_PT_main(bpy.types.Panel):
 
     def _draw_bindings(self, box, state, layer):
         col = box.column(align=True)
-        col.label(text="Channels")
+        col.label(text="Channel Images / Layer Influence")
         for c in state.channels:
             ch = model.CHANNEL_MAP.get(c.name)
             if ch is None or not c.enabled:
@@ -234,10 +236,18 @@ class IMPASTO_PT_main(bpy.types.Panel):
                 op.channel_key = c.name
             else:
                 sub.label(text="painted")
-            sub.prop(binding, "opacity", text="", slider=True)
+            sub.prop(binding, "opacity", text="Influence", slider=True)
             op = sub.operator(ops.IMPASTO_OT_binding_remove.bl_idname,
                               text="", icon='X', emboss=False)
             op.channel_key = c.name
+            if layer.layer_type == 'PAINT':
+                image = bpy.data.images.get(binding.image_name
+                                            or layer.image_name)
+                detail = col.row()
+                detail.enabled = False
+                detail.label(text=("Image: %s" % image.name if image else
+                                   "Image: missing"),
+                             icon='IMAGE_DATA' if image else 'ERROR')
 
 
 class IMPASTO_MT_main(bpy.types.Menu):
