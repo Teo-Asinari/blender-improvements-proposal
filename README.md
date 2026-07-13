@@ -4,9 +4,12 @@ Enhancements to Blender's sculpting, texture painting, and UX workflows — insp
 
 > This is an independent project. It is not affiliated with, endorsed by, or derived from 3DCoat (Pilgway), Substance Painter (Adobe), or any other product mentioned; product names are used only to describe comparable workflows. All code here is original, written against Blender's public APIs.
 
-## Add-ons (working today)
+## Add-ons
 
-All four are tested against **Blender 5.1.2**, ship with headless test suites that run against a real Blender binary, and install by copying the folder (minus `tests/`) into your `scripts/addons/` directory. See each add-on's README for details.
+All five are tested against **Blender 5.1.2**, ship with test suites that run
+against a real Blender binary, and install by copying the folder (minus
+`tests/`) into your `scripts/addons/` directory. See each add-on's README for
+usage, limitations, and interactive acceptance checks.
 
 ### [Seam Path Tool](addons/seam_path_tool/) — v1.4.0
 
@@ -16,26 +19,79 @@ Interactive shortest-path UV seam marking in Edit Mode: click points on the mesh
 
 Viewport overlay that colors each UV island distinctly and/or drapes a texel-density checkerboard through the actual UVs — the default combined mode shows both at once (hue = island, checker scale = density). Islands can be computed from true UV connectivity or *predicted from seams live as you mark them*, no unwrap needed. Per-island density stats, deviation tint, live opacity controls. Drawn as a GPU overlay; the mesh is never modified.
 
-### [Kiln](addons/kiln/) — v1.0.1
+### [Kiln](addons/kiln/) — v1.2.1
 
-A guided high-poly → low-poly normal-baking workflow in one sidebar panel: pair the sculpt with a retopo mesh (existing, or a generated QuadriFlow candidate), pass a bake-readiness checklist (UVs, scale, normals — with one-click fixes and shortcuts into the two add-ons above), then one button runs the whole bake gauntlet: Cycles switch, image/material/node targeting, selected-to-active with auto ray distances, save to `//textures/`, normal map wired into the material, everything restored afterward. Normals-only for now; other map types are structured TODOs.
+A guided high-poly → low-poly normal-baking workflow in one sidebar panel:
+pair the sculpt with a retopo mesh (existing, or a generated QuadriFlow
+candidate), pass a bake-readiness checklist, then run the complete selected-to-
+active bake without manually assembling nodes and settings. Automatic ray
+distance, manual inner/outer shells, and an explicit cage are presented as
+distinct projection modes with viewport guides; the explicit cage is the most
+predictable option for difficult meshes. Kiln configures Cycles, the target
+image and nodes, saves to `//textures/`, wires the normal map, and restores the
+previous Blender state. Bakes integrate with an existing Impasto stack instead
+of replacing its Normal connection. Normals-only for now.
 
-### [Calipers](addons/calipers/) — v1.0.0
+### [Calipers](addons/calipers/) — v1.2.0
 
-Scale-aware voxel-remesh preview and safety (the Proposal §5 prototype). A sidebar panel shows, for both the sculpt-mode Voxel Remesh and the Remesh modifier, what the current voxel size actually means for your mesh: cell counts along each axis, a green/yellow/red cost band, and warnings for unapplied or non-uniform scale. "Add Remesh Modifier (Safe)" adds the modifier *without* computing anything until you've seen the estimate and confirmed; a preflight dialog does the same for the destructive operation. A viewport guide draws a voxel-sized sample cell and sparse grid slices against the mesh so the size is judged visually, never by the bare number.
+Scale-aware voxel-remesh preview and safety (the Proposal §5 prototype). A
+sidebar panel shows, for both Sculpt Mode Voxel Remesh and the Remesh modifier,
+what the current voxel size means for the selected mesh: cell counts along each
+axis, a green/yellow/red cost band, bounding-box dimensions, and scale warnings.
+Safe modifier creation and destructive-remesh preflight prevent Blender's
+default `0.1 m` voxel size from triggering a prohibitively expensive operation
+without review. A viewport guide draws grid slices and voxel-sized samples at
+all eight bounding-box corners so scale can be judged visually.
+
+### [Impasto](addons/impasto/) — v0.4.1 (active development)
+
+A non-destructive Principled-PBR layer stack with Fill, Paint, and pass-through
+Group layers. One logical Paint layer can own separate Base Color, Metallic,
+Roughness, Tangent Normal, and Height images, with generated node graphs that
+keep those channels composited independently. Kiln normal bakes can become the
+stack's baseline normal layer without damaging the active painting setup.
+
+Impasto currently offers three painting paths:
+
+- Blender's native Texture Paint brush for one channel at a time;
+- **Blender Brush → N Channels**, which captures a native Draw stroke and
+  replays its footprint into every enabled channel; and
+- an experimental **GPU Paint All Channels** session that keeps channel
+  textures GPU-resident, previews the composed PBR result while painting, and
+  flushes them to Blender images explicitly or on session exit.
+
+The GPU path includes a brush-sized reticle, front-surface depth rejection to
+prevent painting through the mesh, per-stroke multi-channel GPU undo/redo, live
+channel-value changes between strokes, and a lightweight environment-style PBR
+preview. The preview is deliberately an approximation rather than Blender's
+exact Material Preview HDRI. Masks, channel isolation, bake-down/export,
+arbitrary Blender brush textures, and specialized brush tools remain future
+work; save/export should currently be preceded by an explicit GPU flush.
 
 ## Documents
 
-- [PROPOSAL.md](PROPOSAL.md) — the full proposal: the features above, plus the two flagship efforts (layered PBR texture painting, voxel sculpting) that ultimately need work in Blender's core.
+- [PROPOSAL.md](PROPOSAL.md) — the full proposal: the features above, plus
+  longer-term layered painting and voxel-sculpting changes that ultimately need
+  work in Blender's core.
 - [research/](research/) — technical research feeding the flagship designs.
 
 ## Approach
 
-Features are piloted as Python add-ons with agent-assisted development: each add-on carries a headless test suite (`tests/run_tests.sh`) that exercises the real Blender binary in `--background`, including — where the domain allows — real end-to-end assertions (e.g. Kiln's suite performs an actual Cycles normal bake and checks the pixel statistics). API behavior is probed against the running binary rather than assumed; the traps found along the way are documented in the add-on READMEs.
+Features are piloted as Python add-ons with agent-assisted development. Each
+add-on carries a test suite (`tests/run_tests.sh`) that exercises a real Blender
+binary, including — where the domain allows — end-to-end assertions. Kiln's
+suite performs an actual Cycles normal bake and checks its pixel statistics;
+Impasto additionally has foreground GPU smoke coverage because viewport draw
+handlers cannot be validated completely in background mode. API behavior is
+probed against the running binary rather than assumed, and the traps found
+along the way are documented in the add-on READMEs.
 
 ## Status
 
-Active development. The three add-ons above are usable daily; the flagship features are in research/design.
+Active development. Seam Path Tool, UV Island Overlay, Kiln, and Calipers have
+complete guided workflows. Impasto's layer stack and native painting paths are
+usable, while its high-performance multi-channel GPU brush remains experimental
+and is being qualified interactively on larger meshes and textures.
 
 ## License
 
