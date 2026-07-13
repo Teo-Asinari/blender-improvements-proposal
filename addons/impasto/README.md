@@ -127,11 +127,12 @@ layer's Multi-Channel Brush values. Material channels alpha-blend;
 Height is a separate additive pass driven by the same stroke, so
 **Raise/Lower** accumulate relief around the neutral mid-gray canvas
 exactly like the native Height brush. Left mouse paints, right mouse or
-Esc stops, and the channel canvases sync back on every pen lift.
-The viewport keeps the composed PBR material visible throughout the session;
-the former raw single-channel overlay has been removed. A screen-space reticle
-uses the same Radius value as the GPU dabs, and completed image writes are
-tagged for material redraw immediately at pen-up.
+Esc flushes the resident canvases and stops. Pen-up is GPU-only: it performs
+no readback and no full-image `Image.pixels` writes. The viewport draws a live
+PBR approximation composed directly from the resident Base Color, Metallic,
+Roughness, Tangent Normal, and Height textures. Blender's material becomes
+authoritative again after **Flush GPU Paint to Images** or session exit. A
+screen-space reticle uses the same Radius value as the GPU dabs.
 GPU projection rejects hidden fragments using a front-surface prepass stored
 as linear view-space depth. Native multi-channel replay temporarily enables
 Blender's Occlude and Backface Culling options, then restores their prior
@@ -153,8 +154,14 @@ Notes and current limits:
 - Base Color brush values are sRGB-encoded on deposit so the painted
   swatch renders as picked; blending still happens in stored space, not
   scene-linear composited space.
-- GPU strokes are not undoable yet (native painting keeps Blender's
-  normal paint undo). Stop the session before undoing stack operations.
+- GPU strokes use an Impasto-owned, memory-bounded tile history. Ctrl-Z and
+  Ctrl-Shift-Z restore every channel of one stroke atomically without CPU
+  readback. Stop the session before undoing ordinary Blender stack operations.
+- Supported Blender Draw brushes contribute their effective unified/local
+  size, spacing, strength, and size/strength pressure behavior to GPU stamps.
+  Clone, Smear, Soften, Fill, Gradient, and Mask remain explicit compatibility
+  fallbacks. Brush texture upload and arbitrary custom falloff-curve sampling
+  are not integrated yet.
 - One native multi-channel replay invokes Blender image paint once per canvas.
   Blender 5.1 exposes no Python undo-group API, so those channel operations
   currently occupy separate native paint-undo entries rather than one Ctrl-Z.
@@ -162,14 +169,14 @@ Notes and current limits:
   painted in. Orbiting between strokes is fine.
 - If the GPU session fails on a backend/driver, Impasto reports once
   and native painting is unaffected.
+- Saving/exporting while a GPU session is active is not yet an automatic flush
+  boundary. Use **Flush GPU Paint to Images**, or RMB/Esc to finish, first.
 
-**Resolution tradeoff:** new canvases default to 2048 x 2048, chosen so
-a four-channel GPU pen-lift sync (GPU readback + `Image.pixels` write
-per channel) stays within an interactive ~200 ms budget on measured
-hardware. The layer-creation operator offers 1K/2K/4K per layer; at 4K
-a four-channel pen lift measured ~417 ms, dominated by Blender's
-full-image `Image.pixels` write, which no add-on can shrink. Pick 4K
-only for hero assets where pen-lift latency is acceptable.
+**Resolution tradeoff:** new canvases default to 2048 x 2048. The
+layer-creation operator offers 1K/2K/4K per layer. Painting no longer pays the
+resolution-dependent full-image synchronization cost at each pen lift; an
+explicit/session-exit flush still does. At 4K that flush may take hundreds of
+milliseconds, but it is amortized across the complete resident session.
 
 ### Normal and height painting
 

@@ -4,7 +4,7 @@
 bl_info = {
     "name": "Impasto",
     "author": "Teo Asinari",
-    "version": (0, 3, 3),
+    "version": (0, 4, 0),
     "blender": (5, 1, 0),
     "location": "3D Viewport > Sidebar (N) > Impasto tab",
     "description": "Non-destructive PBR material layer stacks",
@@ -19,6 +19,16 @@ if "model" in locals():
     reconcile = importlib.reload(reconcile)
     snapshot = importlib.reload(snapshot)
     engine = importlib.reload(engine)
+    if "visibility" in locals():
+        visibility = importlib.reload(visibility)
+    else:
+        from . import visibility
+    if "brush_adapter" in locals():
+        brush_adapter = importlib.reload(brush_adapter)
+        tile_undo = importlib.reload(tile_undo)
+    else:
+        from . import brush_adapter
+        from . import tile_undo
     gpu_engine = importlib.reload(gpu_engine)
     props = importlib.reload(props)
     if "paint" in locals():
@@ -34,6 +44,9 @@ else:
     from . import reconcile
     from . import snapshot
     from . import engine
+    from . import visibility
+    from . import brush_adapter
+    from . import tile_undo
     from . import gpu_engine
     from . import props
     from . import paint

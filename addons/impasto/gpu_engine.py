@@ -40,17 +40,17 @@ Occlusion
 The viewport's own depth buffer is not readable from Python, so the
 mesh is rendered once per VIEW CHANGE (not per dab) into a private
 framebuffer: DEPTH_COMPONENT32F depth attachment for z-testing plus an
-R32F color attachment storing ``clip.z / clip.w`` (post-divide NDC
-depth) computed IN THE FRAGMENT SHADER from an interpolated clip-space
-position. The dab shader computes the exact same quantity from the
-exact same matrix, so the comparison is backend-convention-free
-(OpenGL/Vulkan/Metal NDC-z differences cancel out by construction).
-This deliberately avoids sampling the DEPTH texture directly — a
-convention minefield the spike routes around; noted in FINDINGS.md.
+R32F color attachment storing positive linear view-space depth. The dab
+shader uses exact texel fetches plus a continuity-gated local depth gradient,
+which preserves steep visible surfaces without widening the threshold enough
+to admit rear shells. The DEPTH texture itself is used only for prepass
+z-testing, avoiding backend depth-convention ambiguity.
 
-Sync-back
----------
-On stroke end the paint framebuffer is read back ONCE. Preferred path
+Deferred sync-back
+------------------
+Pen-up performs no readback. Paint textures stay GPU-resident for live
+composed preview and atomic tile undo. At explicit flush or normal session
+exit the framebuffer is read back once. Preferred path
 (probed at session start): ``fb.read_color(..., data=Buffer)`` where
 the Buffer wraps pre-allocated numpy memory — the pixels land directly
 in the array ``image.pixels.foreach_set`` consumes, so the
@@ -61,7 +61,7 @@ to_list fallback; the ``buffer_to_numpy_path=`` probe line names the
 winner). The naive ``np.asarray(buf)`` this replaces was measured at
 ~1.05 s for one 4K readback — numpy silently degrading to element-wise
 sequence iteration over 16.7M Python floats (see FINDINGS.md). CPU
-cost is paid ONCE per stroke.
+cost is paid once per flush rather than once per stroke.
 
 Multi-channel (v0.3.0)
 ----------------------
@@ -82,12 +82,12 @@ in full-size CPU mirror arrays that ``foreach_set`` consumes whole —
 Image.pixels has no partial-write API, so the CPU write stays full-cost
 (a finding, not a bug).
 
-Instrumentation is the point: every stage is timed with
+Instrumentation reports submission and explicit-flush costs separately with
 time.perf_counter and reported in a blf overlay, the N-panel, and one
 machine-readable ``GPU_PAINT_SPIKE_STROKE ...`` console line per stroke.
 NOTE: per-dab times measured on the CPU are SUBMISSION times (the GPU
-runs asynchronously); the stroke-end 1x1 "drain" read forces completion
-of everything queued, bounding the true GPU cost per stroke. Set
+runs asynchronously); pen-up deliberately does not drain. An explicit flush
+forces completion and reports its transfer cost. Set
 DEBUG_COMPARE_READS = True to restore the 0.1.0 A/B probe that timed
 GPUTexture.read() next to fb.read_color (a second full transfer per
 stroke; off in the production path).
@@ -100,6 +100,9 @@ from contextlib import contextmanager
 
 import bpy
 import gpu
+
+from . import visibility
+from . import tile_undo
 
 # ---------------------------------------------------------------------------
 # Tunables
@@ -182,10 +185,10 @@ void main()
         if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) {
             discard;
         }
-        float front = texture(scene_depth_tex, suv).r;
         float view_depth = dot(view_depth_plane, vec4(worldPos, 1.0));
-        float tolerance = max(depth_epsilon, abs(front) * 1e-5);
-        if (view_depth > front + tolerance) {
+        if (!impasto_visible_surface(scene_depth_tex, suv, view_depth,
+                                     depth_epsilon,
+                                     depth_relative_epsilon)) {
             discard;   /* this texel's surface point is hidden */
         }
     }
@@ -236,24 +239,103 @@ void main()
 PREVIEW_VERT_SRC = """
 void main()
 {
-    gl_Position = ModelViewProjectionMatrix * vec4(pos, 1.0);
+    vec4 world = model_matrix * vec4(pos, 1.0);
+    gl_Position = view_proj_matrix * world;
     /* Depth bias: pull toward the viewer in clip space (w-scaled, same
      * mechanism as uv_island_overlay) so the preview coat wins
      * z-fighting against the mesh surface it sits on. */
     gl_Position.z -= %r * gl_Position.w;
     uvInterp = uv;
+    worldPos = world.xyz;
 }
 """ % CLIP_DEPTH_BIAS
 
 PREVIEW_FRAG_SRC = """
+vec3 srgb_to_linear(vec3 c)
+{
+    vec3 lo = c / 12.92;
+    vec3 hi = pow((c + 0.055) / 1.055, vec3(2.4));
+    return mix(hi, lo, lessThanEqual(c, vec3(0.04045)));
+}
+
+vec4 straight_sample(sampler2D tex, vec2 uv)
+{
+    vec4 c = texture(tex, uv);
+    if (c.a > 1e-6) c.rgb /= c.a;
+    else c.rgb = vec3(0.0);
+    return c;
+}
+
 void main()
 {
-    /* paint_tex accumulates PREMULTIPLIED alpha (see premultiply_canvas):
-     * un-premultiply for display so the straight-alpha 'ALPHA' blend the
-     * preview draws with does not darken soft rims twice. */
-    vec4 c = texture(paint_tex, uvInterp);
-    vec3 rgb = (c.a > 1e-6) ? (c.rgb / c.a) : vec3(0.0);
-    fragColor = vec4(rgb, c.a * preview_opacity);
+    vec4 base = straight_sample(base_color_tex, uvInterp);
+    vec4 metal_sample = straight_sample(metallic_tex, uvInterp);
+    vec4 rough_sample = straight_sample(roughness_tex, uvInterp);
+    vec4 normal_sample = straight_sample(normal_tex, uvInterp);
+    float height = texture(height_tex, uvInterp).r;
+
+    vec3 albedo = has_base_color > 0.5
+        ? srgb_to_linear(base.rgb) : vec3(0.5);
+    float metallic = has_metallic > 0.5 ? metal_sample.r : 0.0;
+    float roughness = has_roughness > 0.5 ? rough_sample.r : 0.5;
+
+    vec3 dpdx = dFdx(worldPos), dpdy = dFdy(worldPos);
+    vec2 dudx = dFdx(uvInterp), dudy = dFdy(uvInterp);
+    vec3 geometric_n = normalize(cross(dpdx, dpdy));
+    if (!gl_FrontFacing) geometric_n = -geometric_n;
+    vec3 tangent = normalize(dpdx * dudy.y - dpdy * dudx.y);
+    vec3 bitangent = normalize(-dpdx * dudy.x + dpdy * dudx.x);
+    vec3 n = geometric_n;
+    if (has_normal > 0.5 && normal_sample.a > 1e-6) {
+        vec3 tangent_n = normalize(normal_sample.rgb * 2.0 - 1.0);
+        n = normalize(mat3(tangent, bitangent, geometric_n) * tangent_n);
+    }
+    if (has_height > 0.5) {
+        vec2 texel = 1.0 / vec2(textureSize(height_tex, 0));
+        float hx = texture(height_tex, uvInterp + vec2(texel.x, 0.0)).r
+                 - texture(height_tex, uvInterp - vec2(texel.x, 0.0)).r;
+        float hy = texture(height_tex, uvInterp + vec2(0.0, texel.y)).r
+                 - texture(height_tex, uvInterp - vec2(0.0, texel.y)).r;
+        n = normalize(n - tangent * hx * 8.0 - bitangent * hy * 8.0);
+    }
+
+    /* Lightweight, deterministic PBR approximation for live feedback.
+     * It deliberately composes every resident channel; Blender's material
+     * remains authoritative after an explicit/session-exit flush. */
+    vec3 v = normalize(camera_position - worldPos);
+    vec3 l0 = normalize(vec3(0.35, 0.45, 0.82));
+    vec3 l1 = normalize(vec3(-0.65, 0.2, 0.55));
+    float ndl = max(dot(n, l0), 0.0) + 0.35 * max(dot(n, l1), 0.0);
+    vec3 h = normalize(l0 + v);
+    float exponent = mix(128.0, 2.0, clamp(roughness, 0.0, 1.0));
+    float spec = pow(max(dot(n, h), 0.0), exponent);
+    vec3 f0 = mix(vec3(0.04), albedo, clamp(metallic, 0.0, 1.0));
+    vec3 diffuse = albedo * (1.0 - clamp(metallic, 0.0, 1.0));
+    vec3 rgb = diffuse * (0.18 + 0.72 * ndl) + f0 * spec;
+
+    float coverage = 0.0;
+    if (has_base_color > 0.5) coverage = max(coverage, base.a);
+    if (has_metallic > 0.5) coverage = max(coverage, metal_sample.a);
+    if (has_roughness > 0.5) coverage = max(coverage, rough_sample.a);
+    if (has_normal > 0.5) coverage = max(coverage, normal_sample.a);
+    if (has_height > 0.5) coverage = max(coverage,
+                                        clamp(abs(height - 0.5) * 8.0, 0.0, 1.0));
+    fragColor = vec4(rgb, coverage * preview_opacity);
+}
+"""
+
+COPY_VERT_SRC = """
+void main()
+{
+    gl_Position = vec4(pos, 1.0);
+    uvInterp = uv_origin + uv * uv_scale;
+}
+"""
+
+COPY_FRAG_SRC = """
+void main()
+{
+    fragColor = texture(source_tex, uvInterp);
 }
 """
 
@@ -556,6 +638,7 @@ def dab_shader_create_info(channels=1, additive=False):
     info.push_constant('FLOAT', "brush_radius_px")
     info.push_constant('FLOAT', "brush_hardness")
     info.push_constant('FLOAT', "depth_epsilon")
+    info.push_constant('FLOAT', "depth_relative_epsilon")
     info.push_constant('FLOAT', "use_occlusion")
     info.push_constant('FLOAT', "pressure")
     for i in range(channels):
@@ -568,7 +651,8 @@ def dab_shader_create_info(channels=1, additive=False):
     for i in range(1, channels):
         info.fragment_out(i, 'VEC4', "fragColor%d" % i)
     info.vertex_source(DAB_VERT_SRC)
-    info.fragment_source(dab_frag_src(channels, additive=additive))
+    info.fragment_source(visibility.GLSL_SOURCE
+                         + dab_frag_src(channels, additive=additive))
     return info
 
 
@@ -590,16 +674,41 @@ def prepass_shader_create_info():
 def preview_shader_create_info():
     iface = gpu.types.GPUStageInterfaceInfo("gpu_paint_spike_preview_iface")
     iface.smooth('VEC2', "uvInterp")
+    iface.smooth('VEC3', "worldPos")
     info = gpu.types.GPUShaderCreateInfo()
-    info.push_constant('MAT4', "ModelViewProjectionMatrix")
+    info.push_constant('MAT4', "model_matrix")
+    info.push_constant('MAT4', "view_proj_matrix")
+    info.push_constant('VEC3', "camera_position")
     info.push_constant('FLOAT', "preview_opacity")
-    info.sampler(0, 'FLOAT_2D', "paint_tex")
+    for name in ("base_color", "metallic", "roughness", "normal", "height"):
+        info.push_constant('FLOAT', "has_" + name)
+    info.sampler(0, 'FLOAT_2D', "base_color_tex")
+    info.sampler(1, 'FLOAT_2D', "metallic_tex")
+    info.sampler(2, 'FLOAT_2D', "roughness_tex")
+    info.sampler(3, 'FLOAT_2D', "normal_tex")
+    info.sampler(4, 'FLOAT_2D', "height_tex")
     info.vertex_in(0, 'VEC3', "pos")
     info.vertex_in(1, 'VEC2', "uv")
     info.vertex_out(iface)
     info.fragment_out(0, 'VEC4', "fragColor")
     info.vertex_source(PREVIEW_VERT_SRC)
     info.fragment_source(PREVIEW_FRAG_SRC)
+    return info
+
+
+def copy_shader_create_info():
+    iface = gpu.types.GPUStageInterfaceInfo("impasto_tile_copy_iface")
+    iface.smooth('VEC2', "uvInterp")
+    info = gpu.types.GPUShaderCreateInfo()
+    info.push_constant('VEC2', "uv_origin")
+    info.push_constant('VEC2', "uv_scale")
+    info.sampler(0, 'FLOAT_2D', "source_tex")
+    info.vertex_in(0, 'VEC3', "pos")
+    info.vertex_in(1, 'VEC2', "uv")
+    info.vertex_out(iface)
+    info.fragment_out(0, 'VEC4', "fragColor")
+    info.vertex_source(COPY_VERT_SRC)
+    info.fragment_source(COPY_FRAG_SRC)
     return info
 
 
@@ -766,6 +875,7 @@ class _Session:
         # GPU resources — ALL lazy, created at first draw.
         self.dab_shaders = None
         self.prepass_shader = None
+        self.preview_shader = None
         self.paint_texs = None         # list of N RGBA16F GPUTextures
         self.paint_fbs = None
         self.depth_color_tex = None    # R32F: prepass NDC depth
@@ -774,6 +884,11 @@ class _Session:
         self.depth_fb_size = None      # (w, h) the depth FB was built at
         self.batch_dabs = None         # one pos+uv batch per shader
         self.batch_prepass = None      # pos only
+        self.batch_preview = None      # pos + uv, composed surface overlay
+        self.neutral_tex = None        # 1x1 fallback for absent channels
+        self.copy_shader = None
+        self.copy_batch = None
+        self.single_fbs = None
         self.gpu_ready = False
         self.probe_lines = None
 
@@ -793,6 +908,8 @@ class _Session:
         self.tri_unprojectable = None
         self.stroke_dirty = None       # UV bbox or None
         self.stroke_dirty_full = False  # tracking unavailable: full read
+        self.session_dirty = None      # accumulated until explicit flush
+        self.session_dirty_full = False
         self.dirty_ms = 0.0            # CPU cost of the tracking math
 
         # Full-size CPU mirror arrays (one per channel): sub-rect reads
@@ -811,6 +928,12 @@ class _Session:
         self.last_px = None            # last dab position (x, y)
         self.leftover = 0.0
         self.pending_finalize = False
+        self.pending_flush = False
+        self.flush_in_flight = False
+        self.stroke_transaction = None
+        self.history = tile_undo.TileHistory()
+        self.history_backend = None
+        self.pending_history_action = None
         # Screen-space cursor is independent of paint preview.  Keeping the
         # composed material visible avoids the old raw-channel overlay that
         # made PBR rendering appear to change while the session was active.
@@ -876,9 +999,12 @@ def stroke_active():
 
 
 def busy():
-    """True while a finalize/readback/pixel-write is still in flight."""
+    """True while queued GPU work or an explicit flush is in flight."""
     s = _session
     return s is not None and (s.pending_finalize
+                              or s.pending_flush
+                              or s.flush_in_flight
+                              or s.pending_history_action is not None
                               or s.pending_pixels is not None)
 
 
@@ -934,6 +1060,8 @@ def stop_session():
     global _session
     _remove_handlers()
     if _session is not None:
+        if _session.history_backend is not None:
+            _session.history.clear(_session.history_backend)
         # Drop gpu refs; Blender frees them with the last reference.
         _session = None
 
@@ -961,8 +1089,11 @@ def move_stroke(x, y, pressure, radius_px):
     if s is None or not s.stroke_active or s.error is not None:
         return
     x0, y0 = s.last_px
+    stamp = s.settings.get("brush_stamp")
+    spacing = (stamp.spacing_px if stamp is not None
+               else dab_spacing(radius_px))
     positions, s.leftover = interpolate_dabs(
-        x0, y0, x, y, dab_spacing(radius_px), s.leftover)
+        x0, y0, x, y, spacing, s.leftover)
     for px, py, _t in positions:
         s.dab_queue.append((px, py, pressure))
     s.last_px = (x, y)
@@ -973,7 +1104,49 @@ def end_stroke():
     if s is None or not s.stroke_active:
         return
     s.stroke_active = False
-    s.pending_finalize = True   # draw callback runs the GPU readback
+    # Pen-up is GPU-only. The draw callback drains any queued dabs and records
+    # the stroke boundary, but performs no texture readback or Image writes.
+    s.pending_finalize = True
+
+
+def request_flush():
+    """Queue a GPU->Image synchronization at the next owning-viewport draw.
+
+    This is deliberately explicit/deferred: normal pen-up never calls it.
+    Session exit and the panel's Flush button are the safe boundaries.
+    """
+    s = _session
+    if s is None or s.error is not None:
+        return False
+    s.pending_flush = True
+    return True
+
+
+def request_history_action(action):
+    """Queue atomic GPU tile undo/redo for the owning viewport draw."""
+    s = _session
+    action = str(action).upper()
+    if (s is None or s.stroke_active or s.pending_finalize
+            or action not in {'UNDO', 'REDO'}):
+        return False
+    s.pending_history_action = action
+    return True
+
+
+def history_counts():
+    s = _session
+    if s is None:
+        return (0, 0)
+    return (s.history.undo_count, s.history.redo_count)
+
+
+def has_unflushed_changes():
+    s = _session
+    return bool(s is not None and (s.session_dirty is not None
+                                   or s.session_dirty_full
+                                   or s.stroke_dirty is not None
+                                   or s.stroke_dirty_full
+                                   or s.dab_queue))
 
 
 def set_cursor(x, y):
@@ -988,7 +1161,7 @@ def cursor_position():
     return _session.cursor if _session is not None else None
 
 
-def update_stroke_settings(payloads, radius=None, hardness=None):
+def update_stroke_settings(payloads, radius=None, hardness=None, stamp=None):
     """Refresh values sampled at the next pen-down without restarting.
 
     The target images and channel order are fixed for a session, but brush
@@ -1006,6 +1179,7 @@ def update_stroke_settings(payloads, radius=None, hardness=None):
         s.settings["radius"] = float(radius)
     if hardness is not None:
         s.settings["hardness"] = float(hardness)
+    s.settings["brush_stamp"] = stamp
     return True
 
 
@@ -1026,6 +1200,7 @@ def take_pending_pixels():
         return None
     pairs = s.pending_pixels
     s.pending_pixels = None
+    s.flush_in_flight = False
     return pairs
 
 
@@ -1148,9 +1323,13 @@ def _draw_view():
                     _flush_dabs(s, region)
                 if s.pending_finalize and not s.dab_queue:
                     _finalize_stroke_gpu(s)
-            # Do not draw a raw channel over the mesh.  Material Preview must
-            # remain the authoritative composed PBR view; completed strokes
-            # reach it through Image datablock synchronization at pen-up.
+                if s.pending_flush and not s.dab_queue \
+                        and not s.pending_finalize:
+                    _flush_session_gpu(s)
+                if s.pending_history_action is not None \
+                        and not s.dab_queue and not s.pending_finalize:
+                    _apply_history_action(s)
+                _draw_composed_preview(s)
     except Exception:
         s.latch("draw failed")
 
@@ -1186,6 +1365,62 @@ def _channel_blend(s, index):
     return "MIX"
 
 
+class _GPUTileBackend:
+    """GPU-only snapshot backend for tile_undo.TileHistory."""
+
+    def __init__(self, session):
+        self.session = session
+        keys = tuple(session.settings.get("channel_keys", ()))
+        self.index_by_channel = {str(key): i for i, key in enumerate(keys)}
+
+    def _index(self, key):
+        try:
+            return self.index_by_channel[key.channel]
+        except KeyError as exc:
+            raise tile_undo.TileHistoryError(
+                "unknown GPU paint channel %r" % key.channel) from exc
+
+    def _draw_copy(self, source, framebuffer, viewport, origin, scale):
+        s = self.session
+        with framebuffer.bind():
+            framebuffer.viewport_set(*viewport)
+            gpu.state.blend_set('NONE')
+            gpu.state.depth_test_set('NONE')
+            gpu.state.depth_mask_set(False)
+            gpu.state.face_culling_set('NONE')
+            sh = s.copy_shader
+            sh.bind()
+            sh.uniform_float("uv_origin", origin)
+            sh.uniform_float("uv_scale", scale)
+            sh.uniform_sampler("source_tex", source)
+            s.copy_batch.draw(sh)
+
+    def capture_tile(self, key):
+        s = self.session
+        index = self._index(key)
+        tex = gpu.types.GPUTexture((key.width, key.height), format='RGBA16F')
+        fb = gpu.types.GPUFrameBuffer(color_slots=(tex,))
+        size = float(s.size)
+        self._draw_copy(
+            s.paint_texs[index], fb, (0, 0, key.width, key.height),
+            (key.x / size, key.y / size),
+            (key.width / size, key.height / size))
+        return tile_undo.TileSnapshot(
+            payload=tex, byte_size=key.width * key.height * 8)
+
+    def restore_tile(self, key, snapshot):
+        s = self.session
+        index = self._index(key)
+        self._draw_copy(
+            snapshot.payload, s.single_fbs[index],
+            (key.x, key.y, key.width, key.height),
+            (0.0, 0.0), (1.0, 1.0))
+
+    def release_tile(self, snapshot):
+        # Releasing the TileSnapshot drops its last GPUTexture reference.
+        return None
+
+
 def _ensure_gpu(s):
     if s.gpu_ready:
         return
@@ -1202,6 +1437,9 @@ def _ensure_gpu(s):
         for blend, indices in s.target_batches]
     s.prepass_shader = gpu.shader.create_from_info(
         prepass_shader_create_info())
+    s.preview_shader = gpu.shader.create_from_info(
+        preview_shader_create_info())
+    s.copy_shader = gpu.shader.create_from_info(copy_shader_create_info())
 
     # Paint textures: N RGBA16F accumulation targets on ONE framebuffer
     # (MRT). Readback goes through fb.read_color(..., slot=i, 'FLOAT')
@@ -1239,6 +1477,8 @@ def _ensure_gpu(s):
     s.paint_fbs = [gpu.types.GPUFrameBuffer(
         color_slots=tuple(s.paint_texs[i] for i in indices))
         for _blend, indices in s.target_batches]
+    s.single_fbs = [gpu.types.GPUFrameBuffer(color_slots=(tex,))
+                    for tex in s.paint_texs]
     seed_line = "paint_tex_seeded_images=%d/%d" % (seeded_count, n)
     s.probe_lines.append(seed_line)
     _log_line("GPU_PAINT_SPIKE_PROBE %s" % seed_line)
@@ -1255,6 +1495,15 @@ def _ensure_gpu(s):
         for shader in s.dab_shaders]
     s.batch_prepass = batch_for_shader(
         s.prepass_shader, 'TRIS', {"pos": s.coords})
+    s.batch_preview = batch_for_shader(
+        s.preview_shader, 'TRIS', {"pos": s.coords, "uv": s.uvs})
+    s.copy_batch = batch_for_shader(
+        s.copy_shader, 'TRI_FAN', {
+            "pos": [(-1.0, -1.0, 0.0), (1.0, -1.0, 0.0),
+                    (1.0, 1.0, 0.0), (-1.0, 1.0, 0.0)],
+            "uv": [(0.0, 0.0), (1.0, 0.0),
+                   (1.0, 1.0), (0.0, 1.0)]})
+    s.history_backend = _GPUTileBackend(s)
     s.gpu_ready = True
 
     # The research spike's destructive readback characterization is not part
@@ -1702,6 +1951,7 @@ def _flush_dabs(s, region):
     radius = float(s.settings.get("radius", 50.0))
     hardness = float(s.settings.get("hardness", 0.5))
     occlusion = bool(s.settings.get("occlusion", True))
+    stamp = s.settings.get("brush_stamp")
 
     queue = s.dab_queue
     s.dab_queue = []
@@ -1722,6 +1972,22 @@ def _flush_dabs(s, region):
         s.stroke_dirty_full = True   # no projection cache: full read
     s.dirty_ms += time.perf_counter() - t_dirty
 
+    # Capture every touched channel tile once, immediately before its first
+    # modification. Both before/after snapshots stay GPU-resident.
+    if queue and s.history_backend is not None:
+        dirty_rect = (uv_bbox_to_pixel_rect(bb, s.size)
+                      if not s.stroke_dirty_full else None)
+        if dirty_rect is not None or s.stroke_dirty_full:
+            if s.stroke_transaction is None:
+                s.stroke_transaction = s.history.begin_stroke(
+                    s.history_backend, "GPU multi-channel stroke")
+            rect = dirty_rect or (0, 0, s.size, s.size)
+            keys = tuple(s.settings.get("channel_keys", ()))
+            for i in range(s.channels):
+                channel = keys[i] if i < len(keys) else str(i)
+                s.stroke_transaction.touch_rect(
+                    channel, rect, (s.size, s.size))
+
     for batch_index, ((blend, indices), fb, sh, draw_batch) in enumerate(
             zip(s.target_batches, s.paint_fbs, s.dab_shaders,
                 s.batch_dabs)):
@@ -1740,6 +2006,8 @@ def _flush_dabs(s, region):
             sh.uniform_float("brush_radius_px", radius)
             sh.uniform_float("brush_hardness", hardness)
             sh.uniform_float("depth_epsilon", DEPTH_EPSILON)
+            sh.uniform_float("depth_relative_epsilon",
+                             visibility.DEFAULT_POLICY.relative_epsilon)
             sh.uniform_float("use_occlusion", 1.0 if occlusion else 0.0)
             sh.uniform_sampler("scene_depth_tex", s.depth_color_tex)
             for local, target_index in enumerate(indices):
@@ -1751,9 +2019,13 @@ def _flush_dabs(s, region):
                      float(payload.get("strength", 1.0))))
             for (x, y, pressure) in queue:
                 t0 = time.perf_counter()
+                dab_radius, dab_opacity = (
+                    stamp.values_at_pressure(pressure)
+                    if stamp is not None else (radius, pressure))
+                sh.uniform_float("brush_radius_px", dab_radius)
                 sh.uniform_float("brush_center_px", (float(x), float(y)))
                 sh.uniform_float("pressure",
-                                 max(0.0, min(1.0, pressure)))
+                                 max(0.0, min(1.0, dab_opacity)))
                 draw_batch.draw(sh)
                 s.submit_times.append(time.perf_counter() - t0)
     s.dab_count += len(queue)
@@ -1765,18 +2037,15 @@ def _flush_dabs(s, region):
 # ---------------------------------------------------------------------------
 
 
-def _finalize_stroke_gpu(s):
-    import numpy as np
-
-    s.pending_finalize = False
-    size = s.size
-    n = s.channels
+def _stroke_stats(s):
+    """Cheap GPU-submission statistics; never forces GPU completion."""
     stats = {
-        "size": size,
+        "size": s.size,
         "dabs": s.dab_count,
-        "channels": n,
+        "channels": s.channels,
         "prepass_ms": s.prepass_ms,
         "dirty_ms": s.dirty_ms * 1000.0,
+        "deferred": 1,
     }
     if s.stroke_t0 is not None:
         stats["stroke_s"] = time.perf_counter() - s.stroke_t0
@@ -1789,14 +2058,64 @@ def _finalize_stroke_gpu(s):
             and s.last_dab_t > s.first_dab_t and s.dab_count > 1):
         stats["dabs_per_s"] = ((s.dab_count - 1)
                                / (s.last_dab_t - s.first_dab_t))
+    return stats
+
+
+def _finalize_stroke_gpu(s):
+    """Close one stroke without readback, drain, or Blender Image writes."""
+    global _last_stroke_stats
+    s.pending_finalize = False
+    if s.stroke_dirty_full:
+        s.session_dirty_full = True
+    else:
+        s.session_dirty = union_bbox(s.session_dirty, s.stroke_dirty)
+    s.stroke_dirty = None
+    s.stroke_dirty_full = False
+    if s.stroke_transaction is not None:
+        s.stroke_transaction.commit()
+        s.stroke_transaction = None
+    stats = _stroke_stats(s)
+    _last_stroke_stats = stats
+    _log_line("GPU_PAINT_SPIKE_STROKE "
+              + " ".join("%s=%s" % (
+                  k, ("%.4f" % v) if isinstance(v, float) else v)
+                  for k, v in sorted(stats.items())))
+
+
+def _apply_history_action(s):
+    action = s.pending_history_action
+    s.pending_history_action = None
+    if s.history_backend is None:
+        return
+    if action == 'UNDO':
+        record = s.history.undo(s.history_backend)
+    else:
+        record = s.history.redo(s.history_backend)
+    if record is not None:
+        # A later explicit/session-exit flush must persist the restored state.
+        s.session_dirty_full = True
+
+
+def _flush_session_gpu(s):
+    """Read resident textures only at an explicit/session-exit boundary."""
+    import numpy as np
+
+    s.pending_flush = False
+    if s.session_dirty is None and not s.session_dirty_full:
+        return
+    s.flush_in_flight = True
+    size = s.size
+    n = s.channels
+    stats = _stroke_stats(s)
+    stats["deferred"] = 0
 
     # Sub-rect decision: the stroke's accumulated conservative UV bbox,
     # unless tracking was unavailable, the user disabled it, or the
     # rect is no smaller than the full texture.
     use_subrect = bool(s.settings.get("subrect", True))
     rect = None
-    if use_subrect and not s.stroke_dirty_full:
-        rect = uv_bbox_to_pixel_rect(s.stroke_dirty, size)
+    if use_subrect and not s.session_dirty_full:
+        rect = uv_bbox_to_pixel_rect(s.session_dirty, size)
     if rect is not None and rect[2] * rect[3] >= size * size:
         rect = None
     rx, ry, rw, rh = rect if rect is not None else (0, 0, size, size)
@@ -1914,11 +2233,43 @@ def _finalize_stroke_gpu(s):
         for i, (mirror, name)
         in enumerate(zip(s.cpu_mirrors, s.image_names))]
     s.pending_gpu_stats = stats
+    s.session_dirty = None
+    s.session_dirty_full = False
 
 
 # ---------------------------------------------------------------------------
 # Viewport preview + stats overlay
 # ---------------------------------------------------------------------------
+
+
+def _draw_composed_preview(s):
+    """Draw a low-cost PBR approximation from all resident textures."""
+    if (not s.gpu_ready or s.preview_shader is None
+            or s.batch_preview is None or s.view_proj is None
+            or not s.paint_texs):
+        return
+    keys = tuple(s.settings.get("channel_keys", ()))
+    by_key = {key: s.paint_texs[i] for i, key in enumerate(keys)
+              if i < len(s.paint_texs)}
+    fallback = s.paint_texs[0]
+    shader = s.preview_shader
+    shader.bind()
+    shader.uniform_float("model_matrix", s.model)
+    shader.uniform_float("view_proj_matrix", s.view_proj)
+    try:
+        camera_position = s.view.inverted().translation
+    except Exception:
+        camera_position = (0.0, 0.0, 10.0)
+    shader.uniform_float("camera_position", camera_position)
+    shader.uniform_float("preview_opacity", 1.0)
+    for key in GPU_PAINT_CHANNEL_KEYS:
+        shader.uniform_float("has_" + key, 1.0 if key in by_key else 0.0)
+        shader.uniform_sampler(key + "_tex", by_key.get(key, fallback))
+    gpu.state.blend_set('ALPHA')
+    gpu.state.depth_test_set('LESS_EQUAL')
+    gpu.state.depth_mask_set(False)
+    gpu.state.face_culling_set('BACK')
+    s.batch_preview.draw(shader)
 
 
 def _draw_brush_reticle(s):
@@ -1945,7 +2296,9 @@ def _draw_brush_reticle(s):
 
 
 def _overlay_text_lines(s):
-    lines = ["Impasto GPU paint — LMB paints  (RMB / Esc to stop)"]
+    dirty = " | unsaved GPU changes" if has_unflushed_changes() else ""
+    lines = ["Impasto GPU paint — LMB paints  (RMB / Esc flushes + stops)"
+             + dirty]
     if s.error is not None:
         lines.append("ERROR (see console): %s"
                      % s.error.strip().splitlines()[-1][:80])
@@ -1964,12 +2317,16 @@ def _overlay_text_lines(s):
             "(max %.3f)" % (st.get("dabs", 0), st.get("dabs_per_s", 0.0),
                             st.get("submit_avg_ms", 0.0),
                             st.get("submit_max_ms", 0.0)))
-        lines.append(
-            "ch=%d rect=%s | prepass %.2f ms | drain %.2f ms | "
-            "readback %.2f ms | pixels write %.2f ms"
-            % (st.get("channels", 1), st.get("readback_rect", "full"),
-               st.get("prepass_ms", 0.0), st.get("drain_ms", 0.0),
-               st.get("fb_read_ms", 0.0), st.get("pixels_write_ms", 0.0)))
+        if st.get("deferred", 0):
+            lines.append("ch=%d | prepass %.2f ms | pen-up sync: deferred"
+                         % (st.get("channels", 1),
+                            st.get("prepass_ms", 0.0)))
+        else:
+            lines.append(
+                "flush: ch=%d rect=%s | readback %.2f ms | pixels %.2f ms"
+                % (st.get("channels", 1), st.get("readback_rect", "full"),
+                   st.get("fb_read_ms", 0.0),
+                   st.get("pixels_write_ms", 0.0)))
     return lines
 
 

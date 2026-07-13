@@ -11,6 +11,7 @@ import bpy
 from bpy.props import EnumProperty, StringProperty
 
 from . import compat
+from . import brush_adapter
 from . import engine
 from . import gpu_engine
 from . import model
@@ -326,10 +327,10 @@ class IMPASTO_OT_layer_add(bpy.types.Operator):
     canvas_size: EnumProperty(
         name="Canvas Size",
         items=(('1024', "1024 (1K)", ""),
-               ('2048', "2048 (2K)", "Default; four-channel GPU strokes "
-                "sync within the pen-lift budget"),
-               ('4096', "4096 (4K)", "Four-channel GPU pen-lift sync "
-                "exceeds 400 ms (Image.pixels writes; see README)")),
+               ('2048', "2048 (2K)", "Default; interactive strokes remain "
+                "GPU-resident and explicit flush is comparatively quick"),
+               ('4096', "4096 (4K)", "Four-channel GPU flush/exit sync "
+                "can exceed 400 ms (Image.pixels writes; see README)")),
         default='2048',
         description="Resolution of every canvas this layer creates "
                     "(later channel canvases inherit it)")
@@ -674,6 +675,22 @@ def _gpu_brush(layer):
             "height_direction": layer.paint_height_direction}
 
 
+def _gpu_stamp(context):
+    settings = context.scene.tool_settings.image_paint
+    brush = settings.brush
+    if brush is None:
+        return None
+    tool_id = ""
+    try:
+        tool = context.workspace.tools.from_space_view3d_mode(
+            'PAINT_TEXTURE', create=False)
+        tool_id = tool.idname if tool is not None else ""
+    except (AttributeError, TypeError):
+        pass
+    return brush_adapter.brush_to_gpu_stamp(
+        brush, paint.unified_paint_settings(context), tool_id)
+
+
 def native_replay_targets(layer):
     """Ordered native-replay targets for one logical PBR stroke.
 
@@ -891,14 +908,14 @@ class IMPASTO_OT_native_multichannel_paint(bpy.types.Operator):
 
 class IMPASTO_OT_gpu_paint(bpy.types.Operator):
     """Paint every bound channel of the active Impasto paint layer with
-    one GPU stroke (LMB paints, RMB or Esc stops; canvases sync on
-    pen-lift). Strokes are not undoable yet — see the README"""
+    one GPU-resident stroke (LMB paints, RMB or Esc flushes and stops).
+    Ctrl-Z / Ctrl-Shift-Z apply atomic GPU tile undo / redo."""
     bl_idname = "impasto.gpu_paint"
     bl_label = "Impasto: GPU Paint All Channels"
     bl_options = {'REGISTER'}
 
     # The modal loop never touches gpu: it enqueues dabs / tags redraws
-    # and writes finished readbacks into the Image datablocks. All GPU
+    # and writes explicitly flushed readbacks into the Image datablocks. All GPU
     # work happens in gpu_engine's POST_VIEW draw callback.
 
     @classmethod
@@ -958,12 +975,16 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         keys = [key for key, _img in targets]
         images = [img for _key, img in targets]
         payloads = gpu_engine.stroke_payloads(keys, _gpu_brush(layer))
+        stamp = _gpu_stamp(context)
         settings = {
-            "radius": layer.brush_radius,
+            "radius": (stamp.radius_px if stamp is not None
+                       and stamp.supported else layer.brush_radius),
             "hardness": layer.brush_hardness,
             "occlusion": True,
             "subrect": True,
             "channel_keys": tuple(keys),
+            "brush_stamp": (stamp if stamp is not None
+                            and stamp.supported else None),
         }
         if not gpu_engine.start_session(obj, images, region,
                                         payloads=payloads,
@@ -985,8 +1006,12 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         context.window_manager.modal_handler_add(self)
         region.tag_redraw()
         self.report({'INFO'},
-                    "GPU painting %s — LMB paints, RMB/Esc stops"
+                    "GPU painting %s — LMB paints, RMB/Esc flushes and stops"
                     % ", ".join(model.CHANNEL_MAP[k].label for k in keys))
+        if stamp is not None and not stamp.supported:
+            self.report({'WARNING'},
+                        "GPU brush uses the basic Impasto stamp: %s"
+                        % stamp.unsupported_reason)
         return {'RUNNING_MODAL'}
 
     # -- helpers -----------------------------------------------------------
@@ -1000,7 +1025,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         return (0 <= rx < self._region.width
                 and 0 <= ry < self._region.height)
 
-    def _refresh_stroke_settings(self):
+    def _refresh_stroke_settings(self, context):
         tree = bpy.data.node_groups.get(self._tree_name)
         layer = (tree.impasto.layers.get(self._layer_uid)
                  if tree is not None else None)
@@ -1008,13 +1033,17 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             raise paint.PaintTargetError("The active paint layer disappeared")
         payloads = gpu_engine.stroke_payloads(
             self._channel_keys, _gpu_brush(layer))
-        self._radius = layer.brush_radius
+        stamp = _gpu_stamp(context)
+        supported_stamp = (stamp if stamp is not None
+                           and stamp.supported else None)
+        self._radius = (supported_stamp.radius_px if supported_stamp
+                        else layer.brush_radius)
         gpu_engine.update_stroke_settings(
-            payloads, radius=layer.brush_radius,
-            hardness=layer.brush_hardness)
+            payloads, radius=self._radius,
+            hardness=layer.brush_hardness, stamp=supported_stamp)
 
     def _apply_pending_sync(self):
-        """Write a finished stroke's readback into the channel Image
+        """Write an explicitly flushed readback into the channel Image
         datablocks — always here, never in a draw callback."""
         pending = gpu_engine.take_pending_pixels()
         if pending is None:
@@ -1074,7 +1103,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         if etype == 'LEFTMOUSE':
             if event.value == 'PRESS' and self._inside_region(event):
                 try:
-                    self._refresh_stroke_settings()
+                    self._refresh_stroke_settings(context)
                 except (ValueError, paint.PaintTargetError) as exc:
                     self.report({'ERROR'}, str(exc))
                     return self._finish(context)
@@ -1098,8 +1127,18 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         elif etype in {'RIGHTMOUSE', 'ESC'} and event.value == 'PRESS':
             if gpu_engine.stroke_active():
                 gpu_engine.end_stroke()
+            gpu_engine.request_flush()
             self._stopping = True
             self._region.tag_redraw()
+            return {'RUNNING_MODAL'}
+        elif etype == 'Z' and event.value == 'PRESS' and event.ctrl:
+            action = 'REDO' if event.shift else 'UNDO'
+            if gpu_engine.request_history_action(action):
+                self._region.tag_redraw()
+            return {'RUNNING_MODAL'}
+        elif etype == 'Y' and event.value == 'PRESS' and event.ctrl:
+            if gpu_engine.request_history_action('REDO'):
+                self._region.tag_redraw()
             return {'RUNNING_MODAL'}
         elif etype == 'TIMER':
             return {'RUNNING_MODAL'}
@@ -1109,10 +1148,34 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         return {'PASS_THROUGH'}
 
     def cancel(self, context):
+        # Cancellation is an emergency lifecycle path (window loss/reload),
+        # where no owning viewport draw is guaranteed. Normal RMB/Esc exit
+        # requests and completes a flush before resources are released.
         gpu_engine.stop_session()
         if getattr(self, "_timer", None) is not None:
             context.window_manager.event_timer_remove(self._timer)
             self._timer = None
+
+
+class IMPASTO_OT_gpu_flush(bpy.types.Operator):
+    """Synchronize the active GPU-resident canvases to Blender Images"""
+    bl_idname = "impasto.gpu_flush"
+    bl_label = "Impasto: Flush GPU Paint to Images"
+    bl_options = {'REGISTER'}
+
+    @classmethod
+    def poll(cls, context):
+        return (gpu_engine.session_active()
+                and not gpu_engine.stroke_active())
+
+    def execute(self, context):
+        if not gpu_engine.request_flush():
+            return {'CANCELLED'}
+        for area in context.screen.areas:
+            if area.type in {'VIEW_3D', 'IMAGE_EDITOR'}:
+                area.tag_redraw()
+        self.report({'INFO'}, "GPU paint flush queued")
+        return {'FINISHED'}
 
 
 _classes = (
@@ -1129,6 +1192,7 @@ _classes = (
     IMPASTO_OT_detail_paint,
     IMPASTO_OT_native_multichannel_paint,
     IMPASTO_OT_gpu_paint,
+    IMPASTO_OT_gpu_flush,
 )
 
 

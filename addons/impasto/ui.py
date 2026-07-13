@@ -216,8 +216,23 @@ class IMPASTO_PT_main(bpy.types.Panel):
                       (len(gpu_keys), "s" if len(gpu_keys) != 1 else "")),
                 icon='BRUSH_DATA')
             if gpu_engine.session_active():
-                box.label(text="GPU painting… RMB/Esc stops",
+                box.label(text="GPU painting… live GPU preview",
                           icon='BRUSH_DATA')
+                undo_count, redo_count = gpu_engine.history_counts()
+                box.label(text="GPU Undo %d / Redo %d (Ctrl-Z / Ctrl-Shift-Z)"
+                          % (undo_count, redo_count), icon='LOOP_BACK')
+                row = box.row()
+                row.enabled = not gpu_engine.stroke_active()
+                row.operator(
+                    ops.IMPASTO_OT_gpu_flush.bl_idname,
+                    text="Flush GPU Paint to Images",
+                    icon='FILE_REFRESH')
+                box.label(text="RMB/Esc flushes and stops",
+                          icon='INFO')
+            else:
+                box.label(text="Draw brushes reuse Blender size, spacing, "
+                               "strength and pressure",
+                          icon='INFO')
             err = gpu_engine.last_error()
             if err:
                 box.label(text="GPU paint failed — see console",

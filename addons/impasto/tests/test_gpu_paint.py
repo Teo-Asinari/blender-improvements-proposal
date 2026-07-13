@@ -65,6 +65,16 @@ try:
     info = gpu_engine.dab_shader_create_info(4)
     check("create-info population works headless (pure bookkeeping)",
           info is not None)
+    preview_info = gpu_engine.preview_shader_create_info()
+    check("composed preview create-info covers every PBR paint channel",
+          preview_info is not None
+          and all((key + "_tex") in gpu_engine.PREVIEW_FRAG_SRC
+                  for key in gpu_engine.GPU_PAINT_CHANNEL_KEYS))
+    check("live preview is composed rather than raw Base Color",
+          "metallic" in gpu_engine.PREVIEW_FRAG_SRC
+          and "roughness" in gpu_engine.PREVIEW_FRAG_SRC
+          and "normal_sample" in gpu_engine.PREVIEW_FRAG_SRC
+          and "height" in gpu_engine.PREVIEW_FRAG_SRC)
 
     # ---- payload planning ---------------------------------------------
     brush = {"color": (0.5, 0.25, 1.0), "roughness": 0.7,
@@ -90,7 +100,7 @@ try:
           and all(by_key[k]["blend"] == "MIX" for k in keys
                   if k != "height"))
     check("GPU occlusion compares linear view-space depth",
-          "view_depth > front + tolerance" in gpu_engine._DAB_FRAG_PRELUDE
+          "impasto_visible_surface" in gpu_engine._DAB_FRAG_PRELUDE
           and "viewDepth" in gpu_engine.PREPASS_FRAG_SRC
           and "clipPos.z / clipPos.w" not in
           gpu_engine.PREPASS_FRAG_SRC)
@@ -208,8 +218,10 @@ try:
     gpu_engine.move_stroke(30.0, 10.0, 1.0, 40.0)
     check("stroke state tracks headlessly", gpu_engine.stroke_active())
     gpu_engine.end_stroke()
-    check("no pixels pend without a draw callback",
+    check("pen-up does not queue blocking Image synchronization",
           gpu_engine.take_pending_pixels() is None)
+    check("explicit GPU flush can be queued independently of pen-up",
+          gpu_engine.request_flush() and gpu_engine.busy())
     check("no error latched headlessly",
           gpu_engine.last_error() is None)
     gpu_engine.stop_session()
@@ -218,6 +230,8 @@ try:
     # ---- operator surface ----------------------------------------------
     check("gpu paint operator registered",
           getattr(bpy.types, "IMPASTO_OT_gpu_paint", None) is not None)
+    check("explicit GPU flush operator registered",
+          getattr(bpy.types, "IMPASTO_OT_gpu_flush", None) is not None)
     check("poll requires an Impasto paint layer",
           not bpy.ops.impasto.gpu_paint.poll())
     check("stack init", bpy.ops.impasto.stack_init(
