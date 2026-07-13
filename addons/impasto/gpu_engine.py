@@ -766,7 +766,6 @@ class _Session:
         # GPU resources — ALL lazy, created at first draw.
         self.dab_shaders = None
         self.prepass_shader = None
-        self.preview_shader = None
         self.paint_texs = None         # list of N RGBA16F GPUTextures
         self.paint_fbs = None
         self.depth_color_tex = None    # R32F: prepass NDC depth
@@ -775,7 +774,6 @@ class _Session:
         self.depth_fb_size = None      # (w, h) the depth FB was built at
         self.batch_dabs = None         # one pos+uv batch per shader
         self.batch_prepass = None      # pos only
-        self.batch_preview = None      # pos + uv
         self.gpu_ready = False
         self.probe_lines = None
 
@@ -811,6 +809,10 @@ class _Session:
         self.last_px = None            # last dab position (x, y)
         self.leftover = 0.0
         self.pending_finalize = False
+        # Screen-space cursor is independent of paint preview.  Keeping the
+        # composed material visible avoids the old raw-channel overlay that
+        # made PBR rendering appear to change while the session was active.
+        self.cursor = None
 
         # Sync-back: the draw callback stashes the readback here; the
         # modal operator writes it into the Image datablock.
@@ -972,6 +974,18 @@ def end_stroke():
     s.pending_finalize = True   # draw callback runs the GPU readback
 
 
+def set_cursor(x, y):
+    """Update the owning viewport's radius-scaled GPU brush reticle."""
+    s = _session
+    if s is not None:
+        s.cursor = (float(x), float(y))
+
+
+def cursor_position():
+    """Current session reticle center, primarily a headless-test seam."""
+    return _session.cursor if _session is not None else None
+
+
 def take_pending_pixels():
     """List of (numpy array, image_name) pairs — one per channel —
     awaiting the Image writes, or None. Called from the modal operator
@@ -1103,8 +1117,9 @@ def _draw_view():
                     _flush_dabs(s, region)
                 if s.pending_finalize and not s.dab_queue:
                     _finalize_stroke_gpu(s)
-            if s.gpu_ready:
-                _draw_preview(s)
+            # Do not draw a raw channel over the mesh.  Material Preview must
+            # remain the authoritative composed PBR view; completed strokes
+            # reach it through Image datablock synchronization at pen-up.
     except Exception:
         s.latch("draw failed")
 
@@ -1117,6 +1132,7 @@ def _draw_pixel():
     if region is None or region.as_pointer() != s.region_ptr:
         return
     try:
+        _draw_brush_reticle(s)
         _draw_stats_overlay(s)
     except Exception:
         # Text overlay must never take the viewport down; latch quietly.
@@ -1155,8 +1171,6 @@ def _ensure_gpu(s):
         for blend, indices in s.target_batches]
     s.prepass_shader = gpu.shader.create_from_info(
         prepass_shader_create_info())
-    s.preview_shader = gpu.shader.create_from_info(
-        preview_shader_create_info())
 
     # Paint textures: N RGBA16F accumulation targets on ONE framebuffer
     # (MRT). Readback goes through fb.read_color(..., slot=i, 'FLOAT')
@@ -1210,8 +1224,6 @@ def _ensure_gpu(s):
         for shader in s.dab_shaders]
     s.batch_prepass = batch_for_shader(
         s.prepass_shader, 'TRIS', {"pos": s.coords})
-    s.batch_preview = batch_for_shader(
-        s.preview_shader, 'TRIS', {"pos": s.coords, "uv": s.uvs})
     s.gpu_ready = True
 
     # The research spike's destructive readback characterization is not part
@@ -1875,28 +1887,27 @@ def _finalize_stroke_gpu(s):
 # ---------------------------------------------------------------------------
 
 
-def _draw_preview(s):
-    obj = bpy.data.objects.get(s.obj_name)
-    if obj is None:
+def _draw_brush_reticle(s):
+    """Draw a screen-space circle using the exact GPU dab radius."""
+    if s.cursor is None:
         return
-    # Preview shows ONE selected channel (clamped to what exists);
-    # channel 0 (color) by default.
-    idx = int(s.settings.get("preview_index", 0))
-    idx = max(0, min(idx, s.channels - 1))
-    gpu.state.blend_set('ALPHA')
-    gpu.state.depth_test_set('LESS_EQUAL')
-    gpu.state.depth_mask_set(False)
-    gpu.state.face_culling_set('BACK')
-    with gpu.matrix.push_pop():
-        gpu.matrix.multiply_matrix(obj.matrix_world)
-        sh = s.preview_shader
-        sh.bind()
-        mvp = (gpu.matrix.get_projection_matrix()
-               @ gpu.matrix.get_model_view_matrix())
-        sh.uniform_float("ModelViewProjectionMatrix", mvp)
-        sh.uniform_float("preview_opacity", 1.0)
-        sh.uniform_sampler("paint_tex", s.paint_texs[idx])
-        s.batch_preview.draw(sh)
+    from gpu_extras.batch import batch_for_shader
+    x, y = s.cursor
+    radius = max(1.0, float(s.settings.get("radius", 50.0)))
+    segments = max(32, min(128, int(radius * 0.8)))
+    points = [(x + math.cos(i * math.tau / segments) * radius,
+               y + math.sin(i * math.tau / segments) * radius)
+              for i in range(segments)]
+    shader = gpu.shader.from_builtin('UNIFORM_COLOR')
+    batch = batch_for_shader(shader, 'LINE_LOOP', {"pos": points})
+    prior_blend = gpu.state.blend_get()
+    try:
+        gpu.state.blend_set('ALPHA')
+        shader.bind()
+        shader.uniform_float("color", (1.0, 1.0, 1.0, 0.9))
+        batch.draw(shader)
+    finally:
+        gpu.state.blend_set(prior_blend)
 
 
 def _overlay_text_lines(s):

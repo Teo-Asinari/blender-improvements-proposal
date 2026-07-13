@@ -182,6 +182,9 @@ try:
         settings={"radius": 40.0, "hardness": 0.5})
     check("headless session starts as a logical no-op", started)
     check("session reports active", gpu_engine.session_active())
+    gpu_engine.set_cursor(21, 37)
+    check("GPU reticle tracks viewport mouse coordinates",
+          gpu_engine.cursor_position() == (21.0, 37.0))
     gpu_engine.begin_stroke(10.0, 10.0, 1.0)
     gpu_engine.move_stroke(30.0, 10.0, 1.0, 40.0)
     check("stroke state tracks headlessly", gpu_engine.stroke_active())

@@ -128,6 +128,57 @@ try:
     check("gpu targets carry the per-binding canvases",
           all(img is images[key] for key, img in targets))
 
+    # Native multi-channel uses the same ordered canvases but substitutes the
+    # layer's PBR stroke values into Blender's active brush for each replay.
+    check("native replay targets match GPU target ordering",
+          ops.native_replay_targets(layer) == targets)
+    layer.paint_color = (0.1, 0.2, 0.3)
+    layer.paint_metallic = 0.8
+    layer.paint_roughness = 0.25
+    layer.paint_height_strength = 0.07
+    layer.paint_height_direction = 'LOWER'
+    base_style = ops.native_channel_style(layer, "base_color")
+    metallic_style = ops.native_channel_style(layer, "metallic")
+    roughness_style = ops.native_channel_style(layer, "roughness")
+    height_style = ops.native_channel_style(layer, "height")
+    check("native base-color style uses the PBR stroke color",
+          base_style[1] == "MIX"
+          and all(abs(a - b) < 1e-6 for a, b in
+                  zip(base_style[0], (0.1, 0.2, 0.3))))
+    check("native scalar styles are grayscale brush colors",
+          metallic_style[1] == roughness_style[1] == "MIX"
+          and all(abs(v - 0.8) < 1e-6 for v in metallic_style[0])
+          and all(abs(v - 0.25) < 1e-6 for v in roughness_style[0]))
+    check("native height style preserves signed accumulation",
+          height_style[1] == "SUB"
+          and all(abs(v - 0.07) < 1e-6 for v in height_style[0]))
+
+    point = paint.native_stroke_point(
+        12, 34, 0.6, 48, 0.25, is_start=True, x_tilt=0.1, y_tilt=-0.2)
+    check("native stroke capture preserves Blender replay fields",
+          point["mouse"] == (12.0, 34.0)
+          and point["mouse_event"] == (12.0, 34.0)
+          and point["pressure"] == 0.6 and point["size"] == 48.0
+          and point["time"] == 0.25 and point["is_start"]
+          and point["x_tilt"] == 0.1 and point["y_tilt"] == -0.2)
+
+    # Canvas/mode restoration is testable headlessly; when a Brush asset is
+    # active the same helper also restores color, secondary color and blend.
+    settings = bpy.context.scene.tool_settings.image_paint
+    settings.canvas = images["base_color"]
+    settings.mode = 'IMAGE'
+    native_state = paint.capture_native_state(bpy.context)
+    settings.canvas = images["metallic"]
+    settings.mode = 'MATERIAL'
+    paint.restore_native_state(bpy.context, native_state)
+    check("native replay restores canvas and paint mode",
+          settings.canvas is images["base_color"]
+          and settings.mode == 'IMAGE')
+    check("native multi-channel operator registered and pollable",
+          getattr(bpy.types, "IMPASTO_OT_native_multichannel_paint", None)
+          is not None
+          and bpy.ops.impasto.native_multichannel_paint.poll())
+
     # Legacy migration (schema 1 -> 2): a single-canvas layer's SHARED
     # bindings inherit the layer canvas; no images are created.
     legacy_img = bpy.data.images.new("Impasto Legacy Canvas", 8, 8,

@@ -130,14 +130,20 @@ class IMPASTO_PT_main(bpy.types.Panel):
         bound = [b.name for b in layer.bindings
                  if b.enabled and b.mode == 'SHARED'
                  and b.name in model.CHANNEL_MAP]
+        replay_keys = [key for key, _image in ops.gpu_paint_targets(layer)]
         image = bpy.data.images.get(layer.image_name)
         row = box.row(align=True)
         row.label(text=image.name if image else "Missing image",
                   icon='IMAGE_DATA' if image else 'ERROR')
         painting = (context.object is not None
                     and context.object.mode == 'TEXTURE_PAINT')
-        box.label(text=("Texture Paint active" if painting
-                        else "Object Mode — press Start Painting"),
+        paint_status = ("Texture Paint active"
+                        if painting else "Object Mode")
+        if len(replay_keys) > 1:
+            paint_status += " — use multi-channel control below"
+        elif not painting:
+            paint_status += " — press Start Painting"
+        box.label(text=paint_status,
                   icon='CHECKMARK' if painting else 'INFO')
         if 'normal' in bound:
             box.label(text="RGB normal: absolute direction", icon='INFO')
@@ -151,7 +157,8 @@ class IMPASTO_PT_main(bpy.types.Panel):
             op = row.operator(ops.IMPASTO_OT_detail_paint.bl_idname,
                               text="Lower", icon='TRIA_DOWN')
             op.direction = 'LOWER'
-        if any(k != 'height' for k in bound) or not bound:
+        if len(replay_keys) <= 1 and (any(k != 'height' for k in bound)
+                                     or not bound):
             row = box.row()
             row.scale_y = 1.25
             op = row.operator(ops.IMPASTO_OT_paint_activate.bl_idname,
@@ -159,10 +166,10 @@ class IMPASTO_PT_main(bpy.types.Panel):
                               icon='TPAINT_HLT')
             op.channel_key = ""
 
-        gpu_keys = [key for key, _image in ops.gpu_paint_targets(layer)]
+        gpu_keys = replay_keys
         if gpu_keys:
             col = box.column(align=True)
-            col.label(text="Multi-Channel Brush", icon='BRUSH_DATA')
+            col.label(text="Multi-Channel Painting", icon='BRUSH_DATA')
             col.label(text="Targets (%d): %s" % (
                 len(gpu_keys), ", ".join(
                     model.CHANNEL_MAP[k].label for k in gpu_keys)))
@@ -183,10 +190,21 @@ class IMPASTO_PT_main(bpy.types.Panel):
                 row = col.row(align=True)
                 row.prop(layer, "paint_height_direction", expand=True)
                 col.prop(layer, "paint_height_strength")
+            row = box.row()
+            row.scale_y = 1.25
+            row.enabled = not gpu_engine.session_active()
+            row.operator(
+                ops.IMPASTO_OT_native_multichannel_paint.bl_idname,
+                text=("Blender Brush → %d Channels" % len(gpu_keys)),
+                icon='TPAINT_HLT')
+            box.label(text="Uses the active Blender brush asset; applies at pen-up",
+                      icon='INFO')
+
+            box.separator()
+            box.label(text="Experimental GPU Brush", icon='BRUSH_DATA')
             row = col.row(align=True)
             row.prop(layer, "brush_radius")
             row.prop(layer, "brush_hardness", slider=True)
-            col.prop(layer, "preview_channel")
             row = box.row()
             row.scale_y = 1.25
             row.enabled = not gpu_engine.session_active()
@@ -265,6 +283,7 @@ class IMPASTO_MT_main(bpy.types.Menu):
         op.layer_type = 'FILL'
         layout.operator(ops.IMPASTO_OT_stack_rebuild.bl_idname)
         layout.operator(ops.IMPASTO_OT_paint_activate.bl_idname)
+        layout.operator(ops.IMPASTO_OT_native_multichannel_paint.bl_idname)
         layout.operator(ops.IMPASTO_OT_gpu_paint.bl_idname)
         layout.operator(ops.IMPASTO_OT_stack_remove.bl_idname)
 

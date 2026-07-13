@@ -144,3 +144,64 @@ def activate_paint_target(context, layer, channel_key=""):
         source.select = True
         layer_tree.nodes.active = source
     return repaired
+
+
+def native_stroke_point(x, y, pressure, size, elapsed, is_start=False,
+                        x_tilt=0.0, y_tilt=0.0):
+    """Return one ``paint.image_paint`` stroke element.
+
+    Kept as a small pure seam so the replay contract is testable without a
+    live viewport.  Blender consumes region-relative coordinates here.
+    """
+    mouse = (float(x), float(y))
+    return {
+        "name": "",
+        "location": (0.0, 0.0, 0.0),
+        "mouse": mouse,
+        "mouse_event": mouse,
+        "pressure": max(0.0, float(pressure)),
+        "size": max(1.0, float(size)),
+        "x_tilt": float(x_tilt),
+        "y_tilt": float(y_tilt),
+        "time": max(0.0, float(elapsed)),
+        "is_start": bool(is_start),
+    }
+
+
+def capture_native_state(context):
+    """Snapshot the native state Impasto temporarily changes for replay.
+
+    The brush pointer/asset and active workspace tool are deliberately not
+    changed at all.  Keeping their identity in this snapshot makes that
+    invariant explicit and gives tests a stable restoration contract.
+    """
+    settings = context.scene.tool_settings.image_paint
+    brush = settings.brush
+    state = {
+        "canvas": settings.canvas,
+        "paint_mode": settings.mode,
+        "brush": brush,
+        "brush_asset": getattr(settings, "brush_asset_reference", None),
+    }
+    if brush is not None:
+        state.update({
+            "color": tuple(brush.color),
+            "secondary_color": tuple(brush.secondary_color),
+            "blend": brush.blend,
+        })
+    return state
+
+
+def restore_native_state(context, state):
+    """Restore a state from :func:`capture_native_state`."""
+    settings = context.scene.tool_settings.image_paint
+    settings.mode = state["paint_mode"]
+    settings.canvas = state["canvas"]
+    brush = state.get("brush")
+    # Never restore settings.brush: it is a read-only asset-driven pointer in
+    # Blender 5.1.  We never replace it, and only restore properties when the
+    # exact same brush is still active.
+    if brush is not None and settings.brush is brush:
+        brush.color = state["color"]
+        brush.secondary_color = state["secondary_color"]
+        brush.blend = state["blend"]

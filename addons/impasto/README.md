@@ -9,8 +9,9 @@ stack without working directly in the Shader Editor.
 > **Development status:** Phase 1 stack foundation, the Phase 3
 > native-paint workflow, and the first multi-channel painting milestone:
 > one logical Paint layer with a separate canvas per channel, painted
-> either natively (one channel at a time) or with the experimental GPU
-> brush (all channels in one stroke). Masks, channel isolation, and
+> either natively (one channel at a time), by replaying one active Blender
+> brush stroke across every channel, or with the experimental GPU brush.
+> Masks, channel isolation, and
 > bake-down/export remain later work.
 
 ## Phase 1 scope
@@ -97,6 +98,21 @@ canvas the native paint target, and **Start Painting** picks the
 layer's first painted channel. One native stroke lands in one channel —
 that is the deliberate single-channel editing path.
 
+**Blender Brush → N Channels** is the native multi-channel path. Impasto
+records region position, pressure, size, tilt, and timing, then invokes
+Blender's own `paint.image_paint` stroke once for each enabled channel at
+pen-up. The active Brush asset, its texture/falloff/spacing behavior, and the
+workspace tool are not replaced. Impasto temporarily substitutes Base Color,
+Metallic, Roughness, Normal, or signed Height values, then restores the user's
+canvas, brush colors, blend mode, and image-paint mode even on failure.
+
+Draw-style Blender brushes are the supported baseline. Stroke-driven
+Soften/Smear brushes use the same replay mechanism, but Clone, Fill, gradients,
+and other tools with extra source/state requirements still need interactive
+qualification. A replay appears after pen-up rather than while the pointer is
+moving, because Blender's Python paint API accepts a completed stroke and one
+canvas per invocation.
+
 Files saved by earlier Impasto versions stored a single canvas on the
 layer; they keep working unchanged, and opening them migrates the
 stored state to per-channel form automatically (schema 1 to 2, no
@@ -112,6 +128,10 @@ Height is a separate additive pass driven by the same stroke, so
 **Raise/Lower** accumulate relief around the neutral mid-gray canvas
 exactly like the native Height brush. Left mouse paints, right mouse or
 Esc stops, and the channel canvases sync back on every pen lift.
+The viewport keeps the composed PBR material visible throughout the session;
+the former raw single-channel overlay has been removed. A screen-space reticle
+uses the same Radius value as the GPU dabs, and completed image writes are
+tagged for material redraw immediately at pen-up.
 The panel lists the exact target channels and includes their count in the
 button label. Multi-channel painting operates on bindings of the **selected
 Paint layer**; use the `+` channel rows on that same layer to add simultaneous
@@ -191,10 +211,14 @@ real viewport brush stroke. Before packaging a release, verify interactively:
 - add Roughness and Height to a Base Color Paint layer, start **GPU Paint
   All Channels**, and confirm one stroke changes color, roughness, and
   relief together in Material Preview after pen lift;
+- use **Blender Brush → 3 Channels** with a textured/falloff Brush asset,
+  confirm all three images receive the same footprint with their respective
+  PBR values, and confirm the original canvas, brush color, and blend return;
 - confirm Raise strokes accumulate upward relief and Lower strokes recess
   it, and that repeated strokes deepen the effect;
 - paint the front of a sphere with the GPU brush and confirm the back
-  stays clean (occlusion), then stop with RMB/Esc and confirm the
+  stays clean (occlusion), confirm the radius reticle follows the pointer and
+  the composed material remains visible, then stop with RMB/Esc and confirm the
   Image editor shows each channel's synced canvas;
 - confirm native per-channel brush buttons still edit exactly one
   canvas each after a GPU session ends.

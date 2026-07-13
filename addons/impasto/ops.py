@@ -674,6 +674,214 @@ def _gpu_brush(layer):
             "height_direction": layer.paint_height_direction}
 
 
+def native_replay_targets(layer):
+    """Ordered native-replay targets for one logical PBR stroke.
+
+    This deliberately shares the same registry/canvas eligibility as the GPU
+    path, while remaining a separate execution path.
+    """
+    return gpu_paint_targets(layer)
+
+
+def native_channel_style(layer, channel_key):
+    """Return ``(brush_color, blend)`` for a replay target (pure seam)."""
+    if channel_key == 'base_color':
+        return tuple(layer.paint_color), 'MIX'
+    if channel_key == 'roughness':
+        value = float(layer.paint_roughness)
+        return (value, value, value), 'MIX'
+    if channel_key == 'metallic':
+        value = float(layer.paint_metallic)
+        return (value, value, value), 'MIX'
+    if channel_key == 'normal':
+        return tuple(layer.paint_normal), 'MIX'
+    if channel_key == 'height':
+        blend = ('ADD' if layer.paint_height_direction == 'RAISE'
+                 else 'SUB')
+        return (float(layer.paint_height_strength),) * 3, blend
+    raise ValueError("Native replay does not support channel %r" % channel_key)
+
+
+def replay_native_stroke(context, layer, stroke, area=None, region=None):
+    """Replay one captured Blender stroke into every enabled PBR canvas.
+
+    Blender 5.1 exposes ``paint.image_paint(stroke=...)`` but only one canvas
+    per invocation.  We therefore keep the user's active Brush asset and its
+    stroke mechanics, invoke it once per image, and restore all temporary
+    canvas/color/blend changes even if one replay fails.
+    """
+    targets = native_replay_targets(layer)
+    if not targets:
+        raise paint.PaintTargetError(
+            "The active layer has no native-replay channel canvas")
+    settings = context.scene.tool_settings.image_paint
+    state = paint.capture_native_state(context)
+    results = []
+    try:
+        brush = settings.brush
+        if brush is None:
+            raise paint.PaintTargetError(
+                "Select a Blender Texture Paint brush asset first")
+        for channel_key, image in targets:
+            paint.activate_paint_target(context, layer, channel_key)
+            color, blend = native_channel_style(layer, channel_key)
+            brush.color = color
+            brush.blend = blend
+            if area is not None and region is not None:
+                with context.temp_override(area=area, region=region,
+                                           space_data=area.spaces.active):
+                    result = bpy.ops.paint.image_paint(
+                        stroke=stroke, mode='NORMAL')
+            else:
+                result = bpy.ops.paint.image_paint(stroke=stroke,
+                                                   mode='NORMAL')
+            if 'FINISHED' not in result:
+                raise paint.PaintTargetError(
+                    "Blender declined the %s stroke replay (%s)"
+                    % (model.CHANNEL_MAP[channel_key].label, result))
+            image.update()
+            results.append(channel_key)
+    finally:
+        paint.restore_native_state(context, state)
+    return tuple(results)
+
+
+class IMPASTO_OT_native_multichannel_paint(bpy.types.Operator):
+    """Capture a stroke and replay the active Blender brush asset into every
+    enabled image channel of the active Impasto paint layer"""
+    bl_idname = "impasto.native_multichannel_paint"
+    bl_label = "Impasto: Blender Brush — All Channels"
+    bl_options = {'REGISTER', 'UNDO', 'UNDO_GROUPED', 'BLOCKING'}
+
+    @classmethod
+    def poll(cls, context):
+        if gpu_engine.session_active():
+            return False
+        _, tree = _context_stack(context)
+        layer = tree.impasto.active_layer() if tree else None
+        return (context.object is not None
+                and context.object.type == 'MESH'
+                and layer is not None and layer.layer_type == 'PAINT'
+                and bool(native_replay_targets(layer)))
+
+    def invoke(self, context, event):
+        if context.area is None or context.area.type != 'VIEW_3D':
+            self.report({'ERROR'}, "Run from a 3D Viewport")
+            return {'CANCELLED'}
+        region = next((r for r in context.area.regions
+                       if r.type == 'WINDOW'), None)
+        if region is None:
+            self.report({'ERROR'}, "No drawable viewport region found")
+            return {'CANCELLED'}
+
+        _, tree = _context_stack(context)
+        self._layer_uid = tree.impasto.active_layer_uid
+        self._tree_name = tree.name
+        self._area = context.area
+        self._region = region
+        self._original_mode = context.object.mode
+        self._original_state = paint.capture_native_state(context)
+        self._stroke = []
+        self._stroke_t0 = 0.0
+        self._painting = False
+        try:
+            layer = tree.impasto.active_layer()
+            first_key = native_replay_targets(layer)[0][0]
+            paint.activate_paint_target(context, layer, first_key)
+            if context.object.mode != 'TEXTURE_PAINT':
+                if context.object.mode != 'OBJECT':
+                    bpy.ops.object.mode_set(mode='OBJECT')
+                bpy.ops.object.mode_set(mode='TEXTURE_PAINT')
+        except (RuntimeError, paint.PaintTargetError) as exc:
+            paint.restore_native_state(context, self._original_state)
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        if context.scene.tool_settings.image_paint.brush is None:
+            paint.restore_native_state(context, self._original_state)
+            self.report({'ERROR'}, "Select a Blender Texture Paint brush first")
+            return {'CANCELLED'}
+
+        paint.maybe_switch_material_preview(context)
+        context.window_manager.modal_handler_add(self)
+        region.tag_redraw()
+        self.report({'INFO'},
+                    "Blender brush multi-channel — LMB stroke, RMB/Esc stops")
+        return {'RUNNING_MODAL'}
+
+    def _point(self, context, event, is_start=False):
+        brush = context.scene.tool_settings.image_paint.brush
+        unified = context.scene.tool_settings.unified_paint_settings
+        size = (unified.size if unified.use_unified_size else brush.size)
+        pressure = float(getattr(event, "pressure", 1.0))
+        if pressure <= 0.0:
+            pressure = 1.0
+        return paint.native_stroke_point(
+            event.mouse_x - self._region.x,
+            event.mouse_y - self._region.y,
+            pressure, size, time.perf_counter() - self._stroke_t0,
+            is_start=is_start,
+            x_tilt=getattr(event, "x_tilt", 0.0),
+            y_tilt=getattr(event, "y_tilt", 0.0))
+
+    def _replay(self, context):
+        tree = bpy.data.node_groups.get(self._tree_name)
+        layer = (tree.impasto.layers.get(self._layer_uid)
+                 if tree is not None else None)
+        if layer is None:
+            raise paint.PaintTargetError("The active paint layer disappeared")
+        return replay_native_stroke(context, layer, self._stroke,
+                                    self._area, self._region)
+
+    def _restore(self, context):
+        paint.restore_native_state(context, self._original_state)
+        obj = context.object
+        if (obj is not None and obj.mode != self._original_mode
+                and self._original_mode == 'OBJECT'):
+            try:
+                bpy.ops.object.mode_set(mode='OBJECT')
+            except RuntimeError:
+                pass
+        self._region.tag_redraw()
+
+    def modal(self, context, event):
+        if event.type == 'LEFTMOUSE':
+            if event.value == 'PRESS' and self._inside(event):
+                self._painting = True
+                self._stroke_t0 = time.perf_counter()
+                self._stroke = [self._point(context, event, True)]
+                return {'RUNNING_MODAL'}
+            if event.value == 'RELEASE' and self._painting:
+                self._stroke.append(self._point(context, event))
+                self._painting = False
+                try:
+                    replayed = self._replay(context)
+                except (RuntimeError, paint.PaintTargetError) as exc:
+                    self.report({'ERROR'}, str(exc))
+                    self._restore(context)
+                    return {'CANCELLED'}
+                for area in context.screen.areas:
+                    if area.type in {'VIEW_3D', 'IMAGE_EDITOR'}:
+                        area.tag_redraw()
+                self.report({'INFO'}, "Stroke replayed to %d channels"
+                            % len(replayed))
+                return {'RUNNING_MODAL'}
+        elif event.type == 'MOUSEMOVE' and self._painting:
+            self._stroke.append(self._point(context, event))
+            return {'RUNNING_MODAL'}
+        elif event.type in {'RIGHTMOUSE', 'ESC'} and event.value == 'PRESS':
+            self._restore(context)
+            return {'FINISHED'}
+        return {'PASS_THROUGH'}
+
+    def _inside(self, event):
+        x = event.mouse_x - self._region.x
+        y = event.mouse_y - self._region.y
+        return 0 <= x < self._region.width and 0 <= y < self._region.height
+
+    def cancel(self, context):
+        self._restore(context)
+
+
 class IMPASTO_OT_gpu_paint(bpy.types.Operator):
     """Paint every bound channel of the active Impasto paint layer with
     one GPU stroke (LMB paints, RMB or Esc stops; canvases sync on
@@ -749,8 +957,6 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             "occlusion": True,
             "subrect": True,
             "channel_keys": tuple(keys),
-            "preview_index": (keys.index(layer.preview_channel)
-                              if layer.preview_channel in keys else 0),
         }
         if not gpu_engine.start_session(obj, images, region,
                                         payloads=payloads,
@@ -762,6 +968,8 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         self._region = region
         self._radius = layer.brush_radius
         self._stopping = False
+        gpu_engine.set_cursor(event.mouse_x - region.x,
+                              event.mouse_y - region.y)
         self._timer = context.window_manager.event_timer_add(
             0.05, window=context.window)
         context.window_manager.modal_handler_add(self)
@@ -798,6 +1006,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             image.pixels.foreach_set(arr)
             t1 = time.perf_counter()
             image.update()
+            image.update_tag()
             t2 = time.perf_counter()
             write_ms += (t1 - t0) * 1000.0
             update_ms += (t2 - t1) * 1000.0
@@ -849,11 +1058,15 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
                 gpu_engine.end_stroke()
                 self._region.tag_redraw()
                 return {'RUNNING_MODAL'}
-        elif etype == 'MOUSEMOVE' and gpu_engine.stroke_active():
+        elif etype == 'MOUSEMOVE':
             rx, ry = self._mouse_region(event)
-            gpu_engine.move_stroke(rx, ry, event.pressure, self._radius)
+            gpu_engine.set_cursor(rx, ry)
+            if gpu_engine.stroke_active():
+                gpu_engine.move_stroke(rx, ry, event.pressure, self._radius)
+                self._region.tag_redraw()
+                return {'RUNNING_MODAL'}
             self._region.tag_redraw()
-            return {'RUNNING_MODAL'}
+            return {'PASS_THROUGH'}
         elif etype in {'RIGHTMOUSE', 'ESC'} and event.value == 'PRESS':
             if gpu_engine.stroke_active():
                 gpu_engine.end_stroke()
@@ -886,6 +1099,7 @@ _classes = (
     IMPASTO_OT_import_kiln_normal,
     IMPASTO_OT_paint_activate,
     IMPASTO_OT_detail_paint,
+    IMPASTO_OT_native_multichannel_paint,
     IMPASTO_OT_gpu_paint,
 )
 
