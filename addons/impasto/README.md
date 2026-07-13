@@ -270,6 +270,14 @@ rewiring generated nodes.
   per-channel contribution, alpha/luminance interpretation, tiling, and
   interaction details remain design-in-progress pending the intended workflow
   description.
+- **GPU brush and adjustable-alpha parity:** reimplement useful equivalents of
+  Blender's painting brushes on the resident multi-channel GPU path, including
+  brush alpha/texture control. Deliver this in compatibility tiers: stamp-based
+  Draw variants first; textured/alpha stamps and custom falloff next;
+  framebuffer-dependent Soften/Blur, Smear, and Mask brushes after that; then
+  source/state-heavy Clone, Fill, Gradient, and specialized tools. Match the
+  useful behavior and asset semantics without depending on Blender's private
+  paint-engine implementation details.
 
 ## Phase 1 acceptance gates
 

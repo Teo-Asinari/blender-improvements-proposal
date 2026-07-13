@@ -8,6 +8,9 @@
   across every enabled channel and supports texture application. Projection,
   transform, masking, and per-channel semantics await the user's detailed
   workflow description.
+- Implement resident-GPU equivalents of Blender's useful brush families plus
+  adjustable alpha/brush textures, staged from Draw-style stamps through
+  destination-sampling and source/state-heavy tools.
 
 ## 0.5.2 — explicit resident settings mode
 

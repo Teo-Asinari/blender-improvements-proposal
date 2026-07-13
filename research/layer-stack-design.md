@@ -917,6 +917,16 @@ phase with architectural risk; everything after it is additive by design.
    application workflow. Exact stencil projection, transform controls,
    alpha-versus-luminance interpretation, tiling, and per-channel payload rules
    are intentionally left open until the user workflow is specified verbally.
+3. **GPU brush-family and alpha parity.** Build resident-GPU equivalents of
+   Blender's useful paint brushes and support adjustable brush alphas/textures.
+   Treat this as four implementation tiers rather than a direct code port:
+   (a) Draw/stamp variants using the current dab engine; (b) alpha textures,
+   custom falloff, rotation, jitter, and pressure mapping; (c) destination-
+   sampling brushes such as Soften/Blur, Smear, and Mask using ping-pong GPU
+   textures; and (d) source/state-heavy Clone, Fill, Gradient, and specialized
+   tools with their own interaction models. Each tier must preserve synchronized
+   coverage across channel images, front-surface projection, resident undo, and
+   no-readback pen-up.
 
 These requirements extend phases 6–7 rather than changing the core stack
 schema: channel bindings already own independent images, while one resident
