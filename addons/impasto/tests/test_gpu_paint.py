@@ -89,6 +89,11 @@ try:
           by_key["height"]["blend"] == "ADD"
           and all(by_key[k]["blend"] == "MIX" for k in keys
                   if k != "height"))
+    check("GPU occlusion compares linear view-space depth",
+          "view_depth > front + tolerance" in gpu_engine._DAB_FRAG_PRELUDE
+          and "viewDepth" in gpu_engine.PREPASS_FRAG_SRC
+          and "clipPos.z / clipPos.w" not in
+          gpu_engine.PREPASS_FRAG_SRC)
     check("raise deposits a positive height step",
           by_key["height"]["value"] == (0.05, 0.05, 0.05))
     lower = gpu_engine.stroke_payloads(

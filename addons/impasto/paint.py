@@ -180,6 +180,8 @@ def capture_native_state(context):
     state = {
         "canvas": settings.canvas,
         "paint_mode": settings.mode,
+        "use_occlude": settings.use_occlude,
+        "use_backface_culling": settings.use_backface_culling,
         "brush": brush,
         "brush_asset": getattr(settings, "brush_asset_reference", None),
     }
@@ -214,11 +216,20 @@ def unified_paint_settings(context):
     return settings
 
 
+def configure_front_surface_paint(context):
+    """Prevent projected native strokes from reaching hidden surfaces."""
+    settings = context.scene.tool_settings.image_paint
+    settings.use_occlude = True
+    settings.use_backface_culling = True
+
+
 def restore_native_state(context, state):
     """Restore a state from :func:`capture_native_state`."""
     settings = context.scene.tool_settings.image_paint
     settings.mode = state["paint_mode"]
     settings.canvas = state["canvas"]
+    settings.use_occlude = state["use_occlude"]
+    settings.use_backface_culling = state["use_backface_culling"]
     brush = state.get("brush")
     # Never restore settings.brush: it is a read-only asset-driven pointer in
     # Blender 5.1.  We never replace it, and only restore properties when the

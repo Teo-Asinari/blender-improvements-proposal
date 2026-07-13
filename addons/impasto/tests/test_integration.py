@@ -25,7 +25,7 @@ try:
     impasto.register()
     check("package registration",
           hasattr(bpy.types.ShaderNodeTree, "impasto"))
-    check("metadata", impasto.bl_info["version"] == (0, 3, 2))
+    check("metadata", impasto.bl_info["version"] == (0, 3, 3))
 
     bpy.ops.mesh.primitive_cube_add()
     obj = bpy.context.object

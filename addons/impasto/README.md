@@ -132,6 +132,10 @@ The viewport keeps the composed PBR material visible throughout the session;
 the former raw single-channel overlay has been removed. A screen-space reticle
 uses the same Radius value as the GPU dabs, and completed image writes are
 tagged for material redraw immediately at pen-up.
+GPU projection rejects hidden fragments using a front-surface prepass stored
+as linear view-space depth. Native multi-channel replay temporarily enables
+Blender's Occlude and Backface Culling options, then restores their prior
+values.
 The panel lists the exact target channels and includes their count in the
 button label. Multi-channel painting operates on bindings of the **selected
 Paint layer**; use the `+` channel rows on that same layer to add simultaneous
@@ -151,6 +155,9 @@ Notes and current limits:
   scene-linear composited space.
 - GPU strokes are not undoable yet (native painting keeps Blender's
   normal paint undo). Stop the session before undoing stack operations.
+- One native multi-channel replay invokes Blender image paint once per canvas.
+  Blender 5.1 exposes no Python undo-group API, so those channel operations
+  currently occupy separate native paint-undo entries rather than one Ctrl-Z.
 - Occlusion is depth-prepass based; a stroke uses the view it was
   painted in. Orbiting between strokes is fine.
 - If the GPU session fails on a backend/driver, Impasto reports once

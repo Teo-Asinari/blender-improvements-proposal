@@ -718,6 +718,7 @@ def replay_native_stroke(context, layer, stroke, area=None, region=None):
     state = paint.capture_native_state(context)
     results = []
     try:
+        paint.configure_front_surface_paint(context)
         brush = settings.brush
         if brush is None:
             raise paint.PaintTargetError(
