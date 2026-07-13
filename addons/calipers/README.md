@@ -117,6 +117,9 @@ stretches exactly like the remesh result would appear):
   — so at extreme density the guide falls back to box + sample cell +
   annotation. It never draws every voxel.
 - a text annotation: longest-axis cells + risk band (+ "grid capped").
+- an optional **Bounding Box Dimensions** annotation showing the drawn
+  box's transformed X/Y/Z edge lengths. This remains honest under
+  unapplied/non-uniform scale and shear.
 
 The **Source** selector picks which entry point the guide reads:
 *Auto* (modifier when present, else mesh), *Mesh*, or *Modifier*.

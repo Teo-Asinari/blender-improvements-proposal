@@ -45,7 +45,7 @@ rationale) — a viewport aid should not persist into a saved file.
 bl_info = {
     "name": "Calipers",
     "author": "Teo Asinari",
-    "version": (1, 0, 0),
+    "version": (1, 1, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N) > Calipers tab",
     "description": "Scale-aware voxel-remesh preview and safety: cost "
@@ -59,7 +59,7 @@ import traceback
 
 import bpy
 from bpy.app.handlers import persistent
-from bpy.props import (EnumProperty, FloatProperty, IntProperty,
+from bpy.props import (BoolProperty, EnumProperty, FloatProperty, IntProperty,
                        PointerProperty, StringProperty)
 
 if "core" in locals():
@@ -87,6 +87,13 @@ def _est_display_changed(self, context):
 
 
 class CalipersSettings(bpy.types.PropertyGroup):
+    show_bounds_dimensions: BoolProperty(
+        name="Bounding Box Dimensions",
+        description="Show the transformed X/Y/Z edge lengths of the "
+                    "bounding box beside the viewport guide",
+        default=False,
+        update=_est_display_changed,
+    )
     yellow_exp: FloatProperty(
         name="Yellow At (log10 cells)",
         description="Risk turns YELLOW when log10 of the bounding-cell "
@@ -630,6 +637,8 @@ class VIEW3D_PT_calipers(bpy.types.Panel):
                      else 'HIDE_ON',
                      depress=overlay.is_enabled())
         box.prop(s, "guide_source", text="Source")
+        box.prop(s, "show_bounds_dimensions",
+                 text="Bounding Box Dimensions")
         err = overlay.last_draw_error()
         if err is not None:
             box.label(text="Guide draw failed - see console",

@@ -179,6 +179,26 @@ def main():
           len(guide["box"]) == 24 and len(guide["cell"]) == 24
           and guide["capped"] and len(guide["slices"]) == 0)
 
+    # bounding dimensions match the transformed edges of the drawn box
+    ident = ((1.0, 0.0, 0.0, 0.0),
+             (0.0, 1.0, 0.0, 0.0),
+             (0.0, 0.0, 1.0, 0.0),
+             (0.0, 0.0, 0.0, 1.0))
+    dims = overlay.transformed_box_edge_lengths(
+        (-1.0, -2.0, -3.0), (1.0, 2.0, 3.0), ident)
+    check("bounds dimensions: identity", dims == (2.0, 4.0, 6.0), dims)
+    scaled = ((2.0, 0.0, 0.0, 0.0),
+              (0.0, 3.0, 0.0, 0.0),
+              (0.0, 0.0, 0.5, 0.0),
+              (0.0, 0.0, 0.0, 1.0))
+    dims = overlay.transformed_box_edge_lengths(
+        (-1.0, -2.0, -3.0), (1.0, 2.0, 3.0), scaled)
+    check("bounds dimensions: transformed edge lengths",
+          dims == (4.0, 12.0, 3.0), dims)
+    check("bounds dimensions: compact label",
+          overlay.format_bounds_dimensions(dims)
+          == "Bounds X 4  Y 12  Z 3")
+
     # --- shader descriptor (pure bookkeeping headless) ------------------------
     try:
         info = overlay._shader_create_info()

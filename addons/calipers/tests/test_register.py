@@ -135,6 +135,8 @@ def run_registered(calipers, core, estimate, overlay):
           s.yellow_exp == estimate.DEFAULT_YELLOW_EXP
           and s.red_exp == estimate.DEFAULT_RED_EXP)
     check("guide source default AUTO", s.guide_source == 'AUTO')
+    check("bounding dimensions default off",
+          not s.show_bounds_dimensions)
 
     # --- refresh operator -----------------------------------------------------
     cube = new_cube("RegCube")

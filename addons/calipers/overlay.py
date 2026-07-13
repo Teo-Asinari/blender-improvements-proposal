@@ -93,7 +93,7 @@ class _State:
     batches = None         # {'box':, 'cell':, 'slices': or None}
     built_key = None       # (bounds_min, bounds_max, voxel_size) built
     capped = False         # slices dropped at the last build
-    annotation = None      # (text, risk) for the 2D pass, or None
+    annotation = None      # (text, risk, bounds_text) or None
     anchor_world = None    # world-space point the annotation hangs off
     # First draw-time error since the last enable/refresh, as a
     # formatted traceback. Latched: printed once, shown in the UI.
@@ -205,6 +205,28 @@ def build_guide(lo, hi, v, cap=SLICE_MAX_LINES):
         "slices": slices,
         "capped": capped,
     }
+
+
+def transformed_box_edge_lengths(lo, hi, matrix):
+    """Lengths of the drawn box's local X/Y/Z edges after transformation.
+
+    matrix is any row-major 4x4 sequence. Translation is irrelevant;
+    each local edge vector is transformed by one column of the linear
+    3x3 part. This remains honest under rotation, non-uniform scale and
+    shear: the three values are edge lengths, not a fictitious orthogonal
+    world AABB.
+    """
+    dims = tuple(float(h) - float(l) for l, h in zip(lo, hi))
+    return tuple(
+        abs(dims[i]) * math.sqrt(sum(float(matrix[r][i]) ** 2
+                                     for r in range(3)))
+        for i in range(3)
+    )
+
+
+def format_bounds_dimensions(lengths):
+    """Compact stable label for the viewport annotation (Blender units)."""
+    return "Bounds X %.4g  Y %.4g  Z %.4g" % tuple(lengths)
 
 
 # ---------------------------------------------------------------------------
@@ -361,7 +383,12 @@ def _draw_3d():
         # both passes agree on one resolution of the inputs).
         if est is not None:
             text = "{:,} cells".format(est.longest_axis_cells)
-            _state.annotation = (text, est.risk)
+            bounds_text = None
+            if getattr(settings, "show_bounds_dimensions", False):
+                lengths = transformed_box_edge_lengths(
+                    stats.bounds_min, stats.bounds_max, obj.matrix_world)
+                bounds_text = format_bounds_dimensions(lengths)
+            _state.annotation = (text, est.risk, bounds_text)
         else:
             _state.annotation = None
         lo, hi = stats.bounds_min, stats.bounds_max
@@ -448,7 +475,7 @@ def _draw_2d():
             region, rv3d, _state.anchor_world)
         if co2d is None:
             return
-        text, risk = _state.annotation
+        text, risk, bounds_text = _state.annotation
         label = "%s - %s" % (text, risk.title())
         if _state.capped:
             label += "  (grid capped)"
@@ -465,6 +492,12 @@ def _draw_2d():
         r, g, b, _a = RISK_COLORS.get(risk, RISK_COLORS['RED'])
         blf.color(font_id, r, g, b, 1.0)
         blf.draw(font_id, label)
+        if bounds_text:
+            bw, bh = blf.dimensions(font_id, bounds_text)
+            blf.position(font_id, co2d.x - bw * 0.5,
+                         co2d.y + height * 0.8 + bh * 1.35, 0.0)
+            blf.color(font_id, 0.9, 0.9, 0.9, 1.0)
+            blf.draw(font_id, bounds_text)
     except Exception:
         _state.last_draw_error = traceback.format_exc()
         if not bpy.app.background:
