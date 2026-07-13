@@ -192,6 +192,21 @@ def capture_native_state(context):
     return state
 
 
+def unified_paint_settings(context):
+    """Return Blender's unified paint settings across API generations.
+
+    Blender 5.1 moved this pointer from ``ToolSettings`` onto the active
+    ``ImagePaint`` settings. Prefer the current location and retain the older
+    fallback for compatibility.
+    """
+    tool_settings = context.scene.tool_settings
+    settings = getattr(tool_settings.image_paint,
+                       "unified_paint_settings", None)
+    if settings is None:
+        settings = getattr(tool_settings, "unified_paint_settings", None)
+    return settings
+
+
 def restore_native_state(context, state):
     """Restore a state from :func:`capture_native_state`."""
     settings = context.scene.tool_settings.image_paint

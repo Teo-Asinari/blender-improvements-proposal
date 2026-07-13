@@ -810,8 +810,9 @@ class IMPASTO_OT_native_multichannel_paint(bpy.types.Operator):
 
     def _point(self, context, event, is_start=False):
         brush = context.scene.tool_settings.image_paint.brush
-        unified = context.scene.tool_settings.unified_paint_settings
-        size = (unified.size if unified.use_unified_size else brush.size)
+        unified = paint.unified_paint_settings(context)
+        size = (unified.size if unified is not None
+                and unified.use_unified_size else brush.size)
         pressure = float(getattr(event, "pressure", 1.0))
         if pressure <= 0.0:
             pressure = 1.0

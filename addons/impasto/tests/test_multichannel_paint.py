@@ -161,6 +161,14 @@ try:
           and point["pressure"] == 0.6 and point["size"] == 48.0
           and point["time"] == 0.25 and point["is_start"]
           and point["x_tilt"] == 0.1 and point["y_tilt"] == -0.2)
+    resolved_unified = paint.unified_paint_settings(bpy.context)
+    image_unified = (bpy.context.scene.tool_settings.image_paint
+                     .unified_paint_settings)
+    check("Blender 5.1 unified settings use the ImagePaint API",
+          resolved_unified is not None
+          and resolved_unified.size == image_unified.size
+          and resolved_unified.use_unified_size
+          == image_unified.use_unified_size)
 
     # Canvas/mode restoration is testable headlessly; when a Brush asset is
     # active the same helper also restores color, secondary color and blend.
