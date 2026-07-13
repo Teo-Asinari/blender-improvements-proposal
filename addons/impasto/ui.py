@@ -6,6 +6,7 @@ deliberately minimal for phase 1 (UX iterates with the user)."""
 
 import bpy
 
+from . import bl_info as _BL_INFO
 from . import engine
 from . import gpu_engine
 from . import model
@@ -13,6 +14,8 @@ from . import ops
 
 _TYPE_ICONS = {'PAINT': 'BRUSH_DATA', 'FILL': 'SNAP_FACE',
                'GROUP': 'FILE_FOLDER'}
+_VERSION_LABEL = "Impasto %s" % ".".join(
+    str(part) for part in _BL_INFO["version"])
 
 
 class IMPASTO_UL_layers(bpy.types.UIList):
@@ -46,6 +49,9 @@ class IMPASTO_PT_main(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
+        header = layout.row()
+        header.alignment = 'RIGHT'
+        header.label(text=_VERSION_LABEL, icon='BRUSH_DATA')
         obj = context.object
         if obj is None or obj.type != 'MESH':
             layout.label(text="Select a mesh object", icon='INFO')

@@ -1,5 +1,11 @@
 # Impasto — multi-channel painting milestone progress
 
+## 0.5.1 — overlapping sidebar input routing
+
+- Explicitly gives Blender's visible UI, header, and toolbar regions priority
+  over paint hit-testing. This fixes N-panel slider/color clicks registering as
+  dabs when the sidebar overlaps the viewport WINDOW region.
+
 ## 0.5.0 — resident diagnostic previews and live brush editing
 
 - Added Lit PBR, Raw Tangent Normal, Neutral Normal Lighting, and Height

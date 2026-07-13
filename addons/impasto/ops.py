@@ -816,6 +816,7 @@ class IMPASTO_OT_native_multichannel_paint(bpy.types.Operator):
         self._tree_name = tree.name
         self._area = context.area
         self._region = region
+        self._area = context.area
         self._original_mode = context.object.mode
         self._original_state = paint.capture_native_state(context)
         self._stroke = []
@@ -1041,6 +1042,24 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         return (0 <= rx < self._region.width
                 and 0 <= ry < self._region.height)
 
+    def _over_interface_region(self, event):
+        """Whether a window-space event belongs to an overlapping Blender UI.
+
+        The N-panel may overlap the VIEW_3D WINDOW region instead of reducing
+        its rectangle, so ``_inside_region`` alone cannot distinguish painting
+        from editing a sidebar property.
+        """
+        area = getattr(self, "_area", None)
+        if area is None:
+            return False
+        for region in area.regions:
+            if region.type == 'WINDOW' or region.width <= 1 or region.height <= 1:
+                continue
+            if (region.x <= event.mouse_x < region.x + region.width
+                    and region.y <= event.mouse_y < region.y + region.height):
+                return True
+        return False
+
     def _refresh_stroke_settings(self, context):
         tree = bpy.data.node_groups.get(self._tree_name)
         layer = (tree.impasto.layers.get(self._layer_uid)
@@ -1133,6 +1152,8 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
 
         etype = event.type
         if etype == 'LEFTMOUSE':
+            if event.value == 'PRESS' and self._over_interface_region(event):
+                return {'PASS_THROUGH'}
             if event.value == 'PRESS' and self._inside_region(event):
                 try:
                     self._refresh_stroke_settings(context)

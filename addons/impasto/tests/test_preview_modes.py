@@ -75,13 +75,14 @@ try:
     # Construct only the non-GPU modal state needed by the helpers. The
     # headless session remains resident and no Image sync is requested.
     redraw = {"count": 0}
-    region = NS(x=0, y=0, width=640, height=480,
+    region = NS(type='WINDOW', x=0, y=0, width=640, height=480,
                 tag_redraw=lambda: redraw.__setitem__(
                     "count", redraw["count"] + 1))
     # Blender RNA operator classes cannot be directly constructed. A plain
     # namespace exercises these deliberately isolated runtime helpers.
     operator = NS(
         _region=region,
+        _area=NS(regions=[region]),
         _tree_name=tree.name,
         _layer_uid=layer.name,
         _channel_keys=keys,
@@ -94,6 +95,8 @@ try:
         ops.IMPASTO_OT_gpu_paint._mouse_region(operator, event)
     operator._inside_region = lambda event: \
         ops.IMPASTO_OT_gpu_paint._inside_region(operator, event)
+    operator._over_interface_region = lambda event: \
+        ops.IMPASTO_OT_gpu_paint._over_interface_region(operator, event)
 
     layer.gpu_preview_mode = 'HEIGHT_GRAYSCALE'
     check("live preview edit applies without restarting session",
@@ -111,6 +114,19 @@ try:
     check("outside-region sidebar clicks pass through resident modal",
           ops.IMPASTO_OT_gpu_paint.modal(
               operator, bpy.context, sidebar_click) == {'PASS_THROUGH'}
+          and gpu_engine.session_active())
+
+    # Blender can configure its N-panel as an overlapping region whose bounds
+    # still lie inside the WINDOW rectangle. It must win over paint hit-testing.
+    overlay_sidebar = NS(type='UI', x=480, y=0, width=160, height=480)
+    operator._area = NS(regions=[region, overlay_sidebar])
+    overlapping_click = NS(type='LEFTMOUSE', value='PRESS',
+                           mouse_x=550, mouse_y=100,
+                           pressure=1.0, ctrl=False, shift=False)
+    check("overlapping N-panel clicks pass through resident modal",
+          ops.IMPASTO_OT_gpu_paint.modal(
+              operator, bpy.context, overlapping_click) == {'PASS_THROUGH'}
+          and not gpu_engine.stroke_active()
           and gpu_engine.session_active())
 
     # All editable values are read at the next pen-down. This helper call is
