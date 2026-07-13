@@ -75,6 +75,18 @@ try:
           and "roughness" in gpu_engine.PREVIEW_FRAG_SRC
           and "normal_sample" in gpu_engine.PREVIEW_FRAG_SRC
           and "height" in gpu_engine.PREVIEW_FRAG_SRC)
+    check("preview display mode identifiers are stable",
+          gpu_engine.PREVIEW_MODES == (
+              "LIT_PBR", "RAW_TANGENT_NORMAL",
+              "NEUTRAL_NORMAL_LIGHTING", "HEIGHT_GRAYSCALE"))
+    check("preview shader has explicit diagnostic branches",
+          "preview_mode == 1" in gpu_engine.PREVIEW_FRAG_SRC
+          and "vec3(0.5, 0.5, 1.0)" in gpu_engine.PREVIEW_FRAG_SRC
+          and "preview_mode == 2" in gpu_engine.PREVIEW_FRAG_SRC
+          and "preview_mode == 3" in gpu_engine.PREVIEW_FRAG_SRC)
+    check("unknown preview mode safely normalizes to Lit PBR",
+          gpu_engine.normalize_preview_mode("not-a-mode") == "LIT_PBR"
+          and gpu_engine.preview_mode_index("HEIGHT_GRAYSCALE") == 3)
 
     # ---- payload planning ---------------------------------------------
     brush = {"color": (0.5, 0.25, 1.0), "roughness": 0.7,
@@ -197,6 +209,11 @@ try:
         settings={"radius": 40.0, "hardness": 0.5})
     check("headless session starts as a logical no-op", started)
     check("session reports active", gpu_engine.session_active())
+    check("GPU session defaults to Lit PBR preview",
+          gpu_engine.current_preview_mode() == "LIT_PBR")
+    check("preview mode changes without session restart",
+          gpu_engine.set_preview_mode("RAW_TANGENT_NORMAL")
+          and gpu_engine.current_preview_mode() == "RAW_TANGENT_NORMAL")
     gpu_engine.set_cursor(21, 37)
     check("GPU reticle tracks viewport mouse coordinates",
           gpu_engine.cursor_position() == (21.0, 37.0))

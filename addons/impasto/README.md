@@ -142,6 +142,16 @@ button label. Multi-channel painting operates on bindings of the **selected
 Paint layer**; use the `+` channel rows on that same layer to add simultaneous
 targets. Separate Paint layers are intentionally separate strokes.
 
+The **Live Preview** selector can be changed while the GPU session remains
+active: **Lit PBR** shows the composed material approximation, **Raw Tangent
+Normal** displays encoded normal RGB, **Neutral Normal Lighting** isolates
+normal and Height relief on a neutral surface, and **Height Grayscale** shows
+the Height field directly. These are display modes only and never modify the
+painted images. Sidebar color, Metallic, Roughness, normal, Height, Radius, and
+Hardness controls are also editable between strokes; the next stroke uses the
+new values without a flush, readback, or loss of GPU undo history. Clicks
+outside the painting region pass through to Blender's UI.
+
 The Metallic and Roughness controls in **Multi-Channel Brush** are stroke
 values: they are written as grayscale into those channel images. The
 **Influence** control beside each channel image is separate; it controls how

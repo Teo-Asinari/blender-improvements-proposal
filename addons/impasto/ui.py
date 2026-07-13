@@ -204,7 +204,11 @@ class IMPASTO_PT_main(bpy.types.Panel):
 
             box.separator()
             box.label(text="Experimental GPU Brush", icon='BRUSH_DATA')
-            row = col.row(align=True)
+            gpu_col = box.column(align=True)
+            gpu_col.prop(layer, "gpu_preview_mode", text="Live Preview")
+            gpu_col.label(text="Display only — painted channels are unchanged",
+                          icon='INFO')
+            row = gpu_col.row(align=True)
             row.prop(layer, "brush_radius")
             row.prop(layer, "brush_hardness", slider=True)
             row = box.row()
@@ -218,6 +222,9 @@ class IMPASTO_PT_main(bpy.types.Panel):
             if gpu_engine.session_active():
                 box.label(text="GPU painting… live GPU preview",
                           icon='BRUSH_DATA')
+                box.label(text="Edit brush values between strokes; changes "
+                               "apply to the next stroke",
+                          icon='INFO')
                 undo_count, redo_count = gpu_engine.history_counts()
                 box.label(text="GPU Undo %d / Redo %d (Ctrl-Z / Ctrl-Shift-Z)"
                           % (undo_count, redo_count), icon='LOOP_BACK')
@@ -230,8 +237,10 @@ class IMPASTO_PT_main(bpy.types.Panel):
                 box.label(text="RMB/Esc flushes and stops",
                           icon='INFO')
             else:
-                box.label(text="Draw brushes reuse Blender size, spacing, "
-                               "strength and pressure",
+                box.label(text="Draw brushes reuse Blender spacing, strength, "
+                               "pressure and falloff",
+                          icon='INFO')
+                box.label(text="Radius and Hardness use the controls above",
                           icon='INFO')
             err = gpu_engine.last_error()
             if err:

@@ -6,6 +6,7 @@ whole operator costs exactly one compile+reconcile (design §4.7)."""
 
 import json
 import time
+from dataclasses import replace
 
 import bpy
 from bpy.props import EnumProperty, StringProperty
@@ -16,6 +17,7 @@ from . import engine
 from . import gpu_engine
 from . import model
 from . import paint
+from . import props
 
 DEFAULT_IMAGE_SIZE = 2048
 
@@ -675,7 +677,13 @@ def _gpu_brush(layer):
             "height_direction": layer.paint_height_direction}
 
 
-def _gpu_stamp(context):
+def gpu_preview_mode(layer):
+    """Persistent layer preview mode, sanitized for runtime consumers."""
+    mode = getattr(layer, "gpu_preview_mode", 'LIT_PBR')
+    return mode if mode in props.GPU_PREVIEW_MODE_IDS else 'LIT_PBR'
+
+
+def _gpu_stamp(context, radius=None):
     settings = context.scene.tool_settings.image_paint
     brush = settings.brush
     if brush is None:
@@ -687,8 +695,14 @@ def _gpu_stamp(context):
         tool_id = tool.idname if tool is not None else ""
     except (AttributeError, TypeError):
         pass
-    return brush_adapter.brush_to_gpu_stamp(
+    stamp = brush_adapter.brush_to_gpu_stamp(
         brush, paint.unified_paint_settings(context), tool_id)
+    # Impasto exposes a persistent Radius beside its GPU button. Preserve the
+    # Blender asset's spacing/strength/pressure/falloff semantics, but make
+    # that visible control authoritative for GPU dab size.
+    if radius is not None and stamp.supported:
+        stamp = replace(stamp, radius_px=max(0.5, float(radius)))
+    return stamp
 
 
 def native_replay_targets(layer):
@@ -975,7 +989,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         keys = [key for key, _img in targets]
         images = [img for _key, img in targets]
         payloads = gpu_engine.stroke_payloads(keys, _gpu_brush(layer))
-        stamp = _gpu_stamp(context)
+        stamp = _gpu_stamp(context, layer.brush_radius)
         settings = {
             "radius": (stamp.radius_px if stamp is not None
                        and stamp.supported else layer.brush_radius),
@@ -985,6 +999,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             "channel_keys": tuple(keys),
             "brush_stamp": (stamp if stamp is not None
                             and stamp.supported else None),
+            "preview_mode": gpu_preview_mode(layer),
         }
         if not gpu_engine.start_session(obj, images, region,
                                         payloads=payloads,
@@ -997,6 +1012,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         self._tree_name = tree.name
         self._layer_uid = layer.name
         self._channel_keys = tuple(keys)
+        self._preview_mode = gpu_preview_mode(layer)
         self._radius = layer.brush_radius
         self._stopping = False
         gpu_engine.set_cursor(event.mouse_x - region.x,
@@ -1033,7 +1049,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             raise paint.PaintTargetError("The active paint layer disappeared")
         payloads = gpu_engine.stroke_payloads(
             self._channel_keys, _gpu_brush(layer))
-        stamp = _gpu_stamp(context)
+        stamp = _gpu_stamp(context, layer.brush_radius)
         supported_stamp = (stamp if stamp is not None
                            and stamp.supported else None)
         self._radius = (supported_stamp.radius_px if supported_stamp
@@ -1041,6 +1057,22 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         gpu_engine.update_stroke_settings(
             payloads, radius=self._radius,
             hardness=layer.brush_hardness, stamp=supported_stamp)
+
+    def _refresh_preview_mode(self):
+        """Apply a sidebar preview change without restarting the session."""
+        tree = bpy.data.node_groups.get(self._tree_name)
+        layer = (tree.impasto.layers.get(self._layer_uid)
+                 if tree is not None else None)
+        if layer is None:
+            return False
+        mode = gpu_preview_mode(layer)
+        if mode == self._preview_mode:
+            return False
+        if not gpu_engine.set_preview_mode(mode):
+            return False
+        self._preview_mode = mode
+        self._region.tag_redraw()
+        return True
 
     def _apply_pending_sync(self):
         """Write an explicitly flushed readback into the channel Image
@@ -1141,6 +1173,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
                 self._region.tag_redraw()
             return {'RUNNING_MODAL'}
         elif etype == 'TIMER':
+            self._refresh_preview_mode()
             return {'RUNNING_MODAL'}
 
         # Orbit/zoom/pan and UI clicks pass through; the depth prepass

@@ -1,5 +1,15 @@
 # Impasto — multi-channel painting milestone progress
 
+## 0.5.0 — resident diagnostic previews and live brush editing
+
+- Added Lit PBR, Raw Tangent Normal, Neutral Normal Lighting, and Height
+  Grayscale display modes with live switching and staged 5/1/2/1-channel
+  sampling respectively.
+- Sidebar brush values now remain editable between GPU strokes without a
+  flush or readback; resident textures and atomic undo history are preserved.
+- Corrected transparent scalar defaults, partial normal strength, mirrored and
+  degenerate UV tangent frames, and Height preview derivatives.
+
 ## 0.4.1 — projected-stroke continuity and live PBR preview
 
 - Fixed staggered pinholes on steep and finely triangulated surfaces by making

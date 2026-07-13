@@ -30,6 +30,21 @@ from . import model
 
 _LAYER_UID_RE = re.compile(r'layers\["([^"]+)"\]')
 
+GPU_PREVIEW_MODE_ITEMS = (
+    ('LIT_PBR', "Lit PBR",
+     "Live approximation of the combined Base Color, Metallic, Roughness, "
+     "Tangent Normal, and Height channels"),
+    ('RAW_TANGENT_NORMAL', "Raw Tangent Normal",
+     "Display the encoded tangent-normal RGB channel without lighting"),
+    ('NEUTRAL_NORMAL_LIGHTING', "Neutral Normal Lighting",
+     "Inspect painted normal direction under neutral lighting without Base "
+     "Color, Metallic, or Roughness distracting from the result"),
+    ('HEIGHT_GRAYSCALE', "Height Grayscale",
+     "Display the painted Height channel directly as grayscale"),
+)
+GPU_PREVIEW_MODE_IDS = frozenset(item[0] for item in
+                                 GPU_PREVIEW_MODE_ITEMS)
+
 
 def _owner_layer_uid(pg):
     """Owning layer uid parsed from the PropertyGroup's RNA path, e.g.
@@ -176,13 +191,12 @@ class ImpastoLayer(bpy.types.PropertyGroup):
     brush_hardness: FloatProperty(
         name="Hardness", default=0.5, min=0.0, max=0.999,
         subtype='FACTOR')
-    preview_channel: EnumProperty(
-        name="Preview", items=(('base_color', "Base Color", ""),
-                               ('roughness', "Roughness", ""),
-                               ('metallic', "Metallic", ""),
-                               ('height', "Height", ""),
-                               ('normal', "Normal", "")),
-        default='base_color')
+    gpu_preview_mode: EnumProperty(
+        name="Live Preview",
+        description="How the GPU-resident paint overlay is visualized; this "
+                    "does not alter painted channel data",
+        items=GPU_PREVIEW_MODE_ITEMS,
+        default='LIT_PBR')
 
 
 class ImpastoChannel(bpy.types.PropertyGroup):

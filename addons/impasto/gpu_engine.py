@@ -129,6 +129,15 @@ MAX_DABS_PER_EVENT = 256
 # reports what GPUFrameBuffer actually accepts on this build/GPU).
 MAX_CHANNELS = 8
 
+# Stable engine/UI contract for diagnostic live-preview display modes.
+PREVIEW_MODES = (
+    "LIT_PBR",
+    "RAW_TANGENT_NORMAL",
+    "NEUTRAL_NORMAL_LIGHTING",
+    "HEIGHT_GRAYSCALE",
+)
+PREVIEW_MODE_INDEX = {name: index for index, name in enumerate(PREVIEW_MODES)}
+
 # Conservative dirty-rect: texel padding added around the accumulated
 # UV bbox before the sub-rect read (guards float->texel rounding).
 DIRTY_RECT_PAD_PX = 2
@@ -308,36 +317,81 @@ vec3 pbr_light(vec3 n, vec3 v, vec3 l, vec3 radiance, vec3 albedo,
 
 void main()
 {
-    vec4 base = straight_sample(base_color_tex, uvInterp);
-    vec4 metal_sample = straight_sample(metallic_tex, uvInterp);
-    vec4 rough_sample = straight_sample(roughness_tex, uvInterp);
+    if (preview_mode == 1) {
+        vec4 raw_normal = straight_sample(normal_tex, uvInterp);
+        float normal_alpha = has_normal > 0.5 ? raw_normal.a : 0.0;
+        vec3 encoded = mix(vec3(0.5, 0.5, 1.0), raw_normal.rgb,
+                           clamp(normal_alpha, 0.0, 1.0));
+        fragColor = vec4(encoded, 1.0);
+        return;
+    }
+    if (preview_mode == 3) {
+        float raw_height = texture(height_tex, uvInterp).r;
+        float h = has_height > 0.5 ? raw_height : 0.5;
+        fragColor = vec4(vec3(h), 1.0);
+        return;
+    }
+
     vec4 normal_sample = straight_sample(normal_tex, uvInterp);
     float height = texture(height_tex, uvInterp).r;
-
-    vec3 albedo = has_base_color > 0.5
-        ? srgb_to_linear(base.rgb) : vec3(0.5);
-    float metallic = has_metallic > 0.5 ? metal_sample.r : 0.0;
-    float roughness = has_roughness > 0.5 ? rough_sample.r : 0.5;
 
     vec3 dpdx = dFdx(worldPos), dpdy = dFdy(worldPos);
     vec2 dudx = dFdx(uvInterp), dudy = dFdy(uvInterp);
     vec3 geometric_n = normalize(cross(dpdx, dpdy));
     if (!gl_FrontFacing) geometric_n = -geometric_n;
-    vec3 tangent = normalize(dpdx * dudy.y - dpdy * dudx.y);
-    vec3 bitangent = normalize(-dpdx * dudy.x + dpdy * dudx.x);
+    float uv_det = dudx.x * dudy.y - dudx.y * dudy.x;
+    vec3 tangent;
+    vec3 bitangent;
+    if (abs(uv_det) > 1e-8) {
+        float orientation = sign(uv_det);
+        tangent = normalize((dpdx * dudy.y - dpdy * dudx.y)
+                            * orientation);
+        bitangent = normalize((-dpdx * dudy.x + dpdy * dudx.x)
+                              * orientation);
+    } else {
+        vec3 axis = abs(geometric_n.z) < 0.999
+            ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
+        tangent = normalize(cross(axis, geometric_n));
+        bitangent = normalize(cross(geometric_n, tangent));
+    }
     vec3 n = geometric_n;
     if (has_normal > 0.5 && normal_sample.a > 1e-6) {
-        vec3 tangent_n = normalize(normal_sample.rgb * 2.0 - 1.0);
+        vec3 encoded_n = mix(vec3(0.5, 0.5, 1.0), normal_sample.rgb,
+                             clamp(normal_sample.a, 0.0, 1.0));
+        vec3 tangent_n = normalize(encoded_n * 2.0 - 1.0);
         n = normalize(mat3(tangent, bitangent, geometric_n) * tangent_n);
     }
     if (has_height > 0.5) {
-        vec2 texel = 1.0 / vec2(textureSize(height_tex, 0));
-        float hx = texture(height_tex, uvInterp + vec2(texel.x, 0.0)).r
-                 - texture(height_tex, uvInterp - vec2(texel.x, 0.0)).r;
-        float hy = texture(height_tex, uvInterp + vec2(0.0, texel.y)).r
-                 - texture(height_tex, uvInterp - vec2(0.0, texel.y)).r;
-        n = normalize(n - tangent * hx * 8.0 - bitangent * hy * 8.0);
+        /* Screen derivatives avoid four extra texture taps and keep the
+         * diagnostic response stable across texture resolutions. */
+        float dhdx = dFdx(height);
+        float dhdy = dFdy(height);
+        vec3 displaced_dx = dpdx + geometric_n * dhdx * 8.0;
+        vec3 displaced_dy = dpdy + geometric_n * dhdy * 8.0;
+        vec3 height_n = normalize(cross(displaced_dx, displaced_dy));
+        if (dot(height_n, geometric_n) < 0.0) height_n = -height_n;
+        n = normalize(n + (height_n - geometric_n));
     }
+
+    if (preview_mode == 2) {
+        vec3 neutral_l0 = normalize(vec3(0.55, 0.20, 0.81));
+        vec3 neutral_l1 = normalize(vec3(-0.65, 0.35, 0.67));
+        float neutral = 0.12
+            + 0.58 * max(dot(n, neutral_l0), 0.0)
+            + 0.30 * max(dot(n, neutral_l1), 0.0);
+        fragColor = vec4(vec3(neutral), 1.0);
+        return;
+    }
+
+    vec4 base = straight_sample(base_color_tex, uvInterp);
+    vec4 metal_sample = straight_sample(metallic_tex, uvInterp);
+    vec4 rough_sample = straight_sample(roughness_tex, uvInterp);
+    vec3 albedo = has_base_color > 0.5
+        ? mix(vec3(0.5), srgb_to_linear(base.rgb), base.a) : vec3(0.5);
+    float metallic = has_metallic > 0.5
+        ? mix(0.0, metal_sample.r, metal_sample.a) : 0.0;
+    float roughness = has_roughness > 0.5
+        ? mix(0.5, rough_sample.r, rough_sample.a) : 0.5;
 
     /* Lightweight, deterministic environment-style PBR preview.
      * It deliberately composes every resident channel; Blender's material
@@ -728,6 +782,7 @@ def preview_shader_create_info():
     info.push_constant('MAT4', "view_proj_matrix")
     info.push_constant('VEC3', "camera_position")
     info.push_constant('FLOAT', "preview_opacity")
+    info.push_constant('INT', "preview_mode")
     for name in ("base_color", "metallic", "roughness", "normal", "height"):
         info.push_constant('FLOAT', "has_" + name)
     info.sampler(0, 'FLOAT_2D', "base_color_tex")
@@ -1070,6 +1125,32 @@ def probe_lines():
     return []
 
 
+def normalize_preview_mode(mode):
+    """Return a stable preview-mode identifier, defaulting safely to Lit."""
+    mode = str(mode or "LIT_PBR").upper()
+    return mode if mode in PREVIEW_MODE_INDEX else "LIT_PBR"
+
+
+def preview_mode_index(mode):
+    """Integer shader branch for a stable public preview identifier."""
+    return PREVIEW_MODE_INDEX[normalize_preview_mode(mode)]
+
+
+def set_preview_mode(mode):
+    """Change live display mode without restarting the GPU paint session."""
+    s = _session
+    if s is None:
+        return False
+    s.settings["preview_mode"] = normalize_preview_mode(mode)
+    return True
+
+
+def current_preview_mode():
+    if _session is None:
+        return "LIT_PBR"
+    return normalize_preview_mode(_session.settings.get("preview_mode"))
+
+
 def start_session(obj, images, region, channels=None, payloads=None,
                   settings=None):
     """Create the paint session for ``obj``/``images`` (a single Image
@@ -1090,6 +1171,8 @@ def start_session(obj, images, region, channels=None, payloads=None,
                  images[0].size[0], region.as_pointer() if region else 0,
                  channels=channel_count, payloads=payloads,
                  settings=settings)
+    s.settings["preview_mode"] = normalize_preview_mode(
+        s.settings.get("preview_mode"))
     s.coords = coords
     s.uvs = uvs
     s.tri_uv_bboxes = triangle_uv_bboxes(uvs)
@@ -2310,6 +2393,8 @@ def _draw_composed_preview(s):
         camera_position = (0.0, 0.0, 10.0)
     shader.uniform_float("camera_position", camera_position)
     shader.uniform_float("preview_opacity", 1.0)
+    shader.uniform_int("preview_mode", preview_mode_index(
+        s.settings.get("preview_mode")))
     for key in GPU_PAINT_CHANNEL_KEYS:
         shader.uniform_float("has_" + key, 1.0 if key in by_key else 0.0)
         shader.uniform_sampler(key + "_tex", by_key.get(key, fallback))
