@@ -40,7 +40,7 @@ def main():
     check("bl_info name/author/version",
           kiln.bl_info.get("name") == "Kiln"
           and kiln.bl_info.get("author") == "Teo Asinari"
-          and kiln.bl_info.get("version") == (1, 1, 2))
+          and kiln.bl_info.get("version") == (1, 2, 0))
 
     # --- register -------------------------------------------------------------
     kiln.register()
@@ -64,9 +64,12 @@ def main():
           and props["margin"].default == 16
           and props["target_faces"].default == 5000
           and props["use_auto_distances"].default is True
-          and props["use_explicit_cage"].default is False
           and props["use_painted_cage"].default is False
           and props["wire_normal_map"].default is True)
+    check("projection modes are mutually exclusive and default to surface",
+          {i.identifier for i in props["projection_mode"].enum_items}
+          == {'SURFACE', 'AUTO_CAGE', 'PAINTED_CAGE'}
+          and props["projection_mode"].default == 'SURFACE')
     check("bake type enum is NORMAL-only for now, default NORMAL",
           {i.identifier for i in props["bake_type"].enum_items}
           == {'NORMAL'} and props["bake_type"].default == 'NORMAL')
@@ -178,6 +181,11 @@ def main():
           "low_source" in draw_src
           and "'EXISTING'" in draw_src
           and "Generate from High (QuadriFlow)" in draw_src)
+    check("panel draw shows mode-specific projection controls",
+          "projection_mode" in draw_src
+          and "Surface Rays (No Cage)" not in draw_src
+          and "Max Ray Distance" in draw_src
+          and "Base Extrusion" in draw_src)
     pkg_src = open(os.path.join(_ADDON_DIR, "__init__.py")).read()
     check("no cross-imports of the sibling packages",
           "import seam_path_tool" not in pkg_src

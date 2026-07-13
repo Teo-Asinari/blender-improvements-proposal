@@ -24,7 +24,7 @@ a bake configuration).
 bl_info = {
     "name": "Kiln",
     "author": "Teo Asinari",
-    "version": (1, 1, 2),
+    "version": (1, 2, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N) > Kiln tab",
     "description": "Guided high-poly to low-poly normal baking: pair "
@@ -136,6 +136,24 @@ class KilnSettings(bpy.types.PropertyGroup):
                     "borders, hides seams at mip levels)",
         default=16, min=0, soft_max=64,
     )
+    projection_mode: EnumProperty(
+        name="Projection Mode",
+        description="How Blender finds the high-poly point for each "
+                    "low-poly texel; each mode uses a different distance "
+                    "control",
+        items=(
+            ('SURFACE', "Surface Rays (No Cage)",
+             "Cast from the low-poly along its normals; Max Ray Distance "
+             "limits the search"),
+            ('AUTO_CAGE', "Automatic Cage",
+             "Let Blender inflate the low-poly by Extrusion and cast "
+             "inward; Max Ray Distance is not used"),
+            ('PAINTED_CAGE', "Explicit / Painted Cage",
+             "Use Kiln's visible exact-topology outer cage; Base "
+             "Extrusion and optional painted weights shape it"),
+        ),
+        default='SURFACE',
+    )
     use_auto_distances: BoolProperty(
         name="Auto Distances",
         description="Derive cage extrusion (2%) and max ray distance "
@@ -156,12 +174,6 @@ class KilnSettings(bpy.types.PropertyGroup):
                     "high-poly (0 = unlimited, grabs far surfaces - "
                     "usually wrong)",
         default=0.1, min=0.0, soft_max=10.0, subtype='DISTANCE',
-    )
-    use_explicit_cage: BoolProperty(
-        name="Bake With Visible Cage",
-        description="Bake from the generated outer guide object so the "
-                    "previewed shell is the cage Blender actually uses",
-        default=False,
     )
     use_painted_cage: BoolProperty(
         name="Painted Outer Distance",
@@ -274,14 +286,21 @@ class OBJECT_OT_kiln_bake(bpy.types.Operator):
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
         readiness.invalidate()
+        mode_detail = {
+            'SURFACE': "surface rays, max distance %.4g"
+                       % info["max_ray_distance"],
+            'AUTO_CAGE': "automatic cage, extrusion %.4g"
+                         % info["extrusion"],
+            'PAINTED_CAGE': "explicit cage, base extrusion %.4g"
+                            % info["extrusion"],
+        }[info["projection_mode"]]
         self.report({'INFO'},
-                    "Baked %dpx %s map to %s%s (extrusion %.4g, max "
-                    "ray %.4g)"
+                    "Baked %dpx %s map to %s%s (%s)"
                     % (info["resolution"],
                        flowcore.BAKE_TYPES[s.bake_type]["label"].lower(),
                        info["path"],
                        ", wired into material" if info["wired"] else "",
-                       info["extrusion"], info["max_ray_distance"]))
+                       mode_detail))
         return {'FINISHED'}
 
 
@@ -294,7 +313,8 @@ class OBJECT_OT_kiln_cage_preview(bpy.types.Operator):
     @classmethod
     def poll(cls, context):
         s = getattr(context.scene, "kiln", None)
-        return s is not None and s.low_object is not None
+        return (s is not None and s.low_object is not None
+                and s.projection_mode == 'PAINTED_CAGE')
 
     def execute(self, context):
         s = context.scene.kiln
@@ -324,7 +344,8 @@ class OBJECT_OT_kiln_cage_refresh(bpy.types.Operator):
     @classmethod
     def poll(cls, context):
         s = getattr(context.scene, "kiln", None)
-        return s is not None and s.low_object is not None
+        return (s is not None and s.low_object is not None
+                and s.projection_mode == 'PAINTED_CAGE')
 
     def execute(self, context):
         s = context.scene.kiln
@@ -349,7 +370,8 @@ class OBJECT_OT_kiln_cage_paint(bpy.types.Operator):
     @classmethod
     def poll(cls, context):
         s = getattr(context.scene, "kiln", None)
-        return s is not None and s.low_object is not None
+        return (s is not None and s.low_object is not None
+                and s.projection_mode == 'PAINTED_CAGE')
 
     def execute(self, context):
         s = context.scene.kiln
@@ -561,38 +583,50 @@ class VIEW3D_PT_kiln(bpy.types.Panel):
         col.prop(s, "bake_type")
         col.prop(s, "resolution")
         col.prop(s, "margin")
+        col.prop(s, "projection_mode")
+        explanations = {
+            'SURFACE': "Low surface -> normal ray -> first high hit",
+            'AUTO_CAGE': "Inflated low cage -> inward ray -> first high hit",
+            'PAINTED_CAGE': "Visible outer cage -> inward ray -> first high hit",
+        }
+        col.label(text=explanations[s.projection_mode], icon='INFO')
         col.prop(s, "use_auto_distances")
         if s.use_auto_distances:
             if pair_ok:
                 ext, ray = flowcore.auto_distances(
                     readiness.pair_diagonal(s.high_object, s.low_object))
-                col.label(text="Auto: extrusion %.4g, ray %.4g"
-                          % (ext, ray))
+                if s.projection_mode == 'SURFACE':
+                    col.label(text="Auto Max Ray Distance: %.4g" % ray)
+                else:
+                    col.label(text="Auto Extrusion: %.4g" % ext)
         else:
-            col.prop(s, "cage_extrusion")
-            col.prop(s, "max_ray_distance")
-        guide = box.box()
-        guide.label(text="Projection Shell Guide", icon='MOD_WIREFRAME')
-        row = guide.row(align=True)
-        row.operator(OBJECT_OT_kiln_cage_preview.bl_idname,
-                     text="Hide Shells" if (s.low_object is not None
-                                            and cage.guides_visible(
-                                                s.low_object))
-                     else "Show Shells",
-                     icon='HIDE_ON' if (s.low_object is not None
-                                       and cage.guides_visible(s.low_object))
-                     else 'HIDE_OFF')
-        row.operator(OBJECT_OT_kiln_cage_refresh.bl_idname,
-                     text="Refresh", icon='FILE_REFRESH')
-        guide.prop(s, "use_explicit_cage")
-        if s.use_explicit_cage:
-            guide.label(text="Max Ray Distance is not used with a cage",
+            if s.projection_mode == 'SURFACE':
+                col.prop(s, "max_ray_distance")
+            else:
+                col.prop(s, "cage_extrusion",
+                         text=("Base Extrusion" if
+                               s.projection_mode == 'PAINTED_CAGE'
+                               else "Extrusion"))
+        if s.projection_mode == 'PAINTED_CAGE':
+            guide = box.box()
+            guide.label(text="Explicit Cage Guide", icon='MOD_WIREFRAME')
+            row = guide.row(align=True)
+            row.operator(OBJECT_OT_kiln_cage_preview.bl_idname,
+                         text="Hide Cage" if (s.low_object is not None
+                                              and cage.guides_visible(
+                                                  s.low_object))
+                         else "Show Cage",
+                         icon='HIDE_ON' if (s.low_object is not None
+                                           and cage.guides_visible(
+                                               s.low_object))
+                         else 'HIDE_OFF')
+            row.operator(OBJECT_OT_kiln_cage_refresh.bl_idname,
+                         text="Refresh", icon='FILE_REFRESH')
+            guide.prop(s, "use_painted_cage")
+            guide.operator(OBJECT_OT_kiln_cage_paint.bl_idname,
+                           icon='BRUSH_DATA')
+            guide.label(text="Paint: 0.5 = 1x, blue = 0.05x, red = 2x",
                         icon='INFO')
-        guide.prop(s, "use_painted_cage")
-        guide.operator(OBJECT_OT_kiln_cage_paint.bl_idname,
-                       icon='BRUSH_DATA')
-        guide.label(text="Paint: 0.5 = 1x, blue = 0.05x, red = 2x",
-                    icon='INFO')
         col.prop(s, "output_path")
         col.prop(s, "wire_normal_map")
         row = box.row()

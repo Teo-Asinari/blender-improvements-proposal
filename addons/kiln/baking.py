@@ -138,18 +138,23 @@ def wire_normal_map(mat, tex):
 def _bake_kwargs(settings, extrusion, max_ray, cage_object=None):
     """Operator arguments for bpy.ops.object.bake, switched on the
     bake type."""
+    mode = getattr(settings, "projection_mode", 'SURFACE')
     kwargs = dict(
         type=settings.bake_type,
         use_selected_to_active=True,
-        cage_extrusion=extrusion,
-        max_ray_distance=max_ray,
         margin=int(settings.margin),
         use_clear=True,
         target='IMAGE_TEXTURES',
     )
     if settings.bake_type == 'NORMAL':
         kwargs["normal_space"] = 'TANGENT'
-    if cage_object is not None:
+    if mode == 'SURFACE':
+        kwargs["use_cage"] = False
+        kwargs["max_ray_distance"] = max_ray
+    elif mode == 'AUTO_CAGE':
+        kwargs["use_cage"] = True
+        kwargs["cage_extrusion"] = extrusion
+    elif mode == 'PAINTED_CAGE' and cage_object is not None:
         # The generated object is already displaced by ``extrusion``;
         # applying operator cage_extrusion again would double it.
         kwargs["use_cage"] = True
@@ -157,7 +162,10 @@ def _bake_kwargs(settings, extrusion, max_ray, cage_object=None):
         kwargs["cage_extrusion"] = 0.0
         # Blender exposes Max Ray Distance only on the non-cage path. The
         # named cage supplies the ray launch geometry and direction.
-        kwargs.pop("max_ray_distance", None)
+    elif mode == 'PAINTED_CAGE':
+        raise KilnError("Explicit / Painted Cage mode has no cage object")
+    else:
+        raise KilnError("Unknown projection mode %r" % mode)
     # TODO: AO, cavity/curvature, displacement — same machinery: add
     # the per-type operator settings here (e.g. AO pass_filter /
     # sample counts), plus the enum item and BAKE_TYPES entry.
@@ -203,7 +211,7 @@ def run_bake(context, settings, report):
     mat, tex = ensure_material_target(low, img)
 
     cage_object = None
-    if getattr(settings, "use_explicit_cage", False):
+    if getattr(settings, "projection_mode", 'SURFACE') == 'PAINTED_CAGE':
         try:
             cage_object, _inner = cage.build_guides(
                 context, low, extrusion, max_ray,
@@ -313,5 +321,6 @@ def run_bake(context, settings, report):
         "resolution": resolution_px,
         "extrusion": extrusion,
         "max_ray_distance": max_ray,
+        "projection_mode": getattr(settings, "projection_mode", 'SURFACE'),
         "wired": wired,
     }

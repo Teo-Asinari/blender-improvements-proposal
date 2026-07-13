@@ -208,8 +208,18 @@ def run(kiln, baking, cage, flowcore, readiness):
           len(nt.nodes) == n_nodes,
           "%d -> %d" % (n_nodes, len(nt.nodes)))
 
+    # --- automatic cage: extrusion is the only projection distance ------------
+    s.projection_mode = 'AUTO_CAGE'
+    auto_kwargs = baking._bake_kwargs(s, 0.1, 0.2)
+    check("automatic-cage kwargs use extrusion, not max ray",
+          auto_kwargs["use_cage"] is True
+          and abs(auto_kwargs["cage_extrusion"] - 0.1) < 1e-6
+          and "max_ray_distance" not in auto_kwargs)
+    result = bpy.ops.object.kiln_bake()
+    check("automatic-cage bake FINISHED", result == {'FINISHED'})
+
     # --- explicit cage: preview geometry is the actual bake cage ----------------
-    s.use_explicit_cage = True
+    s.projection_mode = 'PAINTED_CAGE'
     # Artists commonly hide the dense source while inspecting the low-poly.
     # Kiln must still establish a valid selected-to-active set for the bake.
     high.hide_set(True)
@@ -228,7 +238,12 @@ def run(kiln, baking, cage, flowcore, readiness):
           and kwargs["cage_object"] == outer.name
           and kwargs["cage_extrusion"] == 0.0
           and "max_ray_distance" not in kwargs)
-    s.use_explicit_cage = False
+    s.projection_mode = 'SURFACE'
+    surface_kwargs = baking._bake_kwargs(s, 0.1, 0.2)
+    check("surface-ray kwargs use max ray, not extrusion",
+          surface_kwargs["use_cage"] is False
+          and abs(surface_kwargs["max_ray_distance"] - 0.2) < 1e-6
+          and "cage_extrusion" not in surface_kwargs)
 
     # --- wiring can be disabled --------------------------------------------------------------------
     low_b = low.copy()

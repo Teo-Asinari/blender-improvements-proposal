@@ -123,16 +123,21 @@ Settings, then one button:
   table so more types slot in later (see TODOs).
 - **Resolution** — 1024 / 2048 (default) / 4096, square.
 - **Margin** — bake bleed in pixels (default 16).
+- **Projection Mode** — one mutually exclusive model, with only its
+  effective control shown:
+  - **Surface Rays (No Cage):** rays follow low-poly normals; configure
+    **Max Ray Distance**.
+  - **Automatic Cage:** Blender inflates the low-poly; configure
+    **Extrusion**.
+  - **Explicit / Painted Cage:** Kiln supplies the displayed outer cage;
+    configure **Base Extrusion** and optional painted weights.
 - **Auto Distances** (default on) — see the heuristic below; disable
-  to set **Extrusion** and **Max Ray Distance** manually.
-- **Projection Shell Guide** — cached wireframe objects rather than a
-  per-frame Python overlay: **Show Shells** displays the exact-topology
-  outer cage, while **Refresh** rebuilds it after
+  to set the selected mode's one relevant distance manually.
+- **Explicit Cage Guide** (painted mode only) — a cached wireframe object
+  rather than a per-frame Python overlay: **Show Cage** displays the
+  exact-topology outer cage, while **Refresh** rebuilds it after
   numerical or painted changes. Viewport orbiting remains on Blender's
   native drawing path.
-- **Bake With Visible Cage** — passes the generated outer object to
-  Blender as the explicit named cage. Its mesh is already displaced, so
-  operator extrusion is zeroed instead of accidentally applied twice.
 - **Painted Outer Distance** — uses the low-poly vertex group
   `Kiln Cage Scale`. **Paint Outer Cage Distance** initializes it and
   enters native Weight Paint mode: weight 0.5 is the global extrusion
@@ -163,8 +168,8 @@ default `IMAGE_TEXTURES` target) → selects high + low, makes low
 active (temporarily exposing a viewport-hidden pair, then restoring its
 visibility; an excluded collection gets an actionable error) → runs
 `bpy.ops.object.bake(type='NORMAL',
-use_selected_to_active=True, …)` with cage extrusion, max ray
-distance and margin passed as **operator arguments** (probed on
+use_selected_to_active=True, …)` with exactly the selected projection
+mode's arguments and margin passed to the operator (probed on
 5.1.2 — nothing in `scene.render.bake` is mutated, so nothing can be
 left dirty) → saves the PNG → wires the material → **restores engine
 and selection in a `finally` block**, even on failure.
@@ -189,19 +194,20 @@ while a sparse silhouette can require substantial clearance.
 
 ## The extrusion heuristic
 
-With **Auto Distances** on (the panel shows the live values):
+With **Auto Distances** on, Kiln computes both candidates but passes only
+the one used by the selected mode:
 
 ```
 extrusion        = 2% of the pair's combined world-space bounding-box diagonal
 max ray distance = 4% of the same diagonal (= 2 x extrusion)
 ```
 
-Rationale: the cage must be inflated past the largest high↔low
+Rationale: a cage must be inflated past the largest high↔low
 surface deviation, which for a sane retopo is a small fraction of the
 model size — 2% comfortably covers typical QuadriFlow/manual retopo
 error without ballooning the cage into self-intersections in concave
-areas. Rays then travel from the inflated cage back through the low
-surface to the high surface — up to roughly twice the extrusion.
+areas. Surface-ray mode instead needs a bounded search distance, for which
+4% is the separate initial heuristic.
 Because both scale with the *pair's* diagonal, the defaults adapt to
 any model size. Override cases: very thin shells or interior detail
 close behind surfaces (lower both to avoid grabbing the wrong
