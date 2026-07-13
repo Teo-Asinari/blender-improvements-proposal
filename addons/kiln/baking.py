@@ -113,7 +113,19 @@ def ensure_material_target(low, img):
     return mat, tex
 
 
-def wire_normal_map(mat, tex):
+def _impasto_stack_node(mat):
+    """Find Impasto's generated material group without depending on it."""
+    if not mat.use_nodes:
+        return None
+    for node in mat.node_tree.nodes:
+        tree = getattr(node, "node_tree", None)
+        state = getattr(tree, "impasto", None) if tree is not None else None
+        if state is not None and getattr(state, "is_stack", False):
+            return node
+    return None
+
+
+def wire_normal_map(mat, tex, low=None):
     """Image Texture -> Normal Map (tangent) -> Principled BSDF Normal.
     Returns True when wired, False when the material has no Principled
     BSDF to receive it (reported as a warning, not an error)."""
@@ -131,6 +143,25 @@ def wire_normal_map(mat, tex):
         nm.location = (-300.0, -260.0)
     nm.space = 'TANGENT'
     nt.links.new(tex.outputs["Color"], nm.inputs["Color"])
+
+    # Impasto already owns the final Principled Normal socket. A direct link
+    # would bypass/damage that stack, so import the baked image as its bottom
+    # Normal layer through the optional integration seam.
+    if _impasto_stack_node(mat) is not None:
+        try:
+            from impasto import ops as impasto_ops
+            uv_name = ""
+            if low is not None and low.type == 'MESH' and low.data.uv_layers:
+                uv = low.data.uv_layers.active
+                uv_name = uv.name if uv is not None else ""
+            impasto_ops.import_normal_baseline(
+                mat, tex.image, uv_map=uv_name,
+                fallback_node_name=NORMAL_MAP_NODE_NAME)
+        except (ImportError, ValueError, RuntimeError) as exc:
+            raise KilnError(
+                "Impasto stack detected, but importing the baked normal "
+                "failed: %s" % str(exc).strip())
+        return True
     nt.links.new(nm.outputs["Normal"], principled.inputs["Normal"])
     return True
 
@@ -309,7 +340,7 @@ def run_bake(context, settings, report):
     # --- optional material wiring ----------------------------------------------
     wired = False
     if settings.wire_normal_map and settings.bake_type == 'NORMAL':
-        wired = wire_normal_map(mat, tex)
+        wired = wire_normal_map(mat, tex, low)
         if not wired:
             report({'WARNING'},
                    "Baked and saved, but the material has no Principled "

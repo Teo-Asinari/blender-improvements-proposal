@@ -69,6 +69,18 @@ change. The explicit button is the safe way to enter Texture Paint. If a layer's
 stored UV map or image was deleted, activation stops and reports what is missing
 instead of allowing Blender to paint into a different target.
 
+### Kiln normal-bake interoperability
+
+When Kiln bakes onto a material that already has an Impasto stack, the baked
+image is inserted as a **Kiln Baked Normal** Paint layer at the bottom of the
+stack. Existing layers and the active paint layer are preserved, and Impasto
+remains the sole owner of the Principled BSDF Normal input.
+
+For a file made with an older version, select the object and click **Import /
+Repair Kiln Normal** in the Impasto panel. The button reuses the image in the
+material's **Kiln Bake Target** node, so no rebake is required. Repeating the
+repair updates the same baseline layer rather than creating duplicates.
+
 ### One layer, one canvas per channel
 
 A Paint layer is one logical layer whose bindings each own a dedicated

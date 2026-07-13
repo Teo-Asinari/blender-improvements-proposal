@@ -24,7 +24,7 @@ a bake configuration).
 bl_info = {
     "name": "Kiln",
     "author": "Teo Asinari",
-    "version": (1, 2, 0),
+    "version": (1, 2, 1),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N) > Kiln tab",
     "description": "Guided high-poly to low-poly normal baking: pair "

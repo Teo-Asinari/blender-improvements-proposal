@@ -94,6 +94,83 @@ def _layer_canvas_size(layer):
     return DEFAULT_IMAGE_SIZE
 
 
+def import_normal_baseline(mat, image, uv_map="", fallback_node_name=""):
+    """Insert or update an external tangent normal image at stack bottom.
+
+    Public soft-integration seam used by Kiln. The image participates in the
+    same encoded-RGB normal chain as painted Normal layers, so the stack keeps
+    sole ownership of Principled Normal instead of two add-ons overwriting the
+    same socket. Returns the imported layer, or raises ValueError.
+
+    ``fallback_node_name`` is the material Normal Map node to restore if the
+    user later removes Impasto; a newer external baseline supersedes whatever
+    Normal link was displaced when the stack was first created.
+    """
+    tree = engine.find_stack_for_material(mat)
+    if tree is None:
+        raise ValueError("Material has no Impasto stack")
+    if image is None:
+        raise ValueError("Normal baseline image is missing")
+    compat.set_image_colorspace(image, "Non-Color")
+    image.use_fake_user = True
+    state = tree.impasto
+    active_uid = state.active_layer_uid
+    imported = None
+    with engine.stack_edit_session(tree):
+        if not any(c.name == "normal" for c in state.channels):
+            channel = state.channels.add()
+            channel.name = "normal"
+        for layer in state.layers:
+            for binding in layer.bindings:
+                if (binding.name == "normal"
+                        and layer.label == "Kiln Baked Normal"):
+                    imported = layer
+                    binding.image_name = image.name
+                    break
+            if imported is not None:
+                break
+        if imported is None:
+            imported = state.layers.add()  # append = bottom of UI/stack
+            imported.name = _unique_uid(state)
+            imported.label = "Kiln Baked Normal"
+            imported.layer_type = 'PAINT'
+            binding = imported.bindings.add()
+            binding.name = "normal"
+            binding.mode = 'SHARED'
+        imported.image_name = image.name
+        imported.uv_map = uv_map
+        binding = next(b for b in imported.bindings if b.name == "normal")
+        binding.image_name = image.name
+        binding.enabled = True
+        # Keep/re-establish it as the bottom baseline on repeated bakes.
+        index = next(i for i, layer in enumerate(state.layers)
+                     if layer.name == imported.name)
+        if index != len(state.layers) - 1:
+            state.layers.move(index, len(state.layers) - 1)
+
+        if fallback_node_name:
+            try:
+                displaced = json.loads(mat.impasto_mat.displaced_links
+                                       or "[]")
+            except Exception:
+                displaced = []
+            displaced = [entry for entry in displaced
+                         if entry.get("to_socket") != "Normal"]
+            displaced.append({
+                "from_node": fallback_node_name,
+                "from_socket": "Normal",
+                "to_socket": "Normal",
+            })
+            mat.impasto_mat.displaced_links = json.dumps(displaced)
+
+    if active_uid:
+        state.active_layer_uid = active_uid
+        state.active_index = next(
+            (i for i, layer in enumerate(state.layers)
+             if layer.name == active_uid), -1)
+    return imported
+
+
 class IMPASTO_OT_stack_init(bpy.types.Operator):
     """Create an Impasto layer stack on the active material (a new
     material is created if the object has none)"""
@@ -453,6 +530,37 @@ class IMPASTO_OT_stack_rebuild(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class IMPASTO_OT_import_kiln_normal(bpy.types.Operator):
+    """Repair/import an existing Kiln bake beneath this Impasto stack"""
+    bl_idname = "impasto.import_kiln_normal"
+    bl_label = "Impasto: Import/Repair Kiln Normal"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        mat, tree = _context_stack(context)
+        if mat is None or tree is None or not mat.use_nodes:
+            return False
+        tex = mat.node_tree.nodes.get("Kiln Bake Target")
+        return (tex is not None and tex.bl_idname == 'ShaderNodeTexImage'
+                and tex.image is not None)
+
+    def execute(self, context):
+        mat, _tree = _context_stack(context)
+        tex = mat.node_tree.nodes.get("Kiln Bake Target")
+        uv_map = _active_uv_map(context)
+        try:
+            layer = import_normal_baseline(
+                mat, tex.image, uv_map=uv_map,
+                fallback_node_name="Kiln Normal Map")
+        except ValueError as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, "%s imported beneath the Impasto stack"
+                    % layer.label)
+        return {'FINISHED'}
+
+
 class IMPASTO_OT_paint_activate(bpy.types.Operator):
     """Use one of the active Impasto paint layer's channel canvases as
     Blender's native brush canvas and enter Texture Paint mode"""
@@ -774,6 +882,7 @@ _classes = (
     IMPASTO_OT_binding_add,
     IMPASTO_OT_binding_remove,
     IMPASTO_OT_stack_rebuild,
+    IMPASTO_OT_import_kiln_normal,
     IMPASTO_OT_paint_activate,
     IMPASTO_OT_detail_paint,
     IMPASTO_OT_gpu_paint,

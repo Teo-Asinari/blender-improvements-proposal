@@ -40,6 +40,7 @@ run_one "$TESTS_DIR/test_core.py" "CORE_TESTS_PASSED" || status=1
 run_one "$TESTS_DIR/test_readiness.py" "READINESS_TESTS_PASSED" || status=1
 run_one "$TESTS_DIR/test_retopo.py" "RETOPO_TESTS_PASSED" || status=1
 run_one "$TESTS_DIR/test_cage.py" "CAGE_TESTS_PASSED" || status=1
+run_one "$TESTS_DIR/test_impasto_interop.py" "IMPASTO_INTEROP_TESTS_PASSED" || status=1
 run_one "$TESTS_DIR/test_bake.py" "BAKE_TESTS_PASSED" || status=1
 run_one "$TESTS_DIR/test_register.py" "REGISTER_TESTS_PASSED" || status=1
 

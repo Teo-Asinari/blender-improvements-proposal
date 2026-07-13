@@ -68,6 +68,15 @@ class IMPASTO_PT_main(bpy.types.Panel):
             model.CHANNEL_MAP[c.name].label for c in state.channels
             if c.enabled and c.name in model.CHANNEL_MAP)
         layout.label(text="Channels: %s" % chan_labels)
+        kiln_tex = (mat.node_tree.nodes.get("Kiln Bake Target")
+                    if mat.use_nodes else None)
+        if (kiln_tex is not None
+                and kiln_tex.bl_idname == 'ShaderNodeTexImage'
+                and kiln_tex.image is not None):
+            layout.operator(
+                ops.IMPASTO_OT_import_kiln_normal.bl_idname,
+                text="Import / Repair Kiln Normal",
+                icon='NORMALS_FACE')
 
         row = layout.row()
         row.template_list("IMPASTO_UL_layers", "", state, "layers",

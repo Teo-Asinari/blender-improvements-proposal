@@ -155,7 +155,11 @@ Settings, then one button:
 - **Wire Into Material** (default on) — after baking, connect
   `Image Texture → Normal Map (tangent) → Principled BSDF Normal` in
   the low-poly's material. Warns (doesn't fail) if the material has
-  no Principled BSDF.
+  no Principled BSDF. If that material already has an Impasto stack, Kiln
+  instead imports the baked image as the bottom **Kiln Baked Normal** layer;
+  this preserves Impasto's shader connection and all existing paint layers.
+  Older files whose normal connection was bypassed can be repaired without a
+  rebake using **Import / Repair Kiln Normal** in the Impasto panel.
 
 **Bake Normal Map** then: validates the pair and the checklist →
 remembers your render engine and selection → switches to **Cycles**
