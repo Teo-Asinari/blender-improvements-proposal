@@ -53,8 +53,10 @@ release archive.
 3. Create a new layer stack.
 4. Add a Paint layer. It creates a transparent 2048 x 2048 image using the
    mesh's currently active UV map.
-5. Select that layer and click **Paint Active Layer**. Impasto makes its image
-   Blender's explicit image-paint canvas and enters Texture Paint mode.
+5. Select that layer and click **Start Painting**. Impasto makes its image
+   Blender's explicit image-paint canvas, enters Texture Paint mode, selects
+   Blender 5.1's main Paint brush tool, and switches the invoking Solid
+   viewport to Material Preview.
 6. Use Blender's normal Texture Paint brushes. Strokes update the image sampled
    by the generated Impasto layer graph, so they appear through the material.
 7. Add Fill or Group layers, bind available channels, and adjust layer order,
@@ -79,7 +81,7 @@ existing resolution, so all canvases of one layer stay equal-sized.
 
 Blender's native brush still edits exactly one image at a time: each
 painted channel row shows a brush button that makes that channel's
-canvas the native paint target, and **Paint Active Layer** picks the
+canvas the native paint target, and **Start Painting** picks the
 layer's first painted channel. One native stroke lands in one channel —
 that is the deliberate single-channel editing path.
 
@@ -153,7 +155,7 @@ Headless tests verify target setup and graph wiring, but cannot synthesize a
 real viewport brush stroke. Before packaging a release, verify interactively:
 
 - create a stack on a UV-unwrapped mesh and add two Paint layers;
-- click **Paint Active Layer**, paint a visible stroke in Material Preview,
+- click **Start Painting**, paint a visible stroke in Material Preview,
   and confirm it appears in the Impasto material;
 - select the other layer, confirm its image becomes the canvas, and paint a
   visually distinct stroke without changing the first image;

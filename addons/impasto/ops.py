@@ -489,6 +489,7 @@ class IMPASTO_OT_paint_activate(bpy.types.Operator):
         except RuntimeError as exc:
             self.report({'ERROR'}, "Could not enter Texture Paint mode: %s" % exc)
             return {'CANCELLED'}
+        brush_selected = paint.activate_brush_tool(context)
         paint.maybe_switch_material_preview(context)
         binding = paint.paint_binding(layer, self.channel_key)
         message = "Painting %s" % layer.label
@@ -496,6 +497,8 @@ class IMPASTO_OT_paint_activate(bpy.types.Operator):
             message += " (%s)" % model.CHANNEL_MAP[binding.name].label
         if repaired:
             message += " (image colorspace repaired)"
+        if not brush_selected and not bpy.app.background:
+            message += " (Texture Paint active; select Paint tool if hidden)"
         self.report({'INFO'}, message)
         return {'FINISHED'}
 

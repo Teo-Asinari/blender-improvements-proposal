@@ -41,6 +41,35 @@ def maybe_switch_material_preview(context, enabled=None):
     return True
 
 
+def activate_brush_tool(context):
+    """Select Blender 5.1's main Texture Paint brush tool.
+
+    Mode switching and tool switching are independent in Blender: entering
+    Texture Paint can leave the remembered Select tool active, which gives no
+    brush cursor and looks as if activation failed. Use the invoking 3D view,
+    or another 3D view in the current screen for F3/menu invocations. Quietly
+    return False in background mode or when no viewport exists.
+    """
+    area = getattr(context, "area", None)
+    if area is None or area.type != 'VIEW_3D':
+        screen = getattr(context, "screen", None)
+        area = next((a for a in screen.areas if a.type == 'VIEW_3D'),
+                    None) if screen is not None else None
+    if area is None:
+        return False
+    region = next((r for r in area.regions if r.type == 'WINDOW'), None)
+    if region is None:
+        return False
+    try:
+        with context.temp_override(area=area, region=region,
+                                   space_data=area.spaces.active):
+            result = bpy.ops.wm.tool_set_by_id(
+                name="builtin.brush", space_type='VIEW_3D')
+        return 'FINISHED' in result
+    except (RuntimeError, TypeError):
+        return False
+
+
 def paint_binding(layer, channel_key=""):
     """The binding whose canvas native painting edits: the named
     channel, or the first enabled SHARED binding in registry order.

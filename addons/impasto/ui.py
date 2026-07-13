@@ -109,7 +109,7 @@ class IMPASTO_PT_main(bpy.types.Panel):
                 row.prop(layer, "opacity", slider=True)
                 self._draw_bindings(box, state, layer)
                 if layer.layer_type == 'PAINT':
-                    self._draw_paint_tools(box, layer)
+                    self._draw_paint_tools(context, box, layer)
             else:
                 box.prop(layer, "opacity", slider=True)
 
@@ -117,7 +117,7 @@ class IMPASTO_PT_main(bpy.types.Panel):
         layout.operator(ops.IMPASTO_OT_stack_rebuild.bl_idname,
                         text="Rebuild", icon='FILE_REFRESH')
 
-    def _draw_paint_tools(self, box, layer):
+    def _draw_paint_tools(self, context, box, layer):
         bound = [b.name for b in layer.bindings
                  if b.enabled and b.mode == 'SHARED'
                  and b.name in model.CHANNEL_MAP]
@@ -125,6 +125,11 @@ class IMPASTO_PT_main(bpy.types.Panel):
         row = box.row(align=True)
         row.label(text=image.name if image else "Missing image",
                   icon='IMAGE_DATA' if image else 'ERROR')
+        painting = (context.object is not None
+                    and context.object.mode == 'TEXTURE_PAINT')
+        box.label(text=("Texture Paint active" if painting
+                        else "Object Mode — press Start Painting"),
+                  icon='CHECKMARK' if painting else 'INFO')
         if 'normal' in bound:
             box.label(text="RGB normal: absolute direction", icon='INFO')
         if 'height' in bound:
@@ -141,7 +146,7 @@ class IMPASTO_PT_main(bpy.types.Panel):
             row = box.row()
             row.scale_y = 1.25
             op = row.operator(ops.IMPASTO_OT_paint_activate.bl_idname,
-                              text="Paint Active Layer",
+                              text="Start Painting",
                               icon='TPAINT_HLT')
             op.channel_key = ""
 

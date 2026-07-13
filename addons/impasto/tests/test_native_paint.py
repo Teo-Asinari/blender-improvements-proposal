@@ -74,6 +74,27 @@ try:
     uv = obj.data.uv_layers.new(name="PaintUV")
     obj.data.uv_layers.active = uv
 
+    # Kiln compatibility: a baked target arrives with an existing
+    # Image Texture -> Normal Map -> Principled Normal chain. Impasto must
+    # preserve/displace that chain without preventing Texture Paint mode.
+    mat = bpy.data.materials.new("KilnBakedMaterial")
+    mat.use_nodes = True
+    obj.data.materials.append(mat)
+    nt = mat.node_tree
+    principled = next(n for n in nt.nodes
+                      if n.bl_idname == 'ShaderNodeBsdfPrincipled')
+    baked = bpy.data.images.new("Kiln Baked Normal", 8, 8)
+    baked.colorspace_settings.name = compat.resolve_colorspace(
+        baked, "Non-Color")
+    tex = nt.nodes.new("ShaderNodeTexImage")
+    tex.image = baked
+    normal = nt.nodes.new("ShaderNodeNormalMap")
+    normal.space = 'TANGENT'
+    nt.links.new(tex.outputs["Color"], normal.inputs["Color"])
+    nt.links.new(normal.outputs["Normal"], principled.inputs["Normal"])
+    check("Kiln-like normal chain is present before stack init",
+          principled.inputs["Normal"].is_linked)
+
     check("stack init", bpy.ops.impasto.stack_init(
         template="PRINCIPLED_STANDARD") == {"FINISHED"})
     check("add paint", bpy.ops.impasto.layer_add(
