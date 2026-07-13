@@ -40,7 +40,7 @@ def main():
     check("bl_info name/author/version",
           kiln.bl_info.get("name") == "Kiln"
           and kiln.bl_info.get("author") == "Teo Asinari"
-          and kiln.bl_info.get("version") == (1, 1, 1))
+          and kiln.bl_info.get("version") == (1, 1, 2))
 
     # --- register -------------------------------------------------------------
     kiln.register()

@@ -33,34 +33,30 @@ def main():
         low = bpy.context.active_object
         low.name = "CageLow"
 
-        check("inner reach subtracts cage start from total ray",
-              abs(cage.inner_reach(0.2, 0.7) - 0.5) < 1e-9)
-        check("inner reach clamps when ray is shorter than extrusion",
-              cage.inner_reach(0.7, 0.2) == 0.0)
-
         outer, inner = cage.build_guides(
             bpy.context, low, 0.2, 0.7, False)
-        check("outer and inner guides created",
-              outer is not None and inner is not None)
+        check("outer guide created without a fictitious inner shell",
+              outer is not None and inner is None)
         check("outer topology exactly matches low",
               len(outer.data.vertices) == len(low.data.vertices)
               and len(outer.data.polygons) == len(low.data.polygons))
         check("guides share the low transform",
-              outer.matrix_world == low.matrix_world
-              and inner.matrix_world == low.matrix_world)
+              outer.matrix_world == low.matrix_world)
         check("guides are wire, in-front, non-rendering",
               outer.display_type == 'WIRE' and outer.show_in_front
-              and outer.hide_render and inner.hide_render)
+              and outer.hide_render)
         for source, out in zip(low.data.vertices, outer.data.vertices):
             delta = out.co - source.co
             check("outer vertex offset is extrusion along normal",
                   abs(delta.dot(source.normal) - 0.2) < 1e-5)
             break
-        for source, inside in zip(low.data.vertices, inner.data.vertices):
-            delta = inside.co - source.co
-            check("inner vertex offset is inward reach along normal",
-                  abs(delta.dot(source.normal) + 0.5) < 1e-5)
-            break
+        try:
+            cage.build_guides(bpy.context, low, 0.0, 0.7, False)
+            zero_rejected = False
+        except cage.CageError as exc:
+            zero_rejected = "greater than zero" in str(exc)
+        check("zero-distance explicit cage is rejected actionably",
+              zero_rejected)
 
         group = cage.ensure_paint_group(low)
         check("paint group initialized neutral at weight 0.5",
@@ -70,6 +66,10 @@ def main():
         factors = cage.painted_factors(low, True)
         check("neutral painted weights mean 1x", all(
             abs(f - 1.0) < 1e-6 for f in factors))
+        group.add([0], 0.0, 'REPLACE')
+        factors = cage.painted_factors(low, True)
+        check("paint weight zero retains non-degenerate 0.05x floor",
+              abs(factors[0] - 0.05) < 1e-6)
         group.add([0], 1.0, 'REPLACE')
         outer2, _ = cage.build_guides(
             bpy.context, low, 0.2, 0.7, True)

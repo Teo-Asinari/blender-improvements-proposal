@@ -155,6 +155,9 @@ def _bake_kwargs(settings, extrusion, max_ray, cage_object=None):
         kwargs["use_cage"] = True
         kwargs["cage_object"] = cage_object.name
         kwargs["cage_extrusion"] = 0.0
+        # Blender exposes Max Ray Distance only on the non-cage path. The
+        # named cage supplies the ray launch geometry and direction.
+        kwargs.pop("max_ray_distance", None)
     # TODO: AO, cavity/curvature, displacement — same machinery: add
     # the per-type operator settings here (e.g. AO pass_filter /
     # sample counts), plus the enum item and BAKE_TYPES entry.

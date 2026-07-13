@@ -127,7 +127,7 @@ Settings, then one button:
   to set **Extrusion** and **Max Ray Distance** manually.
 - **Projection Shell Guide** — cached wireframe objects rather than a
   per-frame Python overlay: **Show Shells** displays the exact-topology
-  outer cage and inward ray limit, while **Refresh** rebuilds them after
+  outer cage, while **Refresh** rebuilds it after
   numerical or painted changes. Viewport orbiting remains on Blender's
   native drawing path.
 - **Bake With Visible Cage** — passes the generated outer object to
@@ -136,7 +136,8 @@ Settings, then one button:
 - **Painted Outer Distance** — uses the low-poly vertex group
   `Kiln Cage Scale`. **Paint Outer Cage Distance** initializes it and
   enters native Weight Paint mode: weight 0.5 is the global extrusion
-  (1x), 0 is 0x and 1 is 2x. Return to Object Mode and press **Refresh**
+  (1x), 0 is a safe 0.05x minimum and 1 is 2x. Return to Object Mode
+  and press **Refresh**
   to inspect it; Kiln rebuilds it again immediately before baking.
 - **Output Path** — empty (default) means
   `//textures/<lowpoly>_normal.png` next to the saved `.blend`
@@ -168,19 +169,20 @@ distance and margin passed as **operator arguments** (probed on
 left dirty) → saves the PNG → wires the material → **restores engine
 and selection in a `finally` block**, even on failure.
 
-### What the two shells mean
+### What the outer shell means
 
-Blender starts selected-to-active rays at the outer cage and limits their
-total travel with Max Ray Distance. Kiln therefore draws:
+Blender starts selected-to-active inward rays at the outer cage. Kiln
+therefore draws the actual named cage supplied to the bake:
 
 ```
 outer shell = low surface + extrusion
-inner reach = low surface - max(0, max ray distance - extrusion)
 ```
 
-The inner shell is diagnostic; Blender accepts one explicit cage object,
-not separate inner and outer cages. The outer shell is the object supplied
-to the bake. A future automatic fitting tool should measure signed local
+Blender's Max Ray Distance control belongs to the non-cage path and is not
+an independent inner-shell limit when a named cage is used. Kiln therefore
+does not pretend to offer a 3DCoat-style inner shell through that setting.
+A future custom fitting/baking tool would be needed for true independent
+inner and outer control. Automatic fitting should measure signed local
 high/low separation and nearby opposing surfaces. Polygon density alone is
 not a safe fitting signal: a dense flat area may need almost no clearance,
 while a sparse silhouette can require substantial clearance.

@@ -9,7 +9,8 @@ native drawing path.
 The outer object has exactly the low-poly's topology, as required by
 ``bpy.ops.object.bake(use_cage=True, cage_object=...)``.  Its vertices are
 offset along the low-poly vertex normals.  An optional vertex group supplies
-a painted local multiplier: 0.5 is neutral (1x), 0 is 0x, 1 is 2x.
+a painted local multiplier: 0.5 is neutral (1x), 0 is a non-degenerate
+0.05x minimum, and 1 is 2x.
 """
 
 import bpy
@@ -26,15 +27,11 @@ class CageError(Exception):
     pass
 
 
-def inner_reach(extrusion, max_ray_distance):
-    """Distance below the low surface reached by a ray starting at the
-    outer cage.  Max ray distance is measured from that cage."""
-    return max(0.0, float(max_ray_distance) - float(extrusion))
-
-
 def painted_factors(low, enabled):
     """Per-vertex extrusion multipliers.  Neutral when painting is off or
-    the group does not exist.  Weight 0.5 -> 1x, hence factor = 2w."""
+    the group does not exist. Weight 0.5 -> 1x and 1 -> 2x. A small floor
+    keeps painted-blue vertices separated from the low mesh; a coincident
+    explicit cage has a degenerate inward-ray direction."""
     n = len(low.data.vertices)
     if not enabled:
         return [1.0] * n
@@ -44,7 +41,7 @@ def painted_factors(low, enabled):
     factors = []
     for vertex in low.data.vertices:
         try:
-            factors.append(2.0 * group.weight(vertex.index))
+            factors.append(max(0.05, 2.0 * group.weight(vertex.index)))
         except RuntimeError:
             factors.append(1.0)
     return factors
@@ -125,13 +122,19 @@ def build_guides(context, low, extrusion, max_ray_distance,
                  use_painted=False):
     if low is None or low.type != 'MESH' or not len(low.data.vertices):
         raise CageError("Pick a non-empty low-poly mesh first")
+    if float(extrusion) <= 1e-9:
+        raise CageError(
+            "Explicit cage extrusion must be greater than zero; at zero "
+            "the cage coincides with the low-poly and its inward ray "
+            "direction is degenerate")
     factors = painted_factors(low, use_painted)
     outer = _ensure_shell(context, low, OUTER_ROLE, extrusion,
                           factors, 1.0)
-    inner = _ensure_shell(context, low, INNER_ROLE,
-                          inner_reach(extrusion, max_ray_distance),
-                          None, -1.0)
-    return outer, inner
+    # Older Kiln builds created a second "inner" guide by subtracting max
+    # ray distance. Blender does not expose Max Ray Distance while using an
+    # explicit cage, so that shell implied control the baker does not have.
+    _remove_object(_find(low, INNER_ROLE))
+    return outer, None
 
 
 def hide_guides(low):

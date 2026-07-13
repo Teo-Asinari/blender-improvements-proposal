@@ -24,7 +24,7 @@ a bake configuration).
 bl_info = {
     "name": "Kiln",
     "author": "Teo Asinari",
-    "version": (1, 1, 1),
+    "version": (1, 1, 2),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N) > Kiln tab",
     "description": "Guided high-poly to low-poly normal baking: pair "
@@ -166,7 +166,8 @@ class KilnSettings(bpy.types.PropertyGroup):
     use_painted_cage: BoolProperty(
         name="Painted Outer Distance",
         description="Multiply outer extrusion per low-poly vertex from "
-                    "the Kiln Cage Scale group: 0.5 = 1x, 0 = 0x, 1 = 2x",
+                    "the Kiln Cage Scale group: 0.5 = 1x, 0 = minimum "
+                    "0.05x, 1 = 2x",
         default=False,
     )
     output_path: StringProperty(
@@ -285,7 +286,7 @@ class OBJECT_OT_kiln_bake(bpy.types.Operator):
 
 
 class OBJECT_OT_kiln_cage_preview(bpy.types.Operator):
-    """Show or hide cached wireframe inner/outer projection shells"""
+    """Show or hide the cached wireframe outer projection cage"""
     bl_idname = "object.kiln_cage_preview"
     bl_label = "Toggle Cage Guide"
     bl_options = {'REGISTER', 'UNDO'}
@@ -310,7 +311,7 @@ class OBJECT_OT_kiln_cage_preview(bpy.types.Operator):
         except cage.CageError as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
-        self.report({'INFO'}, "Outer and inner projection shells shown")
+        self.report({'INFO'}, "Outer projection cage shown")
         return {'FINISHED'}
 
 
@@ -570,10 +571,6 @@ class VIEW3D_PT_kiln(bpy.types.Panel):
         else:
             col.prop(s, "cage_extrusion")
             col.prop(s, "max_ray_distance")
-        if pair_ok:
-            ext, ray = baking.resolved_distances(
-                s, s.high_object, s.low_object)
-            col.label(text="Inner reach: %.4g" % cage.inner_reach(ext, ray))
         guide = box.box()
         guide.label(text="Projection Shell Guide", icon='MOD_WIREFRAME')
         row = guide.row(align=True)
@@ -588,10 +585,13 @@ class VIEW3D_PT_kiln(bpy.types.Panel):
         row.operator(OBJECT_OT_kiln_cage_refresh.bl_idname,
                      text="Refresh", icon='FILE_REFRESH')
         guide.prop(s, "use_explicit_cage")
+        if s.use_explicit_cage:
+            guide.label(text="Max Ray Distance is not used with a cage",
+                        icon='INFO')
         guide.prop(s, "use_painted_cage")
         guide.operator(OBJECT_OT_kiln_cage_paint.bl_idname,
                        icon='BRUSH_DATA')
-        guide.label(text="Paint: 0.5 = 1x, blue = 0x, red = 2x",
+        guide.label(text="Paint: 0.5 = 1x, blue = 0.05x, red = 2x",
                     icon='INFO')
         col.prop(s, "output_path")
         col.prop(s, "wire_normal_map")

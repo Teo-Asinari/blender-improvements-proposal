@@ -227,7 +227,7 @@ def run(kiln, baking, cage, flowcore, readiness):
           kwargs["use_cage"] is True
           and kwargs["cage_object"] == outer.name
           and kwargs["cage_extrusion"] == 0.0
-          and kwargs["max_ray_distance"] == 0.2)
+          and "max_ray_distance" not in kwargs)
     s.use_explicit_cage = False
 
     # --- wiring can be disabled --------------------------------------------------------------------
