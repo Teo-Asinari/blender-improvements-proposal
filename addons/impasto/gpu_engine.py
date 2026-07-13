@@ -266,6 +266,46 @@ vec4 straight_sample(sampler2D tex, vec2 uv)
     return c;
 }
 
+float ggx_distribution(float ndh, float roughness)
+{
+    float a = max(roughness * roughness, 0.025);
+    float a2 = a * a;
+    float d = ndh * ndh * (a2 - 1.0) + 1.0;
+    return a2 / max(3.14159265 * d * d, 1e-5);
+}
+
+float smith_visibility(float ndv, float ndl, float roughness)
+{
+    float k = (roughness + 1.0);
+    k = k * k * 0.125;
+    float gv = ndv / max(ndv * (1.0 - k) + k, 1e-5);
+    float gl = ndl / max(ndl * (1.0 - k) + k, 1e-5);
+    return gv * gl;
+}
+
+vec3 fresnel_schlick(float vdh, vec3 f0)
+{
+    return f0 + (vec3(1.0) - f0) * pow(1.0 - vdh, 5.0);
+}
+
+vec3 pbr_light(vec3 n, vec3 v, vec3 l, vec3 radiance, vec3 albedo,
+               float metallic, float roughness)
+{
+    vec3 h = normalize(v + l);
+    float ndv = max(dot(n, v), 0.001);
+    float ndl = max(dot(n, l), 0.0);
+    float ndh = max(dot(n, h), 0.0);
+    float vdh = max(dot(v, h), 0.0);
+    vec3 f0 = mix(vec3(0.04), albedo, metallic);
+    vec3 f = fresnel_schlick(vdh, f0);
+    vec3 specular = ggx_distribution(ndh, roughness)
+                  * smith_visibility(ndv, ndl, roughness) * f
+                  / max(4.0 * ndv * ndl, 1e-4);
+    vec3 diffuse = (vec3(1.0) - f) * (1.0 - metallic)
+                 * albedo / 3.14159265;
+    return (diffuse + specular) * radiance * ndl;
+}
+
 void main()
 {
     vec4 base = straight_sample(base_color_tex, uvInterp);
@@ -299,19 +339,27 @@ void main()
         n = normalize(n - tangent * hx * 8.0 - bitangent * hy * 8.0);
     }
 
-    /* Lightweight, deterministic PBR approximation for live feedback.
+    /* Lightweight, deterministic environment-style PBR preview.
      * It deliberately composes every resident channel; Blender's material
      * remains authoritative after an explicit/session-exit flush. */
     vec3 v = normalize(camera_position - worldPos);
-    vec3 l0 = normalize(vec3(0.35, 0.45, 0.82));
-    vec3 l1 = normalize(vec3(-0.65, 0.2, 0.55));
-    float ndl = max(dot(n, l0), 0.0) + 0.35 * max(dot(n, l1), 0.0);
-    vec3 h = normalize(l0 + v);
-    float exponent = mix(128.0, 2.0, clamp(roughness, 0.0, 1.0));
-    float spec = pow(max(dot(n, h), 0.0), exponent);
-    vec3 f0 = mix(vec3(0.04), albedo, clamp(metallic, 0.0, 1.0));
-    vec3 diffuse = albedo * (1.0 - clamp(metallic, 0.0, 1.0));
-    vec3 rgb = diffuse * (0.18 + 0.72 * ndl) + f0 * spec;
+    metallic = clamp(metallic, 0.0, 1.0);
+    roughness = clamp(roughness, 0.04, 1.0);
+    vec3 rgb = pbr_light(n, v, normalize(vec3(0.35, 0.45, 0.82)),
+                         vec3(3.0, 2.8, 2.55), albedo, metallic, roughness);
+    rgb += pbr_light(n, v, normalize(vec3(-0.72, 0.18, 0.48)),
+                     vec3(0.55, 0.72, 1.0), albedo, metallic, roughness);
+    rgb += pbr_light(n, v, normalize(vec3(0.08, -0.82, 0.35)),
+                     vec3(0.7, 0.42, 0.28), albedo, metallic, roughness);
+    float sky = clamp(n.z * 0.5 + 0.5, 0.0, 1.0);
+    vec3 environment = mix(vec3(0.035, 0.028, 0.025),
+                           vec3(0.18, 0.23, 0.32), sky);
+    vec3 f0 = mix(vec3(0.04), albedo, metallic);
+    vec3 ambient_diffuse = albedo * (1.0 - metallic) * environment;
+    vec3 ambient_specular = f0 * mix(vec3(0.32), environment * 1.8,
+                                    roughness);
+    rgb += ambient_diffuse + ambient_specular;
+    rgb = rgb / (rgb + vec3(1.0));
 
     float coverage = 0.0;
     if (has_base_color > 0.5) coverage = max(coverage, base.a);

@@ -37,7 +37,15 @@ steep_result = decision(10.036, 10.0, steep, (0.45, 0.0))
 check("steep continuous surface uses subpixel plane prediction",
       steep_result["visible"], repr(steep_result))
 check("steep surface still rejects a rear fragment",
-      not decision(10.046, 10.0, steep, (0.45, 0.0))["visible"])
+      not decision(10.08, 10.0, steep, (0.45, 0.0))["visible"])
+
+# The depth raster and UV raster do not necessarily evaluate a curved or
+# triangulated surface at precisely the same point.  Permit a bounded fraction
+# of the local pixel footprint; the former epsilon-capped formula produced
+# regular pinholes on steep/high-poly surfaces.
+subpixel_result = decision(10.052, 10.0, steep, (0.45, 0.0))
+check("subpixel raster mismatch uses local footprint allowance",
+      subpixel_result["visible"], repr(subpixel_result))
 
 # Curved surface: locally changing gradients remain crack-free when their
 # subpixel residual lies inside the bounded raster floor.

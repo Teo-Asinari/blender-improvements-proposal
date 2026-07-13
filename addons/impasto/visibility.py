@@ -102,9 +102,7 @@ def visibility_diagnostics(candidate_depth, center_depth, neighbors,
     # Prediction removes the first-order slope.  The residual allowance is
     # bounded to a fraction of one pixel, enough for raster/sample mismatch
     # without bridging a full depth discontinuity.
-    tolerance = base + policy.footprint_padding * (
-        abs(gx) * base / max(abs(gx), base)
-        + abs(gy) * base / max(abs(gy), base))
+    tolerance = base + policy.footprint_padding * (abs(gx) + abs(gy))
     return {"visible": candidate_depth <= predicted + tolerance,
             "predicted": predicted, "tolerance": tolerance,
             "gradient": (gx, gy)}
@@ -178,9 +176,7 @@ bool impasto_visible_surface(sampler2D depth_tex, vec2 suv,
     float gx = impasto_axis_gradient(c, l, r, base);
     float gy = impasto_axis_gradient(c, d, u, base);
     float predicted = c + gx * offset.x + gy * offset.y;
-    float tolerance = base + 0.25 * (
-        abs(gx) * base / max(abs(gx), base)
-        + abs(gy) * base / max(abs(gy), base));
+    float tolerance = base + 0.25 * (abs(gx) + abs(gy));
     return candidate_depth <= predicted + tolerance;
 }
 """

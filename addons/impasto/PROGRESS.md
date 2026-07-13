@@ -1,5 +1,15 @@
 # Impasto — multi-channel painting milestone progress
 
+## 0.4.1 — projected-stroke continuity and live PBR preview
+
+- Fixed staggered pinholes on steep and finely triangulated surfaces by making
+  the front-surface test honor its intended bounded sub-pixel depth footprint.
+  Discontinuity gates still prevent projection onto rear and occluded surfaces.
+- Replaced the flat fixed-light resident overlay with a compact environment-style
+  GGX preview, so metallic, roughness, tangent normal, and height remain legible
+  during a GPU-resident stroke. Blender's material remains authoritative after
+  flush/session exit; the live overlay is intentionally an approximation.
+
 Inter-session handoff file. Starting point: checkpoint commit f38372f
 (everything committed, full suite green).
 
