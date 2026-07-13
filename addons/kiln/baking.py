@@ -211,9 +211,17 @@ def run_bake(context, settings, report):
     # --- remember state, bake, restore in finally ---------------------------
     scene = context.scene
     prev_engine = scene.render.engine
-    prev_selected = [ob.name for ob in context.selected_objects]
+    # ``context.selected_objects`` excludes hidden objects. Preserve the real
+    # view-layer selection so a hidden dense source can be temporarily exposed
+    # for selected-to-active baking and restored exactly afterward.
+    prev_selected = [ob.name for ob in context.view_layer.objects
+                     if ob.select_get()]
     prev_active = context.view_layer.objects.active
     prev_active_name = prev_active.name if prev_active else None
+    prev_visibility = {
+        ob.name: (ob.hide_get(), ob.hide_viewport)
+        for ob in (high, low)
+    }
 
     if context.mode != 'OBJECT':
         bpy.ops.object.mode_set(mode='OBJECT')
@@ -224,8 +232,19 @@ def run_bake(context, settings, report):
             raise KilnError(
                 "Cannot switch to Cycles (baking requires it) - is the "
                 "Cycles render engine add-on enabled?")
-        for ob in context.selected_objects:
-            ob.select_set(False)
+        # Blender reports the misleading "No valid selected objects" when
+        # the selected source is viewport-hidden. Temporarily expose the pair;
+        # collection exclusion remains an actionable hard failure.
+        for ob in (high, low):
+            ob.hide_viewport = False
+            ob.hide_set(False)
+        if not high.visible_get() or not low.visible_get():
+            raise KilnError(
+                "High/low pair is hidden by a collection or view layer - "
+                "enable that collection for baking")
+        for ob in context.view_layer.objects:
+            if ob.select_get():
+                ob.select_set(False)
         high.select_set(True)
         low.select_set(True)
         context.view_layer.objects.active = low
@@ -246,8 +265,9 @@ def run_bake(context, settings, report):
         except Exception:
             pass
         try:
-            for ob in context.selected_objects:
-                ob.select_set(False)
+            for ob in context.view_layer.objects:
+                if ob.select_get():
+                    ob.select_set(False)
             for name in prev_selected:
                 ob = context.view_layer.objects.get(name)
                 if ob is not None:
@@ -255,6 +275,11 @@ def run_bake(context, settings, report):
             if prev_active_name is not None:
                 context.view_layer.objects.active = \
                     context.view_layer.objects.get(prev_active_name)
+            for name, (hidden, hide_viewport) in prev_visibility.items():
+                ob = context.view_layer.objects.get(name)
+                if ob is not None:
+                    ob.hide_set(hidden)
+                    ob.hide_viewport = hide_viewport
         except Exception:
             pass
 

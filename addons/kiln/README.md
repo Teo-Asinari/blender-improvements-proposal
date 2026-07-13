@@ -159,7 +159,9 @@ re-bakes never pile up `.001` copies) → ensures the low-poly has a
 node material with a named Image Texture node targeting that image,
 made the **active node** (the bake-target mechanism on 5.1.2 with the
 default `IMAGE_TEXTURES` target) → selects high + low, makes low
-active → runs `bpy.ops.object.bake(type='NORMAL',
+active (temporarily exposing a viewport-hidden pair, then restoring its
+visibility; an excluded collection gets an actionable error) → runs
+`bpy.ops.object.bake(type='NORMAL',
 use_selected_to_active=True, …)` with cage extrusion, max ray
 distance and margin passed as **operator arguments** (probed on
 5.1.2 — nothing in `scene.render.bake` is mutated, so nothing can be

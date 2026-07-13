@@ -210,9 +210,14 @@ def run(kiln, baking, cage, flowcore, readiness):
 
     # --- explicit cage: preview geometry is the actual bake cage ----------------
     s.use_explicit_cage = True
+    # Artists commonly hide the dense source while inspecting the low-poly.
+    # Kiln must still establish a valid selected-to-active set for the bake.
+    high.hide_set(True)
     result = bpy.ops.object.kiln_bake()
     outer = cage._find(low, cage.OUTER_ROLE)
     check("explicit-cage bake FINISHED", result == {'FINISHED'})
+    check("explicit-cage bake restores hidden high-poly state",
+          high.hide_get())
     check("explicit-cage bake generated exact-topology outer guide",
           outer is not None
           and len(outer.data.vertices) == len(low.data.vertices)
