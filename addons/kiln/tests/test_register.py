@@ -40,13 +40,15 @@ def main():
     check("bl_info name/author/version",
           kiln.bl_info.get("name") == "Kiln"
           and kiln.bl_info.get("author") == "Teo Asinari"
-          and kiln.bl_info.get("version") == (1, 0, 1))
+          and kiln.bl_info.get("version") == (1, 1, 0))
 
     # --- register -------------------------------------------------------------
     kiln.register()
 
     for op in ("kiln_create_lowpoly", "kiln_bake",
-               "kiln_apply_scale", "kiln_recalc_outside"):
+               "kiln_apply_scale", "kiln_recalc_outside",
+               "kiln_cage_preview", "kiln_cage_refresh",
+               "kiln_cage_paint"):
         check("operator object.%s registered" % op,
               hasattr(bpy.types, "OBJECT_OT_%s" % op)
               and getattr(bpy.ops.object, op).idname_py()
@@ -62,6 +64,8 @@ def main():
           and props["margin"].default == 16
           and props["target_faces"].default == 5000
           and props["use_auto_distances"].default is True
+          and props["use_explicit_cage"].default is False
+          and props["use_painted_cage"].default is False
           and props["wire_normal_map"].default is True)
     check("bake type enum is NORMAL-only for now, default NORMAL",
           {i.identifier for i in props["bake_type"].enum_items}

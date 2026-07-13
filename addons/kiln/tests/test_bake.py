@@ -51,7 +51,7 @@ def main():
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
     import kiln
-    from kiln import baking, flowcore, readiness
+    from kiln import baking, cage, flowcore, readiness
 
     kiln.register()
 
@@ -60,14 +60,14 @@ def main():
     real_res = dict(baking.RESOLUTIONS)
     baking.RESOLUTIONS['1K'] = 128
     try:
-        run(kiln, baking, flowcore, readiness)
+        run(kiln, baking, cage, flowcore, readiness)
     finally:
         baking.RESOLUTIONS.clear()
         baking.RESOLUTIONS.update(real_res)
         kiln.unregister()
 
 
-def run(kiln, baking, flowcore, readiness):
+def run(kiln, baking, cage, flowcore, readiness):
     s = bpy.context.scene.kiln
 
     # --- build the pair -------------------------------------------------------
@@ -207,6 +207,23 @@ def run(kiln, baking, flowcore, readiness):
     check("re-bake reused the nodes (count unchanged)",
           len(nt.nodes) == n_nodes,
           "%d -> %d" % (n_nodes, len(nt.nodes)))
+
+    # --- explicit cage: preview geometry is the actual bake cage ----------------
+    s.use_explicit_cage = True
+    result = bpy.ops.object.kiln_bake()
+    outer = cage._find(low, cage.OUTER_ROLE)
+    check("explicit-cage bake FINISHED", result == {'FINISHED'})
+    check("explicit-cage bake generated exact-topology outer guide",
+          outer is not None
+          and len(outer.data.vertices) == len(low.data.vertices)
+          and len(outer.data.polygons) == len(low.data.polygons))
+    kwargs = baking._bake_kwargs(s, 0.1, 0.2, outer)
+    check("explicit-cage kwargs use named cage without double extrusion",
+          kwargs["use_cage"] is True
+          and kwargs["cage_object"] == outer.name
+          and kwargs["cage_extrusion"] == 0.0
+          and kwargs["max_ray_distance"] == 0.2)
+    s.use_explicit_cage = False
 
     # --- wiring can be disabled --------------------------------------------------------------------
     low_b = low.copy()

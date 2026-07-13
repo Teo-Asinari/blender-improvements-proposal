@@ -109,12 +109,13 @@ world-transformed — so unapplied scale is *visible* (the guide
 stretches exactly like the remesh result would appear):
 
 - the object-space bounding box;
-- a **sample cell**: one wireframe cube of edge `v`, anchored at the
-  bounds min corner, colored by the risk band;
+- **eight sample cells**: one inward-facing wireframe cube of edge `v`
+  at every bounds corner, colored by the risk band so the guide remains
+  visible from any direction without camera-dependent logic;
 - three representative **grid slices** (one mid-plane per axis) ruled
   at spacing `v`, capped at 129 lines per direction. A slice over the
   cap is dropped entirely — a partial grid would lie about the density
-  — so at extreme density the guide falls back to box + sample cell +
+  — so at extreme density the guide falls back to box + corner cells +
   annotation. It never draws every voxel.
 - a text annotation: longest-axis cells + risk band (+ "grid capped").
 - an optional **Bounding Box Dimensions** annotation showing the drawn

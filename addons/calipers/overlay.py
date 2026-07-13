@@ -6,8 +6,9 @@ GPU, so unapplied scale is VISIBLE — the guide stretches exactly like
 the remesh result would appear):
 
 - the object-space bounding box (always);
-- a single sample cell — a wireframe cube of edge ``v`` anchored at the
-  bounds min corner, colored by the current risk band;
+- eight sample cells — one inward-facing wireframe voxel at every bounds
+  corner, colored by the current risk band so at least one remains legible
+  from any view direction;
 - three representative grid slices (one mid-plane per axis) with lines
   spaced ``v``, each direction CAPPED at :data:`SLICE_MAX_LINES`; a
   slice that would exceed the cap is dropped entirely (a partial grid
@@ -154,6 +155,29 @@ def build_cell_lines(lo, v):
     return build_box_lines(lo, hi)
 
 
+def build_corner_cell_lines(lo, hi, v):
+    """Eight inward-facing sample cells, one at every AABB corner.
+
+    Each cell extends toward the box interior and is clipped on axes whose
+    full extent is smaller than ``v``. Deliberately camera-independent: eight
+    tiny boxes are cheaper and more predictable than choosing a near corner
+    whenever the view changes.
+    """
+    pts = []
+    for corner in range(8):
+        cell_lo = []
+        cell_hi = []
+        for axis in range(3):
+            if corner & (1 << axis):
+                cell_lo.append(max(lo[axis], hi[axis] - v))
+                cell_hi.append(hi[axis])
+            else:
+                cell_lo.append(lo[axis])
+                cell_hi.append(min(hi[axis], lo[axis] + v))
+        pts.extend(build_box_lines(tuple(cell_lo), tuple(cell_hi)))
+    return pts
+
+
 def build_slice_lines(lo, hi, v, cap=SLICE_MAX_LINES):
     """(points, capped) — grid lines for three mid-axis slices.
 
@@ -201,7 +225,7 @@ def build_guide(lo, hi, v, cap=SLICE_MAX_LINES):
     slices, capped = build_slice_lines(lo, hi, v, cap)
     return {
         "box": build_box_lines(lo, hi),
-        "cell": build_cell_lines(lo, v),
+        "cell": build_corner_cell_lines(lo, hi, v),
         "slices": slices,
         "capped": capped,
     }

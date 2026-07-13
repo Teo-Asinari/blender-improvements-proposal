@@ -29,6 +29,7 @@ import bpy
 
 from . import flowcore
 from . import readiness
+from . import cage
 
 
 class KilnError(Exception):
@@ -134,7 +135,7 @@ def wire_normal_map(mat, tex):
     return True
 
 
-def _bake_kwargs(settings, extrusion, max_ray):
+def _bake_kwargs(settings, extrusion, max_ray, cage_object=None):
     """Operator arguments for bpy.ops.object.bake, switched on the
     bake type."""
     kwargs = dict(
@@ -148,6 +149,12 @@ def _bake_kwargs(settings, extrusion, max_ray):
     )
     if settings.bake_type == 'NORMAL':
         kwargs["normal_space"] = 'TANGENT'
+    if cage_object is not None:
+        # The generated object is already displaced by ``extrusion``;
+        # applying operator cage_extrusion again would double it.
+        kwargs["use_cage"] = True
+        kwargs["cage_object"] = cage_object.name
+        kwargs["cage_extrusion"] = 0.0
     # TODO: AO, cavity/curvature, displacement — same machinery: add
     # the per-type operator settings here (e.g. AO pass_filter /
     # sample counts), plus the enum item and BAKE_TYPES entry.
@@ -192,6 +199,15 @@ def run_bake(context, settings, report):
     img = ensure_bake_image(low.name, settings.bake_type, resolution_px)
     mat, tex = ensure_material_target(low, img)
 
+    cage_object = None
+    if getattr(settings, "use_explicit_cage", False):
+        try:
+            cage_object, _inner = cage.build_guides(
+                context, low, extrusion, max_ray,
+                getattr(settings, "use_painted_cage", False))
+        except cage.CageError as exc:
+            raise KilnError("Cannot build explicit cage: %s" % exc)
+
     # --- remember state, bake, restore in finally ---------------------------
     scene = context.scene
     prev_engine = scene.render.engine
@@ -216,7 +232,7 @@ def run_bake(context, settings, report):
 
         try:
             result = bpy.ops.object.bake(
-                **_bake_kwargs(settings, extrusion, max_ray))
+                **_bake_kwargs(settings, extrusion, max_ray, cage_object))
         except RuntimeError as exc:
             raise KilnError(
                 "Bake failed: %s" % str(exc).strip().splitlines()[-1])

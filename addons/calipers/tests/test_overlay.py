@@ -141,6 +141,19 @@ def main():
     check("cell anchored at min corner, edge v",
           min(p[0] for p in cell) == -1.0
           and abs(max(p[0] for p in cell) - (-0.75)) < 1e-9)
+    corner_cells = overlay.build_corner_cell_lines(
+        (-1.0, -2.0, -3.0), (1.0, 2.0, 3.0), 0.25)
+    check("corner cells: 8 x 24 endpoints", len(corner_cells) == 192,
+          len(corner_cells))
+    check("corner cells reach all eight bounds corners",
+          all(overlay._corner((-1.0, -2.0, -3.0),
+                              (1.0, 2.0, 3.0), i) in corner_cells
+              for i in range(8)))
+    clipped = overlay.build_corner_cell_lines(
+        (0.0, 0.0, 0.0), (0.1, 0.2, 0.3), 1.0)
+    check("oversized corner cells remain clipped to bounds",
+          all(0.0 <= p[0] <= 0.1 and 0.0 <= p[1] <= 0.2
+              and 0.0 <= p[2] <= 0.3 for p in clipped))
 
     # --- pure geometry: slices ------------------------------------------------
     lo, hi = (-1.0,) * 3, (1.0,) * 3
@@ -176,7 +189,7 @@ def main():
     # build_guide assembles all parts + cap flag
     guide = overlay.build_guide(lo, hi, 0.0001)
     check("build_guide: box+cell survive the fallback",
-          len(guide["box"]) == 24 and len(guide["cell"]) == 24
+          len(guide["box"]) == 24 and len(guide["cell"]) == 192
           and guide["capped"] and len(guide["slices"]) == 0)
 
     # bounding dimensions match the transformed edges of the drawn box

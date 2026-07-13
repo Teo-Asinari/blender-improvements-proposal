@@ -24,7 +24,7 @@ a bake configuration).
 bl_info = {
     "name": "Kiln",
     "author": "Teo Asinari",
-    "version": (1, 0, 1),
+    "version": (1, 1, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N) > Kiln tab",
     "description": "Guided high-poly to low-poly normal baking: pair "
@@ -42,11 +42,13 @@ if "flowcore" in locals():
     flowcore = importlib.reload(flowcore)
     readiness = importlib.reload(readiness)
     retopo = importlib.reload(retopo)
+    cage = importlib.reload(cage)
     baking = importlib.reload(baking)
 else:
     from . import flowcore
     from . import readiness
     from . import retopo
+    from . import cage
     from . import baking
 
 
@@ -154,6 +156,18 @@ class KilnSettings(bpy.types.PropertyGroup):
                     "high-poly (0 = unlimited, grabs far surfaces - "
                     "usually wrong)",
         default=0.1, min=0.0, soft_max=10.0, subtype='DISTANCE',
+    )
+    use_explicit_cage: BoolProperty(
+        name="Bake With Visible Cage",
+        description="Bake from the generated outer guide object so the "
+                    "previewed shell is the cage Blender actually uses",
+        default=False,
+    )
+    use_painted_cage: BoolProperty(
+        name="Painted Outer Distance",
+        description="Multiply outer extrusion per low-poly vertex from "
+                    "the Kiln Cage Scale group: 0.5 = 1x, 0 = 0x, 1 = 2x",
+        default=False,
     )
     output_path: StringProperty(
         name="Output Path",
@@ -267,6 +281,97 @@ class OBJECT_OT_kiln_bake(bpy.types.Operator):
                        info["path"],
                        ", wired into material" if info["wired"] else "",
                        info["extrusion"], info["max_ray_distance"]))
+        return {'FINISHED'}
+
+
+class OBJECT_OT_kiln_cage_preview(bpy.types.Operator):
+    """Show or hide cached wireframe inner/outer projection shells"""
+    bl_idname = "object.kiln_cage_preview"
+    bl_label = "Toggle Cage Guide"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        s = getattr(context.scene, "kiln", None)
+        return s is not None and s.low_object is not None
+
+    def execute(self, context):
+        s = context.scene.kiln
+        low = s.low_object
+        if cage.guides_visible(low):
+            cage.hide_guides(low)
+            self.report({'INFO'}, "Kiln cage guide hidden")
+            return {'FINISHED'}
+        extrusion, max_ray = baking.resolved_distances(
+            s, s.high_object, low)
+        try:
+            cage.build_guides(context, low, extrusion, max_ray,
+                              s.use_painted_cage)
+        except cage.CageError as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, "Outer and inner projection shells shown")
+        return {'FINISHED'}
+
+
+class OBJECT_OT_kiln_cage_refresh(bpy.types.Operator):
+    """Rebuild projection shells after distance or weight painting changes"""
+    bl_idname = "object.kiln_cage_refresh"
+    bl_label = "Refresh Cage Guide"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        s = getattr(context.scene, "kiln", None)
+        return s is not None and s.low_object is not None
+
+    def execute(self, context):
+        s = context.scene.kiln
+        extrusion, max_ray = baking.resolved_distances(
+            s, s.high_object, s.low_object)
+        try:
+            cage.build_guides(context, s.low_object, extrusion, max_ray,
+                              s.use_painted_cage)
+        except cage.CageError as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, "Kiln cage guide refreshed")
+        return {'FINISHED'}
+
+
+class OBJECT_OT_kiln_cage_paint(bpy.types.Operator):
+    """Initialize the cage multiplier and enter Blender Weight Paint mode"""
+    bl_idname = "object.kiln_cage_paint"
+    bl_label = "Paint Outer Cage Distance"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        s = getattr(context.scene, "kiln", None)
+        return s is not None and s.low_object is not None
+
+    def execute(self, context):
+        s = context.scene.kiln
+        low = s.low_object
+        if context.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        for obj in context.selected_objects:
+            obj.select_set(False)
+        low.hide_set(False)
+        low.hide_select = False
+        low.select_set(True)
+        context.view_layer.objects.active = low
+        cage.ensure_paint_group(low)
+        cage.hide_guides(low)
+        s.use_painted_cage = True
+        try:
+            bpy.ops.object.mode_set(mode='WEIGHT_PAINT')
+        except RuntimeError as exc:
+            self.report({'ERROR'}, "Could not enter Weight Paint: %s"
+                        % str(exc).strip().splitlines()[-1])
+            return {'CANCELLED'}
+        self.report({'INFO'}, "Paint Kiln Cage Scale: 0.5 = 1x; then "
+                    "return to Object Mode and Refresh Cage Guide")
         return {'FINISHED'}
 
 
@@ -465,6 +570,29 @@ class VIEW3D_PT_kiln(bpy.types.Panel):
         else:
             col.prop(s, "cage_extrusion")
             col.prop(s, "max_ray_distance")
+        if pair_ok:
+            ext, ray = baking.resolved_distances(
+                s, s.high_object, s.low_object)
+            col.label(text="Inner reach: %.4g" % cage.inner_reach(ext, ray))
+        guide = box.box()
+        guide.label(text="Projection Shell Guide", icon='MOD_WIREFRAME')
+        row = guide.row(align=True)
+        row.operator(OBJECT_OT_kiln_cage_preview.bl_idname,
+                     text="Hide Shells" if (s.low_object is not None
+                                            and cage.guides_visible(
+                                                s.low_object))
+                     else "Show Shells",
+                     icon='HIDE_ON' if (s.low_object is not None
+                                       and cage.guides_visible(s.low_object))
+                     else 'HIDE_OFF')
+        row.operator(OBJECT_OT_kiln_cage_refresh.bl_idname,
+                     text="Refresh", icon='FILE_REFRESH')
+        guide.prop(s, "use_explicit_cage")
+        guide.prop(s, "use_painted_cage")
+        guide.operator(OBJECT_OT_kiln_cage_paint.bl_idname,
+                       icon='BRUSH_DATA')
+        guide.label(text="Paint: 0.5 = 1x, blue = 0x, red = 2x",
+                    icon='INFO')
         col.prop(s, "output_path")
         col.prop(s, "wire_normal_map")
         row = box.row()
@@ -493,6 +621,9 @@ _classes = (
     KilnSettings,
     OBJECT_OT_kiln_create_lowpoly,
     OBJECT_OT_kiln_bake,
+    OBJECT_OT_kiln_cage_preview,
+    OBJECT_OT_kiln_cage_refresh,
+    OBJECT_OT_kiln_cage_paint,
     OBJECT_OT_kiln_apply_scale,
     OBJECT_OT_kiln_recalc_outside,
     VIEW3D_PT_kiln,
@@ -512,6 +643,7 @@ def register():
 
 
 def unregister():
+    cage.remove_all_guides()
     for menu_name in _MENUS:
         menu = getattr(bpy.types, menu_name, None)
         if menu is not None:
