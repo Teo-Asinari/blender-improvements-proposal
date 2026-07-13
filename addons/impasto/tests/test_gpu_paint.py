@@ -185,6 +185,20 @@ try:
     gpu_engine.set_cursor(21, 37)
     check("GPU reticle tracks viewport mouse coordinates",
           gpu_engine.cursor_position() == (21.0, 37.0))
+    refreshed_brush = dict(brush)
+    refreshed_brush["color"] = (0.2, 0.4, 0.6)
+    refreshed_brush["height_strength"] = 0.125
+    refreshed = gpu_engine.stroke_payloads(
+        ("base_color", "height"), refreshed_brush)
+    check("GPU values refresh between strokes without restart",
+          gpu_engine.update_stroke_settings(
+              refreshed, radius=73.0, hardness=0.25))
+    current_payloads, current_settings = \
+        gpu_engine.stroke_settings_snapshot()
+    check("GPU session uses refreshed payload, radius and hardness",
+          current_payloads == refreshed
+          and current_settings["radius"] == 73.0
+          and current_settings["hardness"] == 0.25)
     gpu_engine.begin_stroke(10.0, 10.0, 1.0)
     gpu_engine.move_stroke(30.0, 10.0, 1.0, 40.0)
     check("stroke state tracks headlessly", gpu_engine.stroke_active())

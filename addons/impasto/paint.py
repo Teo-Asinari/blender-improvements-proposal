@@ -183,6 +183,13 @@ def capture_native_state(context):
         "brush": brush,
         "brush_asset": getattr(settings, "brush_asset_reference", None),
     }
+    unified = unified_paint_settings(context)
+    if unified is not None:
+        state.update({
+            "unified": unified,
+            "unified_color": tuple(unified.color),
+            "unified_secondary_color": tuple(unified.secondary_color),
+        })
     if brush is not None:
         state.update({
             "color": tuple(brush.color),
@@ -220,3 +227,8 @@ def restore_native_state(context, state):
         brush.color = state["color"]
         brush.secondary_color = state["secondary_color"]
         brush.blend = state["blend"]
+    unified = state.get("unified")
+    current_unified = unified_paint_settings(context)
+    if unified is not None and current_unified is not None:
+        current_unified.color = state["unified_color"]
+        current_unified.secondary_color = state["unified_secondary_color"]

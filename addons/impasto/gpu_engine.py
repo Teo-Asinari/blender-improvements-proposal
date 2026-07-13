@@ -986,6 +986,35 @@ def cursor_position():
     return _session.cursor if _session is not None else None
 
 
+def update_stroke_settings(payloads, radius=None, hardness=None):
+    """Refresh values sampled at the next pen-down without restarting.
+
+    The target images and channel order are fixed for a session, but brush
+    values are not. This lets the N-panel remain useful between strokes.
+    """
+    s = _session
+    if s is None or s.stroke_active:
+        return False
+    refreshed = list(payloads)
+    if len(refreshed) != s.channels:
+        raise ValueError("payload count must match session channels")
+    s.payloads = refreshed
+    s.target_batches = plan_target_batches(s.payloads)
+    if radius is not None:
+        s.settings["radius"] = float(radius)
+    if hardness is not None:
+        s.settings["hardness"] = float(hardness)
+    return True
+
+
+def stroke_settings_snapshot():
+    """Current payload/settings snapshot, primarily a headless-test seam."""
+    if _session is None:
+        return None
+    return ([dict(item) for item in _session.payloads],
+            dict(_session.settings))
+
+
 def take_pending_pixels():
     """List of (numpy array, image_name) pairs — one per channel —
     awaiting the Image writes, or None. Called from the modal operator

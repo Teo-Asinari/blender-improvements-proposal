@@ -727,6 +727,11 @@ def replay_native_stroke(context, layer, stroke, area=None, region=None):
             color, blend = native_channel_style(layer, channel_key)
             brush.color = color
             brush.blend = blend
+            unified = paint.unified_paint_settings(context)
+            if unified is not None:
+                # Blender 5.1 defaults to unified color, which overrides the
+                # Brush datablock color during image-paint replay.
+                unified.color = color
             if area is not None and region is not None:
                 with context.temp_override(area=area, region=region,
                                            space_data=area.spaces.active):
@@ -967,6 +972,9 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         paint.maybe_switch_material_preview(context)
 
         self._region = region
+        self._tree_name = tree.name
+        self._layer_uid = layer.name
+        self._channel_keys = tuple(keys)
         self._radius = layer.brush_radius
         self._stopping = False
         gpu_engine.set_cursor(event.mouse_x - region.x,
@@ -990,6 +998,19 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         rx, ry = self._mouse_region(event)
         return (0 <= rx < self._region.width
                 and 0 <= ry < self._region.height)
+
+    def _refresh_stroke_settings(self):
+        tree = bpy.data.node_groups.get(self._tree_name)
+        layer = (tree.impasto.layers.get(self._layer_uid)
+                 if tree is not None else None)
+        if layer is None:
+            raise paint.PaintTargetError("The active paint layer disappeared")
+        payloads = gpu_engine.stroke_payloads(
+            self._channel_keys, _gpu_brush(layer))
+        self._radius = layer.brush_radius
+        gpu_engine.update_stroke_settings(
+            payloads, radius=layer.brush_radius,
+            hardness=layer.brush_hardness)
 
     def _apply_pending_sync(self):
         """Write a finished stroke's readback into the channel Image
@@ -1051,6 +1072,11 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         etype = event.type
         if etype == 'LEFTMOUSE':
             if event.value == 'PRESS' and self._inside_region(event):
+                try:
+                    self._refresh_stroke_settings()
+                except (ValueError, paint.PaintTargetError) as exc:
+                    self.report({'ERROR'}, str(exc))
+                    return self._finish(context)
                 rx, ry = self._mouse_region(event)
                 gpu_engine.begin_stroke(rx, ry, event.pressure)
                 self._region.tag_redraw()

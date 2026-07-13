@@ -175,13 +175,19 @@ try:
     settings = bpy.context.scene.tool_settings.image_paint
     settings.canvas = images["base_color"]
     settings.mode = 'IMAGE'
+    unified = paint.unified_paint_settings(bpy.context)
+    original_unified_color = tuple(unified.color)
     native_state = paint.capture_native_state(bpy.context)
     settings.canvas = images["metallic"]
     settings.mode = 'MATERIAL'
+    unified.color = (0.17, 0.29, 0.41)
     paint.restore_native_state(bpy.context, native_state)
     check("native replay restores canvas and paint mode",
           settings.canvas is images["base_color"]
           and settings.mode == 'IMAGE')
+    check("native replay restores Blender 5.1 unified brush color",
+          all(abs(a - b) < 1e-6 for a, b in
+              zip(unified.color, original_unified_color)))
     check("native multi-channel operator registered and pollable",
           getattr(bpy.types, "IMPASTO_OT_native_multichannel_paint", None)
           is not None

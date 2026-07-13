@@ -169,7 +169,9 @@ class IMPASTO_PT_main(bpy.types.Panel):
         gpu_keys = replay_keys
         if gpu_keys:
             col = box.column(align=True)
-            col.label(text="Multi-Channel Painting", icon='BRUSH_DATA')
+            col.label(text="Shared Multi-Channel Values", icon='BRUSH_DATA')
+            col.label(text="Used by Blender replay and GPU paint",
+                      icon='INFO')
             col.label(text="Targets (%d): %s" % (
                 len(gpu_keys), ", ".join(
                     model.CHANNEL_MAP[k].label for k in gpu_keys)))
@@ -177,7 +179,7 @@ class IMPASTO_PT_main(bpy.types.Panel):
                 col.label(text="Add channels below for simultaneous paint",
                           icon='INFO')
             if 'base_color' in gpu_keys:
-                col.prop(layer, "paint_color", text="Color")
+                col.prop(layer, "paint_color", text="Stroke Base Color")
             if 'roughness' in gpu_keys:
                 col.prop(layer, "paint_roughness", text="Stroke Roughness",
                          slider=True)
