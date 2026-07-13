@@ -36,6 +36,7 @@ run_one "$TESTS_DIR/test_multichannel_paint.py" "IMPASTO_MULTICHANNEL_PASSED" ||
 run_one "$TESTS_DIR/test_gpu_paint.py" "IMPASTO_GPU_PAINT_PASSED" || status=1
 run_one "$TESTS_DIR/test_scalar_channels.py" "IMPASTO_SCALAR_CHANNELS_PASSED" || status=1
 run_one "$TESTS_DIR/test_rendered_semantics.py" "IMPASTO_RENDERED_SEMANTICS_PASSED" || status=1
+run_one "$TESTS_DIR/test_pbr_canvas_semantics.py" "IMPASTO_PBR_CANVAS_PASSED" || status=1
 run_one "$TESTS_DIR/test_normal_paint.py" "IMPASTO_NORMAL_PAINT_PASSED" || status=1
 run_one "$TESTS_DIR/test_persistence.py" "IMPASTO_PERSISTENCE_PASSED" || status=1
 run_one "$TESTS_DIR/test_restore.py" "IMPASTO_RESTORE_PASSED" || status=1

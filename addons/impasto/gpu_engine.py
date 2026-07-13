@@ -250,8 +250,12 @@ void main()
 PREVIEW_FRAG_SRC = """
 void main()
 {
+    /* paint_tex accumulates PREMULTIPLIED alpha (see premultiply_canvas):
+     * un-premultiply for display so the straight-alpha 'ALPHA' blend the
+     * preview draws with does not darken soft rims twice. */
     vec4 c = texture(paint_tex, uvInterp);
-    fragColor = vec4(c.rgb, c.a * preview_opacity);
+    vec3 rgb = (c.a > 1e-6) ? (c.rgb / c.a) : vec3(0.0);
+    fragColor = vec4(rgb, c.a * preview_opacity);
 }
 """
 
@@ -627,6 +631,43 @@ def linear_to_srgb(v):
     if v <= 0.0031308:
         return v * 12.92
     return 1.055 * v ** (1.0 / 2.4) - 0.055
+
+
+def premultiply_canvas(arr):
+    """Straight-alpha canvas pixels -> the PREMULTIPLIED space the MIX
+    dab framebuffer accumulates in. In place; ``arr`` is float32 RGBA
+    (flat or shaped); returns ``arr``.
+
+    ``gpu.state.blend_set('ALPHA')`` is source-over with the destination
+    held in premultiplied alpha (rgb: SRC_ALPHA / ONE_MINUS_SRC_ALPHA,
+    a: ONE / ONE_MINUS_SRC_ALPHA), so every accumulated texel stores
+    ``(value*coverage, coverage)``.  Image canvases are STRAIGHT alpha —
+    the compiled node chains read the RGB as the channel VALUE and gate
+    the mix by the alpha — so both boundaries must convert: premultiply
+    on upload (here), divide on readback (unpremultiply_readback).
+    Skipping the conversions was the v0.4 regression: soft brush rims
+    and tablet pressure (any texel with a < 1) synced ``value*a`` back
+    into the canvas, breaking Metallic/Roughness levels and decoding
+    Tangent Normal rims into garbage directions in Material Preview.
+    """
+    view = arr.reshape(-1, 4)
+    view[:, :3] *= view[:, 3:4]
+    return arr
+
+
+def unpremultiply_readback(arr):
+    """Premultiplied MIX-framebuffer pixels -> straight-alpha canvas
+    pixels. Returns a new float32 copy (the session's CPU mirror must
+    stay in framebuffer space); a<=0 texels get rgb=0 (transparent —
+    the compiled chains ignore their value)."""
+    import numpy as np
+    out = np.array(arr, dtype=np.float32, copy=True)
+    view = out.reshape(-1, 4)
+    alpha = view[:, 3:4]
+    covered = alpha > 1e-8
+    np.divide(view[:, :3], alpha, out=view[:, :3], where=covered)
+    view[:, :3] *= covered
+    return out
 
 
 def stroke_payloads(channel_keys, brush):
@@ -1082,6 +1123,16 @@ def _draw_pixel():
 # ---------------------------------------------------------------------------
 
 
+def _channel_blend(s, index):
+    """Blend class of channel ``index``: 'MIX' channels accumulate
+    premultiplied alpha (convert at both CPU<->GPU boundaries); 'ADD'
+    (Height) accumulates raw signed values on an opaque canvas and
+    round-trips byte-identically."""
+    if 0 <= index < len(s.payloads):
+        return s.payloads[index].get("blend", "MIX")
+    return "MIX"
+
+
 def _ensure_gpu(s):
     if s.gpu_ready:
         return
@@ -1111,7 +1162,7 @@ def _ensure_gpu(s):
     # GPU targets so an untouched channel round-trips losslessly.
     seeded_count = 0
     s.paint_texs = []
-    for image_name in s.image_names[:n]:
+    for i, image_name in enumerate(s.image_names[:n]):
         tex = None
         image = bpy.data.images.get(image_name)
         if (image is not None and image.size[0] == size
@@ -1119,6 +1170,10 @@ def _ensure_gpu(s):
             try:
                 arr = np.empty(size * size * 4, dtype=np.float32)
                 image.pixels.foreach_get(arr)
+                if _channel_blend(s, i) != "ADD":
+                    # MIX targets accumulate premultiplied (see
+                    # premultiply_canvas); canvases store straight.
+                    premultiply_canvas(arr)
                 buf = gpu.types.Buffer('FLOAT', (size, size, 4),
                                        arr.reshape(size, size, 4))
                 tex = gpu.types.GPUTexture((size, size),
@@ -1708,6 +1763,12 @@ def _finalize_stroke_gpu(s):
                     and image.size[1] == size):
                 try:
                     image.pixels.foreach_get(mirror)
+                    if _channel_blend(s, i) != "ADD":
+                        # Mirrors live in framebuffer space: sub-rect
+                        # reads scatter premultiplied MIX pixels into
+                        # them, so the straight canvas seed converts up
+                        # front (zeros are identical in both spaces).
+                        premultiply_canvas(mirror)
                 except Exception:
                     pass
             s.cpu_mirrors.append(mirror)
@@ -1782,8 +1843,14 @@ def _finalize_stroke_gpu(s):
         except Exception:
             stats["tex_read_ms"] = float("nan")
 
-    s.pending_pixels = [(mirror, name) for mirror, name
-                        in zip(s.cpu_mirrors, s.image_names)]
+    # Canvases store STRAIGHT alpha: MIX mirrors (premultiplied
+    # framebuffer space) divide back out on a copy; ADD (Height)
+    # mirrors sync raw, exactly as before.
+    s.pending_pixels = [
+        (mirror if _channel_blend(s, i) == "ADD"
+         else unpremultiply_readback(mirror), name)
+        for i, (mirror, name)
+        in enumerate(zip(s.cpu_mirrors, s.image_names))]
     s.pending_gpu_stats = stats
 
 

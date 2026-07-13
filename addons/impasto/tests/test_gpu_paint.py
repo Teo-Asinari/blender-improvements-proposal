@@ -102,6 +102,42 @@ try:
     except ValueError:
         check("unpaintable channels are rejected", True)
 
+    # ---- straight <-> premultiplied canvas boundary conversions -------
+    # gpu 'ALPHA' blending accumulates premultiplied; canvases are
+    # straight alpha and the compiled chains mix VALUE by alpha, so both
+    # boundaries must convert (the Material Preview scalar/normal
+    # regression).
+    import numpy as np
+    straight = np.array([1.0, 0.5, 0.25, 0.5,     # half-covered texel
+                         0.3, 0.6, 0.9, 0.0,      # uncovered (rgb junk)
+                         0.9, 0.8, 0.7, 1.0],     # opaque texel
+                        dtype=np.float32)
+    pm = gpu_engine.premultiply_canvas(straight.copy())
+    check("premultiply scales rgb by alpha and preserves alpha",
+          np.allclose(pm.reshape(-1, 4)[:, :3],
+                      [[0.5, 0.25, 0.125], [0.0, 0.0, 0.0],
+                       [0.9, 0.8, 0.7]])
+          and np.allclose(pm.reshape(-1, 4)[:, 3], [0.5, 0.0, 1.0]))
+    rt = gpu_engine.unpremultiply_readback(pm)
+    check("readback un-premultiply restores straight values "
+          "(rgb zeroed where a=0)",
+          np.allclose(rt.reshape(-1, 4),
+                      [[1.0, 0.5, 0.25, 0.5], [0.0, 0.0, 0.0, 0.0],
+                       [0.9, 0.8, 0.7, 1.0]], atol=1e-6))
+    check("readback conversion copies (mirrors stay in fb space)",
+          rt is not pm and np.allclose(pm.reshape(-1, 4)[0, :3],
+                                       [0.5, 0.25, 0.125]))
+    # One source-over dab at coverage a onto a transparent canvas must
+    # round-trip to (value, a) — NOT (value*a, a), which was the bug.
+    dab_v, dab_a = 0.8, 0.5
+    fb = np.zeros(4, dtype=np.float32)             # premult accumulator
+    fb[:3] = dab_v * dab_a + fb[:3] * (1.0 - dab_a)
+    fb[3] = dab_a + fb[3] * (1.0 - dab_a)
+    synced = gpu_engine.unpremultiply_readback(fb).reshape(4)
+    check("soft dab syncs back the painted value at its coverage",
+          abs(synced[0] - dab_v) < 1e-6 and abs(synced[3] - dab_a) < 1e-6,
+          str(synced.tolist()))
+
     # ---- blend-batch grouping (one blend mode per MRT draw) -----------
     mixed = [{"blend": "MIX"}, {"blend": "ADD"}, {"blend": "MIX"},
              {"blend": "MIX"}, {"blend": "MIX"}, {"blend": "MIX"}]

@@ -77,9 +77,78 @@ Inter-session handoff file. Starting point: checkpoint commit f38372f
 - 2K x 4ch fits the ~200 ms pen-lift budget; 4K x 4ch does not
   (~417 ms) — default 2048, expose per-layer choice.
 
+## Session 2026-07-12 (later): Material Preview PBR regression fixed
+
+User report from GUI testing: "Impasto metallic and roughness channels,
+as well as tangent normal, all seem broken in the material preview
+pane" (base color behaves).
+
+**Root cause** (one cause, all three channels): the MIX dab
+framebuffer composites with `gpu.state.blend_set('ALPHA')` — i.e.
+source-over with the destination in PREMULTIPLIED alpha (rgb:
+SRC_ALPHA/ONE_MINUS_SRC_ALPHA, a: ONE/ONE_MINUS_SRC_ALPHA). The
+pen-lift sync wrote that framebuffer content RAW into the canvases,
+but canvases are STRAIGHT alpha and the compiled chains mix the RGB
+*value* by the canvas *alpha*. So every texel the GPU brush deposited
+with coverage a < 1 (the soft rim — half the footprint at default
+hardness 0.5 — and any tablet pressure < 1) stored `value*a` where
+`value` was painted:
+
+- Metallic/Roughness: `mix(prev, v*a, a)` instead of `mix(prev, v, a)`
+  — levels collapse toward 0 wherever coverage < 1.
+- Tangent Normal: the premultiplied encode `(0.5,0.5,1)*a` decodes
+  through the Normal Map node into garbage directions (tilts toward
+  (-1,-1,-1)) around every stroke.
+- Base Color has the *same* defect but it only reads as soft-rim
+  darkening — hence "base color behaves".
+
+Why the green suite missed it: `test_rendered_semantics.py` renders
+EEVEE but only VALUE-mode bindings plus one alpha=1 height canvas;
+nothing rendered a per-binding paint canvas containing coverage < 1
+GPU-stroke content. (EEVEE itself is fine: headless EXR probes show
+unpainted transparent canvases and straight alpha=1 content render
+exactly right — verified before fixing.)
+
+**Fix** (`gpu_engine.py`, write-path boundaries only — no node-graph
+changes needed, the compiled graph was correct):
+
+- `premultiply_canvas(arr)` / `unpremultiply_readback(arr)` — pure
+  numpy helpers (headless-testable).
+- `_ensure_gpu`: canvas -> GPU seed premultiplies MIX targets.
+- `_finalize_stroke_gpu`: CPU mirrors (framebuffer space) premultiply
+  their canvas seed; `pending_pixels` un-premultiplies MIX mirrors on
+  a copy before `Image.pixels.foreach_set`. ADD (Height) targets
+  round-trip raw, byte-identical to before (opaque a=1 canvas).
+- `PREVIEW_FRAG_SRC`: un-premultiplies for display (the preview was
+  double-darkening rims by drawing premult content with ALPHA blend).
+
+**Tests**:
+
+- `test_gpu_paint.py`: pure conversion checks (round-trip, a=0 rgb
+  zeroing, mirror-copy semantics, soft-dab sync = value at coverage).
+- NEW `test_pbr_canvas_semantics.py` (IMPASTO_PBR_CANVAS_PASSED, wired
+  into run_tests.sh; 12 files now): EEVEE-rendered EXR probes of
+  per-binding Metallic/Roughness/Normal canvases — unpainted band =
+  channel default; straight alpha=1 band = painted value; a
+  GPU-stroke band driven through the exact fixed pipeline math
+  (seed premultiply -> source-over composite -> unpremultiply
+  readback) = value mixed at coverage. Fails with the old raw sync
+  (measured pre-fix: metallic 0.25 vs 0.5, roughness 0.5 vs 0.75,
+  normals tilted garbage).
+
+**Headless verification limits**: GPU objects can't exist in
+`--background`, so the actual `blend_set('ALPHA')` equation and the
+preview shader change are asserted against Blender's documented GPU
+blend definitions + CPU simulation, not a live framebuffer. Material
+Preview shading = EEVEE, and EEVEE renders were verified headless.
+GUI pass should confirm: soft-rim strokes on metallic/roughness/normal
+now shade correctly after pen-lift, and the in-stroke preview overlay
+matches the synced result.
+
 ## Next session (if any)
 
-- GUI acceptance pass (real strokes; checklist in README).
+- GUI acceptance pass (real strokes; checklist in README) — now also
+  covers the premultiply fix above.
 - GPU stroke undo (region snapshot/restore) — phase 6 productization.
 - Seam padding/dilation post-pass; UBO for dab matrices (>128 B push
   constants warn on some backends).
