@@ -82,7 +82,11 @@ In some dedicated sculpting tools (e.g. 3DCoat), holding the right mouse button 
 
 General improvements to viewport navigation, tool switching, and overall workflow efficiency, drawing on design decisions proven in dedicated sculpting/painting tools.
 
-**Specific pain points and proposed solutions to follow.**
+#### Sidebar discoverability and ergonomics
+
+The 3D Viewport sidebar (N-panel) is the only practical home Blender offers add-on UI, yet it is hard to discover and uncomfortable to use: it opens from a small edge arrow (or a shortcut the user must already know), and its vertical tab strip renders at a fixed small size that does not grow with the number of installed add-ons competing for it. Every sidebar-based tool inherits this friction. Proposed directions: a visible, always-on affordance for opening the sidebar; larger/legible tab targets (or user-scalable tabs); and first-class support for summoning any sidebar panel as a floating panel at the cursor.
+
+**Further pain points and proposed solutions to follow.**
 
 ---
 
