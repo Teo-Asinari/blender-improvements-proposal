@@ -226,10 +226,13 @@ class IMPASTO_PT_main(bpy.types.Panel):
                       (len(gpu_keys), "s" if len(gpu_keys) != 1 else "")),
                 icon='BRUSH_DATA')
             if gpu_engine.session_active():
-                box.label(text="GPU painting… live GPU preview",
+                box.label(text=("GPU input paused — edit settings"
+                                if gpu_engine.input_paused()
+                                else "GPU painting… live GPU preview"),
                           icon='BRUSH_DATA')
-                box.label(text="Edit brush values between strokes; changes "
-                               "apply to the next stroke",
+                box.label(text=("Press P to resume painting"
+                                if gpu_engine.input_paused()
+                                else "Press P to pause and edit settings"),
                           icon='INFO')
                 undo_count, redo_count = gpu_engine.history_counts()
                 box.label(text="GPU Undo %d / Redo %d (Ctrl-Z / Ctrl-Shift-Z)"

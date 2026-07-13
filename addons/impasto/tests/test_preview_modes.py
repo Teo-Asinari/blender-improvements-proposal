@@ -90,6 +90,7 @@ try:
         _stopping=False,
         _timer=None,
         _apply_pending_sync=lambda: None,
+        report=lambda *_args: None,
     )
     operator._mouse_region = lambda event: \
         ops.IMPASTO_OT_gpu_paint._mouse_region(operator, event)
@@ -128,6 +129,25 @@ try:
               operator, bpy.context, overlapping_click) == {'PASS_THROUGH'}
           and not gpu_engine.stroke_active()
           and gpu_engine.session_active())
+
+    pause_event = NS(type='P', value='PRESS', mouse_x=100, mouse_y=100,
+                     pressure=1.0, ctrl=False, shift=False)
+    check("P pauses dab capture without ending resident session",
+          ops.IMPASTO_OT_gpu_paint.modal(
+              operator, bpy.context, pause_event) == {'RUNNING_MODAL'}
+          and gpu_engine.input_paused() and gpu_engine.session_active()
+          and gpu_engine.take_pending_pixels() is None)
+    paused_canvas_click = NS(type='LEFTMOUSE', value='PRESS',
+                             mouse_x=100, mouse_y=100,
+                             pressure=1.0, ctrl=False, shift=False)
+    check("paused session passes even canvas clicks to Blender UI",
+          ops.IMPASTO_OT_gpu_paint.modal(
+              operator, bpy.context, paused_canvas_click) == {'PASS_THROUGH'}
+          and not gpu_engine.stroke_active())
+    check("P resumes dab capture with resident state intact",
+          ops.IMPASTO_OT_gpu_paint.modal(
+              operator, bpy.context, pause_event) == {'RUNNING_MODAL'}
+          and not gpu_engine.input_paused() and gpu_engine.session_active())
 
     # All editable values are read at the next pen-down. This helper call is
     # the same path the modal uses immediately before begin_stroke().

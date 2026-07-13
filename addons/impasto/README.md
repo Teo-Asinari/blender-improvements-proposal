@@ -150,7 +150,11 @@ the Height field directly. These are display modes only and never modify the
 painted images. Sidebar color, Metallic, Roughness, normal, Height, Radius, and
 Hardness controls are also editable between strokes; the next stroke uses the
 new values without a flush, readback, or loss of GPU undo history. Clicks
-outside the painting region pass through to Blender's UI.
+outside the painting region pass through to Blender's UI. Because overlapping
+N-panel event routing varies by Blender layout, press **P** for the guaranteed
+editing path: dab capture pauses while the GPU session remains resident, every
+mouse event passes to Blender's controls, and **P** resumes painting. Resume
+before using RMB/Esc to flush and finish the session.
 
 The Metallic and Roughness controls in **Multi-Channel Brush** are stroke
 values: they are written as grayscale into those channel images. The

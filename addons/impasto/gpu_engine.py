@@ -1151,6 +1151,19 @@ def current_preview_mode():
     return normalize_preview_mode(_session.settings.get("preview_mode"))
 
 
+def set_input_paused(paused):
+    """Pause viewport dab capture without ending or synchronizing a session."""
+    if _session is None:
+        return False
+    _session.settings["input_paused"] = bool(paused)
+    return True
+
+
+def input_paused():
+    return bool(_session is not None
+                and _session.settings.get("input_paused", False))
+
+
 def start_session(obj, images, region, channels=None, payloads=None,
                   settings=None):
     """Create the paint session for ``obj``/``images`` (a single Image
@@ -1173,6 +1186,7 @@ def start_session(obj, images, region, channels=None, payloads=None,
                  settings=settings)
     s.settings["preview_mode"] = normalize_preview_mode(
         s.settings.get("preview_mode"))
+    s.settings["input_paused"] = False
     s.coords = coords
     s.uvs = uvs
     s.tri_uv_bboxes = triangle_uv_bboxes(uvs)

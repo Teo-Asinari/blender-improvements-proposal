@@ -1151,6 +1151,19 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             return self._finish(context)
 
         etype = event.type
+        if etype == 'P' and event.value == 'PRESS':
+            if gpu_engine.stroke_active():
+                gpu_engine.end_stroke()
+            paused = not gpu_engine.input_paused()
+            gpu_engine.set_input_paused(paused)
+            self._region.tag_redraw()
+            self.report({'INFO'}, "GPU paint input %s — resident data preserved"
+                        % ("paused for settings" if paused else "resumed"))
+            return {'RUNNING_MODAL'}
+        if gpu_engine.input_paused() and etype != 'TIMER':
+            # A deliberate, backend-independent editing state: no pointer event
+            # can become a dab, while all Blender UI continues receiving it.
+            return {'PASS_THROUGH'}
         if etype == 'LEFTMOUSE':
             if event.value == 'PRESS' and self._over_interface_region(event):
                 return {'PASS_THROUGH'}

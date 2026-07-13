@@ -9,6 +9,13 @@
   transform, masking, and per-channel semantics await the user's detailed
   workflow description.
 
+## 0.5.2 — explicit resident settings mode
+
+- `P` toggles a guaranteed input-pause state: no pointer event can create a
+  dab, while sidebar controls remain usable and GPU textures/history stay
+  resident. This replaces reliance on layout-dependent overlapping-region
+  dispatch for editing brush values.
+
 ## 0.5.1 — overlapping sidebar input routing
 
 - Explicitly gives Blender's visible UI, header, and toolbar regions priority
