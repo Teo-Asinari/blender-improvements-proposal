@@ -248,6 +248,13 @@ def main():
     overlay._draw_3d()
     check("draw with stats headless: error latched (SystemError at "
           "the GPU boundary)", overlay.last_draw_error() is not None)
+    check("draw resolves settings before the GPU boundary",
+          "NameError" not in overlay.last_draw_error(),
+          overlay.last_draw_error())
+    check("draw prepares the three-field annotation payload",
+          overlay._state.annotation is not None
+          and len(overlay._state.annotation) == 3,
+          overlay._state.annotation)
     latched = overlay.last_draw_error()
     overlay._draw_3d()
     check("latch holds: second draw does not re-raise/re-log",

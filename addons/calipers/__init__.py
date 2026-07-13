@@ -45,7 +45,7 @@ rationale) — a viewport aid should not persist into a saved file.
 bl_info = {
     "name": "Calipers",
     "author": "Teo Asinari",
-    "version": (1, 1, 0),
+    "version": (1, 1, 1),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N) > Calipers tab",
     "description": "Scale-aware voxel-remesh preview and safety: cost "

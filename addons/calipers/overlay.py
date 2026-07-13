@@ -332,7 +332,7 @@ def _gpu_state_restored():
 
 
 def _resolve_draw_inputs():
-    """(obj, stats, voxel_size, est) for the current draw, or None.
+    """(obj, stats, voxel_size, est, settings) for the current draw, or None.
 
     Draw-safe: cache lookups, RNA reads and pure arithmetic only (the
     core.current_estimate contract). Returns None when there is nothing
@@ -362,7 +362,7 @@ def _resolve_draw_inputs():
     if not (v > 0.0 and math.isfinite(v)):
         return None
     est = core.current_estimate(obj, kind, settings)
-    return obj, stats, v, est
+    return obj, stats, v, est, settings
 
 
 def _draw_3d():
@@ -377,7 +377,7 @@ def _draw_3d():
         if resolved is None:
             _state.annotation = None
             return
-        obj, stats, v, est = resolved
+        obj, stats, v, est, settings = resolved
 
         # Annotation payload for the POST_PIXEL pass (computed here so
         # both passes agree on one resolution of the inputs).
