@@ -13,12 +13,14 @@ from bpy.props import EnumProperty, StringProperty
 
 from . import compat
 from . import brush_adapter
+from . import channel_paint
 from . import engine
 from . import gpu_engine
 from . import model
 from . import paint
 from . import props
 from . import snapshot
+from . import stencil
 
 DEFAULT_IMAGE_SIZE = 2048
 
@@ -675,13 +677,38 @@ def _gpu_brush(layer):
             "metallic": layer.paint_metallic,
             "normal": tuple(layer.paint_normal),
             "height_strength": layer.paint_height_strength,
-            "height_direction": layer.paint_height_direction}
+            "height_direction": layer.paint_height_direction,
+            "emission_color": tuple(layer.paint_emission_color),
+            "emission_strength": layer.paint_emission_strength,
+            "sss_weight": layer.paint_sss_weight,
+            "sss_radius": tuple(layer.paint_sss_radius),
+            "sss_scale": layer.paint_sss_scale}
 
 
 def gpu_preview_mode(layer):
     """Persistent layer preview mode, sanitized for runtime consumers."""
     mode = getattr(layer, "gpu_preview_mode", 'LIT_PBR')
     return mode if mode in props.GPU_PREVIEW_MODE_IDS else 'LIT_PBR'
+
+
+def gpu_stencil_settings(layer):
+    """Persistent layer stencil state as an immutable runtime contract."""
+    image = getattr(layer, "brush_stencil_image", None)
+    projection = getattr(
+        layer, "brush_stencil_projection", 'VIEW_STENCIL')
+    scale = (getattr(layer, "brush_stencil_brush_scale", (1.0, 1.0))
+             if projection == 'BRUSH_ALPHA'
+             else getattr(layer, "brush_stencil_scale", (0.35, 0.35)))
+    return stencil.normalized(
+        enabled=getattr(layer, "brush_stencil_enabled", False),
+        image_name=getattr(image, "name", ""),
+        projection=projection,
+        interpretation=getattr(
+            layer, "brush_stencil_interpretation", 'ALPHA'),
+        opacity=getattr(layer, "brush_stencil_opacity", 1.0),
+        position=getattr(layer, "brush_stencil_position", (0.5, 0.5)),
+        scale=scale,
+        rotation=getattr(layer, "brush_stencil_rotation", 0.0))
 
 
 def _gpu_stamp(context, radius=None):
@@ -717,21 +744,7 @@ def native_replay_targets(layer):
 
 def native_channel_style(layer, channel_key):
     """Return ``(brush_color, blend)`` for a replay target (pure seam)."""
-    if channel_key == 'base_color':
-        return tuple(layer.paint_color), 'MIX'
-    if channel_key == 'roughness':
-        value = float(layer.paint_roughness)
-        return (value, value, value), 'MIX'
-    if channel_key == 'metallic':
-        value = float(layer.paint_metallic)
-        return (value, value, value), 'MIX'
-    if channel_key == 'normal':
-        return tuple(layer.paint_normal), 'MIX'
-    if channel_key == 'height':
-        blend = ('ADD' if layer.paint_height_direction == 'RAISE'
-                 else 'SUB')
-        return (float(layer.paint_height_strength),) * 3, blend
-    raise ValueError("Native replay does not support channel %r" % channel_key)
+    return channel_paint.native_style(channel_key, _gpu_brush(layer))
 
 
 def replay_native_stroke(context, layer, stroke, area=None, region=None):
@@ -758,13 +771,10 @@ def replay_native_stroke(context, layer, stroke, area=None, region=None):
         for channel_key, image in targets:
             paint.activate_paint_target(context, layer, channel_key)
             color, blend = native_channel_style(layer, channel_key)
-            brush.color = color
             brush.blend = blend
             unified = paint.unified_paint_settings(context)
-            if unified is not None:
-                # Blender 5.1 defaults to unified color, which overrides the
-                # Brush datablock color during image-paint replay.
-                unified.color = color
+            paint.configure_native_replay_color(
+                brush, unified, color, state.get("unified_use_color"))
             if area is not None and region is not None:
                 with context.temp_override(area=area, region=region,
                                            space_data=area.spaces.active):
@@ -1006,6 +1016,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
                 tree, _context_material(context)),
             "active_layer_uid": layer.name,
         }
+        settings.update(gpu_stencil_settings(layer).as_gpu_settings())
         if not gpu_engine.start_session(obj, images, region,
                                         payloads=payloads,
                                         settings=settings):
@@ -1085,7 +1096,8 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         gpu_engine.update_stroke_settings(
             payloads, radius=self._radius,
             hardness=layer.brush_hardness, opacity=layer.brush_opacity,
-            stamp=supported_stamp)
+            stamp=supported_stamp,
+            stencil_settings=gpu_stencil_settings(layer).as_gpu_settings())
 
     def _refresh_preview_mode(self):
         """Apply a sidebar preview change without restarting the session."""

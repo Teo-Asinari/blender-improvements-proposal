@@ -27,6 +27,7 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
 
 from . import engine
 from . import model
+from . import stencil
 
 _LAYER_UID_RE = re.compile(r'layers\["([^"]+)"\]')
 
@@ -185,6 +186,25 @@ class ImpastoLayer(bpy.types.PropertyGroup):
         name="Height", items=(('RAISE', "Raise", "Add height"),
                               ('LOWER', "Lower", "Subtract height")),
         default='RAISE')
+    paint_emission_color: FloatVectorProperty(
+        name="Emission Color", subtype='COLOR', size=3,
+        min=0.0, max=1.0, default=(1.0, 1.0, 1.0))
+    paint_emission_strength: FloatProperty(
+        name="Emission Strength",
+        description="HDR luminosity written independently of emission color",
+        default=0.0, min=0.0, soft_max=20.0)
+    paint_sss_weight: FloatProperty(
+        name="Subsurface Weight", default=0.0, min=0.0, max=1.0,
+        subtype='FACTOR')
+    paint_sss_radius: FloatVectorProperty(
+        name="Subsurface Radius",
+        description="Non-Color per-channel scattering-radius ratios",
+        size=3, min=0.0, soft_max=4.0, default=(1.0, 0.2, 0.1))
+    paint_sss_scale: FloatProperty(
+        name="Subsurface Scale",
+        description="Scattering-distance scale in scene units",
+        default=0.05, min=0.0, soft_max=1.0,
+        subtype='DISTANCE', unit='LENGTH')
     brush_radius: FloatProperty(
         name="Radius", default=50.0, min=1.0, soft_max=500.0,
         subtype='PIXEL')
@@ -196,6 +216,35 @@ class ImpastoLayer(bpy.types.PropertyGroup):
         description="Additional opacity multiplier applied to every channel "
                     "of a GPU stroke",
         default=1.0, min=0.0, max=1.0, subtype='FACTOR')
+    brush_stencil_enabled: BoolProperty(
+        name="Image Stencil", description="Modulate every enabled GPU paint "
+        "channel with one shared image mask", default=False)
+    brush_stencil_image: PointerProperty(
+        name="Stencil Image", type=bpy.types.Image,
+        description="Alpha or luminance image used by the GPU brush")
+    brush_stencil_projection: EnumProperty(
+        name="Projection", items=stencil.PROJECTION_ITEMS,
+        default='VIEW_STENCIL')
+    brush_stencil_interpretation: EnumProperty(
+        name="Mask From", items=stencil.INTERPRETATION_ITEMS,
+        default='ALPHA')
+    brush_stencil_opacity: FloatProperty(
+        name="Stencil Opacity", default=1.0, min=0.0, max=1.0,
+        subtype='FACTOR')
+    brush_stencil_position: FloatVectorProperty(
+        name="Position", description="Viewport-normalized stencil center",
+        size=2, default=(0.5, 0.5), soft_min=0.0, soft_max=1.0)
+    brush_stencil_scale: FloatVectorProperty(
+        name="Viewport Scale",
+        description="Normalized viewport width and height", size=2,
+        default=(0.35, 0.35), min=0.001, soft_max=2.0)
+    brush_stencil_brush_scale: FloatVectorProperty(
+        name="Brush Scale",
+        description="Brush-diameter multiplier; (1, 1) maps the image "
+        "across the full brush footprint", size=2,
+        default=(1.0, 1.0), min=0.001, soft_max=2.0)
+    brush_stencil_rotation: FloatProperty(
+        name="Rotation", default=0.0, subtype='ANGLE')
     auto_material_preview: BoolProperty(
         name="Idle Material Synchronization",
         description="After a pause, read GPU textures back to Blender Images "

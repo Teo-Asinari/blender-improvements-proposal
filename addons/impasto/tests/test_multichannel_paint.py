@@ -181,10 +181,12 @@ try:
     settings.use_backface_culling = False
     unified = paint.unified_paint_settings(bpy.context)
     original_unified_color = tuple(unified.color)
+    original_unified_use_color = unified.use_unified_color
     native_state = paint.capture_native_state(bpy.context)
     settings.canvas = images["metallic"]
     settings.mode = 'MATERIAL'
     unified.color = (0.17, 0.29, 0.41)
+    unified.use_unified_color = not original_unified_use_color
     paint.configure_front_surface_paint(bpy.context)
     check("native replay enables front-surface-only painting",
           settings.use_occlude and settings.use_backface_culling)
@@ -194,7 +196,28 @@ try:
           and settings.mode == 'IMAGE')
     check("native replay restores Blender 5.1 unified brush color",
           all(abs(a - b) < 1e-6 for a, b in
-              zip(unified.color, original_unified_color)))
+              zip(unified.color, original_unified_color))
+          and unified.use_unified_color == original_unified_use_color)
+
+    class ReplayBrush:
+        color = (0.0, 0.0, 0.0)
+
+    replay_brush = ReplayBrush()
+    check("ordinary replay values retain unified color behavior",
+          paint.configure_native_replay_color(
+              replay_brush, unified, (0.2, 0.4, 0.8), True)
+          and unified.use_unified_color
+          and all(abs(a - b) < 1e-6 for a, b in
+                  zip(unified.color, (0.2, 0.4, 0.8))))
+    bounded_unified_color = tuple(unified.color)
+    check("HDR replay bypasses bounded unified color without clamping brush",
+          not paint.configure_native_replay_color(
+              replay_brush, unified, (9.5, 9.5, 9.5), True)
+          and not unified.use_unified_color
+          and replay_brush.color == (9.5, 9.5, 9.5)
+          and tuple(unified.color) == bounded_unified_color)
+    unified.color = original_unified_color
+    unified.use_unified_color = original_unified_use_color
     check("native replay restores paint occlusion preferences",
           not settings.use_occlude and not settings.use_backface_culling)
     settings.use_occlude = original_occlude

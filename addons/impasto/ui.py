@@ -198,6 +198,33 @@ class IMPASTO_PT_main(bpy.types.Panel):
                 row = col.row(align=True)
                 row.prop(layer, "paint_height_direction", expand=True)
                 col.prop(layer, "paint_height_strength")
+            if ('emission_color' in gpu_keys
+                    or 'emission_strength' in gpu_keys):
+                emission = col.box()
+                emission.label(text="Emission", icon='LIGHT')
+                if 'emission_color' in gpu_keys:
+                    emission.prop(layer, "paint_emission_color",
+                                  text="Color")
+                if 'emission_strength' in gpu_keys:
+                    emission.prop(layer, "paint_emission_strength",
+                                  text="Strength")
+                    emission.label(text="HDR strength may exceed 1",
+                                   icon='INFO')
+            if any(k in gpu_keys for k in
+                   ('sss_weight', 'sss_radius', 'sss_scale')):
+                subsurface = col.box()
+                subsurface.label(text="Subsurface", icon='SHADING_RENDERED')
+                if 'sss_weight' in gpu_keys:
+                    subsurface.prop(layer, "paint_sss_weight",
+                                    text="Weight", slider=True)
+                if 'sss_radius' in gpu_keys:
+                    subsurface.prop(layer, "paint_sss_radius",
+                                    text="Radius RGB")
+                if 'sss_scale' in gpu_keys:
+                    subsurface.prop(layer, "paint_sss_scale", text="Scale")
+                subsurface.label(
+                    text="Radius is Non-Color; Scale uses scene length",
+                    icon='INFO')
             row = box.row()
             row.scale_y = 1.25
             row.enabled = not gpu_engine.session_active()
@@ -218,6 +245,29 @@ class IMPASTO_PT_main(bpy.types.Panel):
             row.prop(layer, "brush_radius")
             row.prop(layer, "brush_hardness", slider=True)
             gpu_col.prop(layer, "brush_opacity", slider=True)
+            stencil_box = gpu_col.box()
+            stencil_box.prop(layer, "brush_stencil_enabled")
+            stencil_controls = stencil_box.column(align=True)
+            stencil_controls.enabled = layer.brush_stencil_enabled
+            stencil_controls.template_ID(layer, "brush_stencil_image",
+                                         open="image.open")
+            stencil_controls.prop(layer, "brush_stencil_projection",
+                                  expand=True)
+            stencil_controls.prop(layer, "brush_stencil_interpretation",
+                                  expand=True)
+            stencil_controls.prop(layer, "brush_stencil_opacity", slider=True)
+            if layer.brush_stencil_projection == 'VIEW_STENCIL':
+                stencil_controls.prop(layer, "brush_stencil_position")
+                stencil_controls.prop(layer, "brush_stencil_scale")
+            else:
+                stencil_controls.prop(layer, "brush_stencil_brush_scale")
+            stencil_controls.prop(layer, "brush_stencil_rotation")
+            stencil_controls.label(
+                text="One mask modulates every painted channel identically",
+                icon='INFO')
+            stencil_controls.label(
+                text="Normal-profile relief is reserved for a later pass",
+                icon='NORMALS_FACE')
             row = gpu_col.row(align=True)
             row.prop(layer, "auto_material_preview", text="Idle Material Sync")
             sub = row.row(align=True)

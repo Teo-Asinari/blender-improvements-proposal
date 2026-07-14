@@ -43,13 +43,14 @@ default `0.1 m` voxel size from triggering a prohibitively expensive operation
 without review. A viewport guide draws grid slices and voxel-sized samples at
 all eight bounding-box corners so scale can be judged visually.
 
-### [Impasto](addons/impasto/) — v0.7.0 (active development)
+### [Impasto](addons/impasto/) — v0.8.0 (active development)
 
 A non-destructive Principled-PBR layer stack with Fill, Paint, and pass-through
 Group layers. One logical Paint layer can own separate Base Color, Metallic,
-Roughness, Tangent Normal, and Height images, with generated node graphs that
-keep those channels composited independently. Kiln normal bakes can become the
-stack's baseline normal layer without damaging the active painting setup.
+Roughness, Tangent Normal, Height, Emission, and Subsurface images, with
+generated node graphs that keep those channels composited independently. Kiln
+normal bakes can become the stack's baseline normal layer without damaging the
+active painting setup.
 
 Impasto currently offers three painting paths:
 
@@ -62,7 +63,8 @@ Impasto currently offers three painting paths:
 
 The GPU path includes a brush-sized reticle, front-surface depth rejection to
 prevent painting through the mesh, per-stroke multi-channel GPU undo/redo, live
-channel-value changes between strokes, and an image-based PBR preview. In the
+channel-value changes between strokes, an image-based PBR preview, and a shared
+image stencil or per-dab brush alpha across every painted channel. In the
 common same-UV/topmost-active-layer case, it includes lower Fill/Paint layers
 and Kiln's
 baked normal without routine synchronization. It remains a perceptual

@@ -38,10 +38,9 @@ try:
           all(k in model.CHANNEL_MAP for k in keys))
     check("paintable keys are in registry order",
           list(keys) == sorted(keys, key=lambda k: model.CHANNEL_ORDER[k]))
-    check("base_color is the only sRGB-encoded paintable channel",
-          model.CHANNEL_MAP["base_color"].colorspace == "sRGB"
-          and all(model.CHANNEL_MAP[k].colorspace == "Non-Color"
-                  for k in keys if k != "base_color"))
+    check("only display colors use sRGB paint canvases",
+          {k for k in keys if model.CHANNEL_MAP[k].colorspace == "sRGB"}
+          == {"base_color", "emission_color"})
 
     # ---- MRT fragment source generation -------------------------------
     one = gpu_engine.dab_frag_src(1)
@@ -123,11 +122,29 @@ try:
     check("lower deposits a negative height step",
           lower["value"] == (-0.05, -0.05, -0.05)
           and lower["blend"] == "ADD")
+    expanded_brush = dict(
+        brush, emission_color=(0.25, 0.5, 1.0), emission_strength=8.0,
+        sss_weight=0.7, sss_radius=(1.0, 0.25, 0.1), sss_scale=0.03)
+    expanded = dict(zip(
+        ("emission_color", "emission_strength", "sss_weight",
+         "sss_radius", "sss_scale"),
+        gpu_engine.stroke_payloads(
+            ("emission_color", "emission_strength", "sss_weight",
+             "sss_radius", "sss_scale"), expanded_brush)))
+    check("emission color uses the same sRGB storage boundary as Base",
+          expanded["emission_color"]["value"] == tuple(
+              srgb(c) for c in expanded_brush["emission_color"]))
+    check("HDR emission strength remains unclipped",
+          expanded["emission_strength"]["value"] == (8.0, 8.0, 8.0))
+    check("SSS factor/vector/distance remain raw Non-Color values",
+          expanded["sss_weight"]["value"] == (0.7, 0.7, 0.7)
+          and expanded["sss_radius"]["value"] == (1.0, 0.25, 0.1)
+          and expanded["sss_scale"]["value"] == (0.03, 0.03, 0.03))
     try:
-        gpu_engine.stroke_payloads(("emission_color",), brush)
-        check("unpaintable channels are rejected", False)
+        gpu_engine.stroke_payloads(("sss_ior",), brush)
+        check("specialized non-brush SSS channels are rejected", False)
     except ValueError:
-        check("unpaintable channels are rejected", True)
+        check("specialized non-brush SSS channels are rejected", True)
 
     # ---- straight <-> premultiplied canvas boundary conversions -------
     # gpu 'ALPHA' blending accumulates premultiplied; canvases are

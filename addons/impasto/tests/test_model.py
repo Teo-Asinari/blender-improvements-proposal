@@ -499,6 +499,35 @@ def test_material_tree():
           [socket.name for socket in normal_root.interface].count("Normal")
           == 1)
 
+    extended_keys = ("emission_color", "emission_strength", "sss_weight",
+                     "sss_radius", "sss_scale")
+    extended_layer = model.LayerModel(
+        uid="ee55ff66", label="Emission and SSS", layer_type="PAINT",
+        uv_map="UVMap", bindings=tuple(
+            model.BindingModel(key=key, mode="SHARED",
+                               image_name="%s.exr" % key)
+            for key in extended_keys))
+    extended = model.compile_stack(model.StackModel(
+        root_tree_name="Extended PBR", channels=extended_keys,
+        layers=(extended_layer,),
+        material=model.MaterialModel("Principled BSDF")))
+    extended_mat = _tree(extended, "material")
+    extended_dsts = {link.dst for link in extended_mat.links}
+    check("emission color and independent HDR strength reach Principled",
+          ("Principled BSDF", "Emission Color") in extended_dsts
+          and ("Principled BSDF", "Emission Strength") in extended_dsts)
+    check("SSS weight, radius vector, and distance scale reach Principled",
+          all(("Principled BSDF", model.CHANNEL_MAP[key].socket)
+              in extended_dsts
+              for key in ("sss_weight", "sss_radius", "sss_scale")))
+    extended_tree = _tree(extended, extended_layer.uid)
+    interfaces = {socket.name: socket.socket_type
+                  for socket in extended_tree.interface}
+    check("SSS compiler preserves scalar/vector socket domains",
+          interfaces["ch:sss_weight"] == "NodeSocketFloat"
+          and interfaces["ch:sss_scale"] == "NodeSocketFloat"
+          and interfaces["ch:sss_radius"] == "NodeSocketVector")
+
 
 def test_layer_tree_shape():
     spec = model.compile_stack(fx_paint_mask())

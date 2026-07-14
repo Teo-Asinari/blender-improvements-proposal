@@ -106,6 +106,7 @@ from . import tile_undo
 from . import ibl
 from . import model
 from . import preview_stack
+from . import channel_paint
 
 # ---------------------------------------------------------------------------
 # Tunables
@@ -130,7 +131,7 @@ MAX_DABS_PER_EVENT = 256
 # Multi-channel painting: how many RGBA16F targets one session may
 # attach to the paint framebuffer (the panel offers 1/2/4/8; the probe
 # reports what GPUFrameBuffer actually accepts on this build/GPU).
-MAX_CHANNELS = 8
+MAX_CHANNELS = 16
 
 # Stable engine/UI contract for diagnostic live-preview display modes.
 PREVIEW_MODES = (
@@ -210,6 +211,40 @@ void main()
     float t = d / max(brush_radius_px, 1e-6);
     float h = clamp(brush_hardness, 0.0, 0.999);
     float f = 1.0 - smoothstep(h, 1.0, t);
+
+    /* Evaluate one shared image mask before any MRT output so every enabled
+     * material channel receives exactly the same spatial modulation. */
+    float stencil_factor = 1.0;
+    if (use_stencil > 0.5) {
+        vec2 stencil_center;
+        vec2 stencil_half_extent;
+        if (stencil_projection == 0) {
+            stencil_center = stencil_position * region_size;
+            stencil_half_extent = 0.5 * stencil_scale * region_size;
+        } else {
+            stencil_center = brush_center_px;
+            stencil_half_extent = brush_radius_px * stencil_scale;
+        }
+        vec2 delta = px - stencil_center;
+        float cs = cos(stencil_rotation);
+        float sn = sin(stencil_rotation);
+        vec2 local = vec2(cs * delta.x + sn * delta.y,
+                         -sn * delta.x + cs * delta.y);
+        vec2 stencil_uv = local / (2.0 * max(stencil_half_extent,
+                                             vec2(1e-4))) + 0.5;
+        if (any(lessThan(stencil_uv, vec2(0.0))) ||
+            any(greaterThan(stencil_uv, vec2(1.0)))) {
+            stencil_factor = 0.0;
+        } else {
+            vec4 stencil_sample = texture(stencil_tex, stencil_uv);
+            float luminance = dot(stencil_sample.rgb,
+                                  vec3(0.2126, 0.7152, 0.0722));
+            float mask_value = (stencil_interpretation == 0)
+                ? stencil_sample.a : luminance;
+            stencil_factor = clamp(mask_value * stencil_opacity, 0.0, 1.0);
+        }
+    }
+    f *= stencil_factor;
 """
 
 # v0.2.0's single-channel source, byte-for-byte (the N=1 case must not
@@ -384,6 +419,28 @@ void main()
         height_tex, baseline_height_tex, baseline_height_value,
         baseline_height_is_texture, active_height,
         active_height_factor, active_height_blend, 0.0);
+    vec4 emission_color_sample = resolve_stack_channel(
+        emission_color_tex, baseline_emission_color_tex,
+        baseline_emission_color_value,
+        baseline_emission_color_is_texture, active_emission_color,
+        active_emission_color_factor, active_emission_color_blend, 1.0);
+    vec4 emission_strength_sample = resolve_stack_channel(
+        emission_strength_tex, baseline_emission_strength_tex,
+        baseline_emission_strength_value,
+        baseline_emission_strength_is_texture, active_emission_strength,
+        active_emission_strength_factor, active_emission_strength_blend, 0.0);
+    vec4 sss_weight_sample = resolve_stack_channel(
+        sss_weight_tex, baseline_sss_weight_tex, baseline_sss_weight_value,
+        baseline_sss_weight_is_texture, active_sss_weight,
+        active_sss_weight_factor, active_sss_weight_blend, 0.0);
+    vec4 sss_radius_sample = resolve_stack_channel(
+        sss_radius_tex, baseline_sss_radius_tex, baseline_sss_radius_value,
+        baseline_sss_radius_is_texture, active_sss_radius,
+        active_sss_radius_factor, active_sss_radius_blend, 0.0);
+    vec4 sss_scale_sample = resolve_stack_channel(
+        sss_scale_tex, baseline_sss_scale_tex, baseline_sss_scale_value,
+        baseline_sss_scale_is_texture, active_sss_scale,
+        active_sss_scale_factor, active_sss_scale_blend, 0.0);
     if (preview_mode == 1) {
         vec3 encoded = normal_sample.rgb;
         fragColor = vec4(encoded, 1.0);
@@ -450,6 +507,16 @@ void main()
         ? metal_sample.r : 0.0;
     float roughness = has_roughness > 0.5
         ? rough_sample.r : 0.5;
+    vec3 emission_color = has_emission_color > 0.5
+        ? emission_color_sample.rgb : vec3(1.0);
+    float emission_strength = has_emission_strength > 0.5
+        ? max(emission_strength_sample.r, 0.0) : 0.0;
+    float sss_weight = has_sss_weight > 0.5
+        ? clamp(sss_weight_sample.r, 0.0, 1.0) : 0.0;
+    vec3 sss_radius = has_sss_radius > 0.5
+        ? max(sss_radius_sample.rgb, vec3(0.0)) : vec3(1.0, 0.2, 0.1);
+    float sss_scale = has_sss_scale > 0.5
+        ? max(sss_scale_sample.r, 0.0) : 0.05;
 
     /* Split-sum GGX image-based lighting from Impasto's prefiltered linear
      * HDR studio atlas. Blender's material remains authoritative after an
@@ -469,6 +536,18 @@ void main()
             reflection, roughness);
         vec2 env_brdf = environment_brdf_ggx(ndv, roughness);
         vec3 diffuse_ibl = irradiance * albedo * kd;
+        vec3 scatter_distance = sss_radius * sss_scale;
+        float scatter_extent = clamp(0.35 + length(scatter_distance) * 2.0,
+                                     0.0, 1.0);
+        float max_distance = max(max(scatter_distance.r,
+                                     scatter_distance.g),
+                                 max(scatter_distance.b, 1e-5));
+        vec3 scatter_tint = scatter_distance / max_distance;
+        vec3 back_irradiance = sample_environment_panel(-n, 0.0);
+        vec3 scattered = (irradiance + back_irradiance * scatter_tint)
+                         * 0.5 * albedo * kd;
+        diffuse_ibl = mix(diffuse_ibl, scattered,
+                          sss_weight * scatter_extent);
         vec3 specular_ibl = prefiltered * (f0 * env_brdf.x + env_brdf.y);
         rgb = diffuse_ibl + specular_ibl;
     } else {
@@ -478,6 +557,9 @@ void main()
                                vec3(0.18, 0.23, 0.32), sky);
         rgb = environment * (albedo * kd + fresnel);
     }
+    /* Emission remains separate from color so HDR strength is preserved in
+     * the canvas and only display-mapped here. */
+    rgb += emission_color * emission_strength;
     rgb = aces_fitted(rgb);
 
     float coverage = 1.0;
@@ -493,6 +575,16 @@ void main()
             coverage = max(coverage, straight_sample(normal_tex, uvInterp).a);
         if (active_height > 0.5)
             coverage = max(coverage, straight_sample(height_tex, uvInterp).a);
+        if (active_emission_color > 0.5)
+            coverage = max(coverage, straight_sample(emission_color_tex, uvInterp).a);
+        if (active_emission_strength > 0.5)
+            coverage = max(coverage, straight_sample(emission_strength_tex, uvInterp).a);
+        if (active_sss_weight > 0.5)
+            coverage = max(coverage, straight_sample(sss_weight_tex, uvInterp).a);
+        if (active_sss_radius > 0.5)
+            coverage = max(coverage, straight_sample(sss_radius_tex, uvInterp).a);
+        if (active_sss_scale > 0.5)
+            coverage = max(coverage, straight_sample(sss_scale_tex, uvInterp).a);
     }
     fragColor = vec4(rgb, coverage * preview_opacity);
 }
@@ -844,9 +936,17 @@ def dab_shader_create_info(channels=1, additive=False):
     info.push_constant('FLOAT', "depth_relative_epsilon")
     info.push_constant('FLOAT', "use_occlusion")
     info.push_constant('FLOAT', "pressure")
+    info.push_constant('FLOAT', "use_stencil")
+    info.push_constant('INT', "stencil_projection")
+    info.push_constant('INT', "stencil_interpretation")
+    info.push_constant('FLOAT', "stencil_opacity")
+    info.push_constant('VEC2', "stencil_position")
+    info.push_constant('VEC2', "stencil_scale")
+    info.push_constant('FLOAT', "stencil_rotation")
     for i in range(channels):
         info.push_constant('VEC4', "brush_value%d" % i)
     info.sampler(0, 'FLOAT_2D', "scene_depth_tex")
+    info.sampler(1, 'FLOAT_2D', "stencil_tex")
     info.vertex_in(0, 'VEC3', "pos")
     info.vertex_in(1, 'VEC2', "uv")
     info.vertex_out(iface)
@@ -886,7 +986,7 @@ def preview_shader_create_info():
     info.push_constant('INT', "preview_mode")
     info.push_constant('FLOAT', "environment_ready")
     info.push_constant('FLOAT', "resolved_stack")
-    for name in ("base_color", "metallic", "roughness", "normal", "height"):
+    for name in GPU_PAINT_CHANNEL_KEYS:
         info.push_constant('FLOAT', "has_" + name)
         info.push_constant('FLOAT', "active_" + name)
         info.push_constant('FLOAT', "active_" + name + "_factor")
@@ -901,6 +1001,14 @@ def preview_shader_create_info():
     info.sampler(5, 'FLOAT_2D', "environment_atlas")
     for index, name in enumerate(("base_color", "metallic", "roughness",
                                   "normal", "height"), 6):
+        info.sampler(index, 'FLOAT_2D', "baseline_" + name + "_tex")
+    for index, name in enumerate(("emission_color", "emission_strength",
+                                  "sss_weight", "sss_radius", "sss_scale"),
+                                 11):
+        info.sampler(index, 'FLOAT_2D', name + "_tex")
+    for index, name in enumerate(("emission_color", "emission_strength",
+                                  "sss_weight", "sss_radius", "sss_scale"),
+                                 16):
         info.sampler(index, 'FLOAT_2D', "baseline_" + name + "_tex")
     info.vertex_in(0, 'VEC3', "pos")
     info.vertex_in(1, 'VEC2', "uv")
@@ -965,8 +1073,7 @@ def baseline_shader_create_info():
 
 # Channels the multi-channel brush can deposit into, in registry order.
 # Other channels (emission, subsurface, ...) stay native-paint-only.
-GPU_PAINT_CHANNEL_KEYS = ("base_color", "metallic", "roughness",
-                          "normal", "height")
+GPU_PAINT_CHANNEL_KEYS = channel_paint.PAINTABLE_CHANNEL_KEYS
 
 _BLEND_INDEX = {
     "MIX": 0, "ADD": 1, "SUBTRACT": 2, "MULTIPLY": 3,
@@ -1069,10 +1176,7 @@ def linear_to_srgb(v):
     """Scene-linear component -> sRGB-encoded component (IEC 61966-2-1).
     COLOR-kind canvases store encoded values; painting the raw linear
     swatch would render brighter than picked."""
-    v = max(0.0, float(v))
-    if v <= 0.0031308:
-        return v * 12.92
-    return 1.055 * v ** (1.0 / 2.4) - 0.055
+    return channel_paint.linear_to_srgb(v)
 
 
 def premultiply_canvas(arr):
@@ -1120,36 +1224,7 @@ def stroke_payloads(channel_keys, brush):
     (encoded RGB), ``height_strength``, ``height_direction``
     ('RAISE'|'LOWER'), optional ``strength`` (dab alpha, default 1.0).
     Pure — the operator snapshots PropertyGroups into the dict."""
-    strength = float(brush.get("strength", 1.0))
-    payloads = []
-    for key in channel_keys:
-        if key not in GPU_PAINT_CHANNEL_KEYS:
-            raise ValueError("unpaintable channel %r" % key)
-        if key == "base_color":
-            value = tuple(linear_to_srgb(c)
-                          for c in brush.get("color", (0.8, 0.2, 0.1)))
-            blend = "MIX"
-        elif key == "roughness":
-            r = float(brush.get("roughness", 0.5))
-            value = (r, r, r)
-            blend = "MIX"
-        elif key == "metallic":
-            m = float(brush.get("metallic", 0.0))
-            value = (m, m, m)
-            blend = "MIX"
-        elif key == "normal":
-            value = tuple(float(c) for c in
-                          brush.get("normal", (0.5, 0.5, 1.0)))
-            blend = "MIX"
-        else:   # height: signed additive step around the 0.5 canvas
-            step = float(brush.get("height_strength", 0.05))
-            if brush.get("height_direction", "RAISE") == "LOWER":
-                step = -step
-            value = (step, step, step)
-            blend = "ADD"
-        payloads.append({"value": value, "strength": strength,
-                         "blend": blend})
-    return payloads
+    return channel_paint.resident_payloads(channel_keys, brush)
 
 
 # ---------------------------------------------------------------------------
@@ -1223,6 +1298,8 @@ class _Session:
         self.copy_batch = None
         self.single_fbs = None
         self.environment_tex = None
+        self.stencil_tex = None
+        self.stencil_image_name = ""
         self.stack_spec = self.settings.get("stack_spec")
         self.baseline_shader = None
         self.baseline_batch = None
@@ -1619,7 +1696,7 @@ def cursor_position():
 
 
 def update_stroke_settings(payloads, radius=None, hardness=None, opacity=None,
-                           stamp=None):
+                           stamp=None, stencil_settings=None):
     """Refresh values sampled at the next pen-down without restarting.
 
     The target images and channel order are fixed for a session, but brush
@@ -1640,6 +1717,8 @@ def update_stroke_settings(payloads, radius=None, hardness=None, opacity=None,
     if opacity is not None:
         s.settings["opacity"] = max(0.0, min(1.0, float(opacity)))
     s.settings["brush_stamp"] = stamp
+    if stencil_settings is not None:
+        s.settings.update(dict(stencil_settings))
     return True
 
 
@@ -2513,6 +2592,33 @@ def _update_prepass(s, region, rv3d):
 # ---------------------------------------------------------------------------
 
 
+def _ensure_stencil_texture(s):
+    """Resolve a Blender Image to a shared GPU texture on demand.
+
+    Called only from the owning draw context. Changing/disabling the stencil
+    drops the old reference; ordinary dabs reuse the same texture handle.
+    """
+    enabled = bool(s.settings.get("stencil_enabled", False))
+    image_name = str(s.settings.get("stencil_image_name", ""))
+    if not enabled or not image_name:
+        s.stencil_tex = None
+        s.stencil_image_name = ""
+        return None
+    if s.stencil_tex is not None and s.stencil_image_name == image_name:
+        return s.stencil_tex
+    s.stencil_tex = None
+    s.stencil_image_name = ""
+    image = bpy.data.images.get(image_name)
+    if image is None:
+        return None
+    try:
+        s.stencil_tex = gpu.texture.from_image(image)
+        s.stencil_image_name = image_name
+    except Exception:
+        traceback.print_exc()
+    return s.stencil_tex
+
+
 def _flush_dabs(s, region):
     if s.view_proj is None:
         return
@@ -2520,6 +2626,8 @@ def _flush_dabs(s, region):
     hardness = float(s.settings.get("hardness", 0.5))
     occlusion = bool(s.settings.get("occlusion", True))
     stamp = s.settings.get("brush_stamp")
+    stencil_tex = _ensure_stencil_texture(s)
+    use_stencil = stencil_tex is not None
 
     queue = s.dab_queue
     s.dab_queue = []
@@ -2578,6 +2686,24 @@ def _flush_dabs(s, region):
                              visibility.DEFAULT_POLICY.relative_epsilon)
             sh.uniform_float("use_occlusion", 1.0 if occlusion else 0.0)
             sh.uniform_sampler("scene_depth_tex", s.depth_color_tex)
+            sh.uniform_float("use_stencil", 1.0 if use_stencil else 0.0)
+            sh.uniform_int("stencil_projection", 1 if
+                           s.settings.get("stencil_projection") ==
+                           'BRUSH_ALPHA' else 0)
+            sh.uniform_int("stencil_interpretation", 1 if
+                           s.settings.get("stencil_interpretation") ==
+                           'LUMINANCE' else 0)
+            sh.uniform_float("stencil_opacity", float(
+                s.settings.get("stencil_opacity", 1.0)))
+            sh.uniform_float("stencil_position", tuple(
+                s.settings.get("stencil_position", (0.5, 0.5))))
+            sh.uniform_float("stencil_scale", tuple(
+                s.settings.get("stencil_scale", (0.35, 0.35))))
+            sh.uniform_float("stencil_rotation", float(
+                s.settings.get("stencil_rotation", 0.0)))
+            # All declared samplers must be bound even when the branch is off.
+            sh.uniform_sampler("stencil_tex", stencil_tex if use_stencil
+                               else s.depth_color_tex)
             for local, target_index in enumerate(indices):
                 payload = s.payloads[target_index]
                 value = tuple(payload.get("value", (0.0, 0.0, 0.0)))[:3]

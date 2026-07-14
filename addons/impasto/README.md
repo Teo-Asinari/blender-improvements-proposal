@@ -203,6 +203,15 @@ strongly that image layer is composited and therefore appears as a Mix factor
 inside Impasto's generated node group. New images start transparent (visually
 blank) so an untouched Paint layer has no material effect.
 
+### Cross-channel image stencil and brush alpha
+
+Enable **Image Stencil** in the GPU Brush section and choose a Blender Image.
+**Viewport Stencil** fixes a numerically positioned/scaled/rotated image in the
+viewport; **Brush Alpha** maps it onto every dab. Alpha or grayscale luminance
+drives one mask shared by every enabled channel, preserving GPU-resident
+feedback and atomic undo. [STENCIL_WORKFLOW.md](STENCIL_WORKFLOW.md) specifies
+the transforms and the reserved 3DCoat-style normal-profile contract.
+
 Notes and current limits:
 
 - Base Color brush values are sRGB-encoded on deposit so the painted
@@ -214,8 +223,9 @@ Notes and current limits:
 - Supported Blender Draw brushes contribute their effective unified/local
   size, spacing, strength, and size/strength pressure behavior to GPU stamps.
   Clone, Smear, Soften, Fill, Gradient, and Mask remain explicit compatibility
-  fallbacks. Brush texture upload and arbitrary custom falloff-curve sampling
-  are not integrated yet.
+  fallbacks. Impasto Image Stencil/Brush Alpha images are integrated, but
+  automatic import of a Blender brush asset's texture and arbitrary custom
+  falloff-curve sampling are not yet integrated.
 - One native multi-channel replay invokes Blender image paint once per canvas.
   Blender 5.1 exposes no Python undo-group API, so those channel operations
   currently occupy separate native paint-undo entries rather than one Ctrl-Z.
@@ -297,19 +307,18 @@ rewiring generated nodes.
 
 ## Roadmap additions
 
-- **Subsurface painting:** extend native and GPU multi-channel painting to the
-  Principled subsurface channels, with correct scalar/vector units,
-  colorspaces, neutral defaults, compositing, preview, and export behavior.
-- **Emission / luminosity painting:** paint Emission Color and Emission
-  Strength together or independently, and make the resident preview communicate
-  values above display white without silently clipping the stored strength.
-- **Cross-channel image stencils and texture application:** attach an image
-  stencil to the active brush and use it to modulate a stroke consistently
-  across every enabled channel. The same system should support deliberate
-  texture application, not only procedural round dabs. Projection, transform,
-  per-channel contribution, alpha/luminance interpretation, tiling, and
-  interaction details remain design-in-progress pending the intended workflow
-  description.
+- **Implemented — subsurface painting:** native and GPU multi-channel painting
+  support Principled Weight, Radius RGB, and Scale with Non-Color canvases,
+  factor/vector/distance semantics, registry defaults, atomic undo, and a live
+  scatter approximation. IOR and Anisotropy remain Fill/compiler controls.
+- **Implemented — emission / luminosity painting:** Emission Color and
+  Emission Strength paint together or independently. Color uses an sRGB canvas;
+  HDR strength remains a separate unclipped Non-Color scalar and is tone-mapped
+  only for the resident display. See `EMISSION_SUBSURFACE_PAINT.md`.
+- **Cross-channel image stencils and texture application:** v1 supplies a
+  shared Alpha/Luminance mask in Viewport Stencil and Brush Alpha projection,
+  with position, X/Y scale, rotation, and opacity. Deferred work includes
+  direct manipulation, tiling/UV projection, and color-value application.
 - **Alpha-profile normal painting:** allow a brush alpha/luminance image to act
   as a relief profile, not only an opacity mask. Its local gradients should
   generate tangent-space normal detail with adjustable depth/strength and

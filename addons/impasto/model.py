@@ -110,11 +110,11 @@ TEMPLATES = {
     "Principled — Full": ("base_color", "metallic", "roughness", "normal",
                           "height",
                           "alpha", "emission_color", "emission_strength",
-                          "sss_weight", "sss_radius"),
+                          "sss_weight", "sss_radius", "sss_scale"),
     "Emissive prop": ("base_color", "roughness", "emission_color",
                       "emission_strength"),
     "Skin / organic": ("base_color", "roughness", "height", "sss_weight",
-                       "sss_radius"),
+                       "sss_radius", "sss_scale"),
 }
 
 _SOCKET_TYPE_BY_KIND = {

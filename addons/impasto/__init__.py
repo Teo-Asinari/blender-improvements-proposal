@@ -4,7 +4,7 @@
 bl_info = {
     "name": "Impasto",
     "author": "Teo Asinari",
-    "version": (0, 7, 0),
+    "version": (0, 8, 0),
     "blender": (5, 1, 0),
     "location": "3D Viewport > Sidebar (N) > Impasto tab",
     "description": "Non-destructive PBR material layer stacks",
@@ -14,6 +14,10 @@ bl_info = {
 if "model" in locals():
     import importlib
     model = importlib.reload(model)
+    if "channel_paint" in locals():
+        channel_paint = importlib.reload(channel_paint)
+    else:
+        from . import channel_paint
     debounce = importlib.reload(debounce)
     compat = importlib.reload(compat)
     reconcile = importlib.reload(reconcile)
@@ -37,6 +41,10 @@ if "model" in locals():
         preview_stack = importlib.reload(preview_stack)
     else:
         from . import preview_stack
+    if "stencil" in locals():
+        stencil = importlib.reload(stencil)
+    else:
+        from . import stencil
     gpu_engine = importlib.reload(gpu_engine)
     props = importlib.reload(props)
     if "paint" in locals():
@@ -47,6 +55,7 @@ if "model" in locals():
     ui = importlib.reload(ui)
 else:
     from . import model
+    from . import channel_paint
     from . import debounce
     from . import compat
     from . import reconcile
@@ -57,6 +66,7 @@ else:
     from . import tile_undo
     from . import ibl
     from . import preview_stack
+    from . import stencil
     from . import gpu_engine
     from . import props
     from . import paint

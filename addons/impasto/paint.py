@@ -191,6 +191,8 @@ def capture_native_state(context):
             "unified": unified,
             "unified_color": tuple(unified.color),
             "unified_secondary_color": tuple(unified.secondary_color),
+            "unified_use_color": getattr(
+                unified, "use_unified_color", None),
         })
     if brush is not None:
         state.update({
@@ -223,6 +225,42 @@ def configure_front_surface_paint(context):
     settings.use_backface_culling = True
 
 
+def configure_native_replay_color(brush, unified, color,
+                                  preferred_use_unified_color=None):
+    """Set a native replay color without clamping HDR channel values.
+
+    Blender's Brush color accepts HDR values, while UnifiedPaintSettings.color
+    is limited to [0, 1].  Unified color normally overrides the Brush during
+    image-paint replay, so temporarily bypass it only when the requested value
+    is outside its RNA range.  The caller supplies the user's captured unified
+    preference so every replay target starts from that preference; the whole
+    state is restored by :func:`restore_native_state` after the logical stroke.
+
+    Return whether unified color can represent, and was assigned, ``color``.
+    """
+    color = tuple(float(component) for component in color)
+    brush.color = color
+    if unified is None:
+        return False
+
+    if (preferred_use_unified_color is not None
+            and hasattr(unified, "use_unified_color")):
+        unified.use_unified_color = preferred_use_unified_color
+
+    hard_min, hard_max = 0.0, 1.0
+    try:
+        prop = unified.bl_rna.properties["color"]
+        hard_min, hard_max = float(prop.hard_min), float(prop.hard_max)
+    except (AttributeError, KeyError, TypeError):
+        pass
+    representable = all(hard_min <= value <= hard_max for value in color)
+    if representable:
+        unified.color = color
+    elif hasattr(unified, "use_unified_color"):
+        unified.use_unified_color = False
+    return representable
+
+
 def restore_native_state(context, state):
     """Restore a state from :func:`capture_native_state`."""
     settings = context.scene.tool_settings.image_paint
@@ -243,3 +281,7 @@ def restore_native_state(context, state):
     if unified is not None and current_unified is not None:
         current_unified.color = state["unified_color"]
         current_unified.secondary_color = state["unified_secondary_color"]
+        use_color = state.get("unified_use_color")
+        if (use_color is not None
+                and hasattr(current_unified, "use_unified_color")):
+            current_unified.use_unified_color = use_color

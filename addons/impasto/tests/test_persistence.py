@@ -43,6 +43,22 @@ try:
         paint.name = "c3a91f02"
         paint.label = "Persisted Paint"
         paint.layer_type = "PAINT"
+        paint.paint_emission_color = (0.2, 0.4, 0.8)
+        paint.paint_emission_strength = 9.5
+        paint.paint_sss_weight = 0.65
+        paint.paint_sss_radius = (1.4, 0.35, 0.12)
+        paint.paint_sss_scale = 0.025
+        stencil_image = bpy.data.images.new("Persisted Brush Stencil", 8, 8,
+                                            alpha=True)
+        paint.brush_stencil_enabled = True
+        paint.brush_stencil_image = stencil_image
+        paint.brush_stencil_projection = 'BRUSH_ALPHA'
+        paint.brush_stencil_interpretation = 'LUMINANCE'
+        paint.brush_stencil_opacity = 0.7
+        paint.brush_stencil_position = (0.25, 0.75)
+        paint.brush_stencil_scale = (0.2, 0.3)
+        paint.brush_stencil_brush_scale = (1.2, 0.8)
+        paint.brush_stencil_rotation = 0.4
         binding = paint.bindings.add()
         binding.name = "roughness"
         canvas = bpy.data.images.new("Persisted Roughness Canvas", 8, 8,
@@ -77,6 +93,30 @@ try:
     check("per-binding images persisted",
           tuple(tuple(b.image_name for b in ly.bindings)
                 for ly in tree.impasto.layers) == binding_images)
+    paint = next(ly for ly in tree.impasto.layers if ly.name == "c3a91f02")
+    check("emission brush values persist across save/reopen",
+          all(abs(a - b) < 1e-6 for a, b in zip(
+              paint.paint_emission_color, (0.2, 0.4, 0.8)))
+          and abs(paint.paint_emission_strength - 9.5) < 1e-6)
+    check("subsurface brush units persist across save/reopen",
+          abs(paint.paint_sss_weight - 0.65) < 1e-6
+          and all(abs(a - b) < 1e-6 for a, b in zip(
+              paint.paint_sss_radius, (1.4, 0.35, 0.12)))
+          and abs(paint.paint_sss_scale - 0.025) < 1e-6)
+    check("image stencil state persists across save/reopen",
+          paint.brush_stencil_enabled
+          and paint.brush_stencil_image is not None
+          and paint.brush_stencil_image.name == "Persisted Brush Stencil"
+          and paint.brush_stencil_projection == 'BRUSH_ALPHA'
+          and paint.brush_stencil_interpretation == 'LUMINANCE'
+          and abs(paint.brush_stencil_opacity - 0.7) < 1e-6
+          and all(abs(a - b) < 1e-6 for a, b in zip(
+              paint.brush_stencil_position, (0.25, 0.75)))
+          and all(abs(a - b) < 1e-6 for a, b in zip(
+              paint.brush_stencil_scale, (0.2, 0.3)))
+          and all(abs(a - b) < 1e-6 for a, b in zip(
+              paint.brush_stencil_brush_scale, (1.2, 0.8)))
+          and abs(paint.brush_stencil_rotation - 0.4) < 1e-6)
     check("load handler self-healed removed node", tree.nodes.get(victim_name) is not None)
     check("self-healed graph converges cleanly", not engine.reconcile_stack(tree).errors)
     print("IMPASTO_PERSISTENCE_PASSED")

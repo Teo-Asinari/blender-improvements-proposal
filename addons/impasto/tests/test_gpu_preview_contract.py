@@ -74,6 +74,14 @@ check("resident alpha gates the active layer exactly once",
       "active_factor * source.a" in src)
 check("normal is decoded only after encoded-domain stack composition",
       "vec3 encoded_n = normal_sample.rgb" in src)
+check("emission color and HDR strength remain independently resolved",
+      "active_emission_color_blend, 1.0" in src
+      and "active_emission_strength_blend, 0.0" in src
+      and "rgb += emission_color * emission_strength" in src)
+check("subsurface preview uses Weight and Radius-times-Scale distance",
+      "vec3 scatter_distance = sss_radius * sss_scale" in src
+      and "sss_weight * scatter_extent" in src
+      and "sample_environment_panel(-n, 0.0)" in src)
 check("degenerate and mirrored UVs have explicit handling",
       "abs(uv_det) > 1e-8" in src and "orientation = sign(uv_det)" in src
       and "cross(axis, geometric_n)" in src)

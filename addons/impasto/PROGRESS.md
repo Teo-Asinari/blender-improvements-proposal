@@ -32,10 +32,10 @@ new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 
 ## Newly requested roadmap TODOs
 
-- Implement Subsurface painting.
-- Implement Emission Color plus Emission Strength (luminosity) painting.
-- Implement an image-stencil system that modifies synchronized brushstrokes
-  across every enabled channel and supports texture application. Projection,
+- Validate Emission and Subsurface resident preview against production renders
+  across a wider range of HDRIs and object scales (painting is implemented).
+- Extend the implemented image-stencil system from synchronized coverage masks
+  to deliberate color/value texture application. Additional projection,
   transform, masking, and per-channel semantics await the user's detailed
   workflow description.
 - Add 3DCoat-style alpha-profile normal painting: convert alpha/luminance
