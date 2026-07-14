@@ -1192,6 +1192,10 @@ def complete_material_inspect():
 def leave_material_inspect():
     if _session is None:
         return False
+    if (_session.settings.get("material_inspect_requested", False)
+            and not _session.flush_in_flight
+            and _session.pending_pixels is None):
+        _session.pending_flush = False
     _session.settings["material_inspect_requested"] = False
     _session.settings["material_inspect"] = False
     _session.settings["input_paused"] = False

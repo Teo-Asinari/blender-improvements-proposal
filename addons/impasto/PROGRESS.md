@@ -11,6 +11,9 @@ new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 - `V` now flushes the dirty resident region, hides the approximate overlay, and
   shows Blender's authoritative material without ending the session. `V` again
   resumes resident painting with GPU textures and undo history preserved.
+- Automatic Material Feedback now performs that handoff after an adjustable
+  idle delay and resumes GPU painting on the next canvas press, eliminating the
+  normal key/button/exit loop. `V` remains an explicit override.
 
 ## Newly requested roadmap TODOs
 

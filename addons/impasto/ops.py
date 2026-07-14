@@ -1016,6 +1016,9 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         self._channel_keys = tuple(keys)
         self._preview_mode = gpu_preview_mode(layer)
         self._radius = layer.brush_radius
+        self._auto_inspect_delay = (layer.auto_material_preview_delay
+                                    if layer.auto_material_preview else None)
+        self._auto_inspect_deadline = None
         self._stopping = False
         gpu_engine.set_cursor(event.mouse_x - region.x,
                               event.mouse_y - region.y)
@@ -1179,7 +1182,9 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             self.report({'INFO'}, "GPU paint input %s — resident data preserved"
                         % ("paused for settings" if paused else "resumed"))
             return {'RUNNING_MODAL'}
-        if gpu_engine.input_paused() and etype != 'TIMER':
+        if (gpu_engine.input_paused() and etype != 'TIMER'
+                and not gpu_engine.material_inspect_active()
+                and not gpu_engine.material_inspect_requested()):
             # A deliberate, backend-independent editing state: no pointer event
             # can become a dab, while all Blender UI continues receiving it.
             return {'PASS_THROUGH'}
@@ -1187,6 +1192,10 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             if event.value == 'PRESS' and self._over_interface_region(event):
                 return {'PASS_THROUGH'}
             if event.value == 'PRESS' and self._inside_region(event):
+                self._auto_inspect_deadline = None
+                if (gpu_engine.material_inspect_active()
+                        or gpu_engine.material_inspect_requested()):
+                    gpu_engine.leave_material_inspect()
                 try:
                     self._refresh_stroke_settings(context)
                 except (ValueError, paint.PaintTargetError) as exc:
@@ -1198,6 +1207,9 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
                 return {'RUNNING_MODAL'}
             if event.value == 'RELEASE' and gpu_engine.stroke_active():
                 gpu_engine.end_stroke()
+                if self._auto_inspect_delay is not None:
+                    self._auto_inspect_deadline = (
+                        time.monotonic() + self._auto_inspect_delay)
                 self._region.tag_redraw()
                 return {'RUNNING_MODAL'}
         elif etype == 'MOUSEMOVE':
@@ -1227,6 +1239,13 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             return {'RUNNING_MODAL'}
         elif etype == 'TIMER':
             self._refresh_preview_mode()
+            if (self._auto_inspect_deadline is not None
+                    and time.monotonic() >= self._auto_inspect_deadline
+                    and not gpu_engine.busy()
+                    and not gpu_engine.stroke_active()):
+                self._auto_inspect_deadline = None
+                gpu_engine.request_material_inspect()
+                self._region.tag_redraw()
             return {'RUNNING_MODAL'}
 
         # Orbit/zoom/pan and UI clicks pass through; the depth prepass

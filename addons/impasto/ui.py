@@ -218,6 +218,11 @@ class IMPASTO_PT_main(bpy.types.Panel):
             row.prop(layer, "brush_radius")
             row.prop(layer, "brush_hardness", slider=True)
             gpu_col.prop(layer, "brush_opacity", slider=True)
+            row = gpu_col.row(align=True)
+            row.prop(layer, "auto_material_preview", text="Auto Material")
+            sub = row.row(align=True)
+            sub.enabled = layer.auto_material_preview
+            sub.prop(layer, "auto_material_preview_delay", text="Delay")
             row = box.row()
             row.scale_y = 1.25
             row.enabled = not gpu_engine.session_active()

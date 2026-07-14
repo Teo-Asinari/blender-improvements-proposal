@@ -196,6 +196,16 @@ class ImpastoLayer(bpy.types.PropertyGroup):
         description="Additional opacity multiplier applied to every channel "
                     "of a GPU stroke",
         default=1.0, min=0.0, max=1.0, subtype='FACTOR')
+    auto_material_preview: BoolProperty(
+        name="Automatic Material Feedback",
+        description="After a brief pause, synchronize the dirty region and "
+                    "show Blender's authoritative material without ending "
+                    "the GPU session",
+        default=True)
+    auto_material_preview_delay: FloatProperty(
+        name="Feedback Delay", description="Idle time before authoritative "
+        "material feedback", default=0.35, min=0.1, max=2.0,
+        subtype='TIME', unit='TIME')
     gpu_preview_mode: EnumProperty(
         name="Live Preview",
         description="How the GPU-resident paint overlay is visualized; this "

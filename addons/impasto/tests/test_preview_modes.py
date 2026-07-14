@@ -2,6 +2,7 @@
 """Persistent GPU preview state and resident-session UI routing checks."""
 
 import sys
+import time
 import traceback
 from pathlib import Path
 from types import SimpleNamespace as NS
@@ -98,6 +99,10 @@ try:
         ops.IMPASTO_OT_gpu_paint._inside_region(operator, event)
     operator._over_interface_region = lambda event: \
         ops.IMPASTO_OT_gpu_paint._over_interface_region(operator, event)
+    operator._refresh_preview_mode = lambda: \
+        ops.IMPASTO_OT_gpu_paint._refresh_preview_mode(operator)
+    operator._refresh_stroke_settings = lambda context: \
+        ops.IMPASTO_OT_gpu_paint._refresh_stroke_settings(operator, context)
 
     layer.gpu_preview_mode = 'HEIGHT_GRAYSCALE'
     check("live preview edit applies without restarting session",
@@ -190,6 +195,25 @@ try:
               operator, bpy.context, inspect_event) == {'RUNNING_MODAL'}
           and not gpu_engine.material_inspect_active()
           and not gpu_engine.input_paused() and gpu_engine.session_active())
+
+    operator._auto_inspect_delay = 0.1
+    operator._auto_inspect_deadline = time.monotonic() - 1.0
+    timer_event = NS(type='TIMER', value='NOTHING', mouse_x=0, mouse_y=0,
+                     pressure=0.0, ctrl=False, shift=False)
+    check("idle timer automatically enters authoritative material feedback",
+          ops.IMPASTO_OT_gpu_paint.modal(
+              operator, bpy.context, timer_event) == {'RUNNING_MODAL'}
+          and gpu_engine.material_inspect_active()
+          and gpu_engine.session_active())
+    canvas_press = NS(type='LEFTMOUSE', value='PRESS',
+                      mouse_x=100, mouse_y=100,
+                      pressure=1.0, ctrl=False, shift=False)
+    check("next canvas press automatically resumes GPU painting",
+          ops.IMPASTO_OT_gpu_paint.modal(
+              operator, bpy.context, canvas_press) == {'RUNNING_MODAL'}
+          and not gpu_engine.material_inspect_active()
+          and gpu_engine.stroke_active() and gpu_engine.session_active())
+    gpu_engine.end_stroke()
 
     gpu_engine.stop_session()
     impasto.unregister()

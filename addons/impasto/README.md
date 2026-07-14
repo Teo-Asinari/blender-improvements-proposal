@@ -161,13 +161,19 @@ enabled channels (including pressure/brush-strength response). **Layer Opacity**
 is separate and non-destructive: it controls the selected layer's contribution
 to every compiled material channel after painting.
 
-Press **V** during a GPU session to inspect Blender's authoritative material.
-Impasto finalizes the current stroke, synchronizes only the dirty resident
-region into the channel Images, hides its approximate overlay, and preserves
-the resident session and GPU undo history. Press **V** again to restore the GPU
-overlay and paint immediately—there is no operator exit or panel-button restart.
-The synchronization cost itself remains unavoidable because Blender's material
-cannot sample Impasto-owned resident textures directly.
+With **Auto Material** enabled (the default), Impasto waits for a short
+adjustable idle interval after pen-up, synchronizes only the dirty resident
+region into the channel Images, and silently hands the viewport to Blender's
+authoritative material. The next canvas press restores the GPU overlay and
+starts painting automatically. Rapid strokes defer the synchronization, so the
+cost is paid during a genuine pause rather than on every dab. Disable the option
+for uninterrupted resident-only painting.
+
+**V** remains a manual inspection override using the same transition. Neither
+automatic nor manual inspection ends the operator or discards resident textures
+or GPU undo history. The synchronization cost itself remains unavoidable
+because Blender's material cannot sample Impasto-owned resident textures
+directly.
 
 The Metallic and Roughness controls in **Multi-Channel Brush** are stroke
 values: they are written as grayscale into those channel images. The
