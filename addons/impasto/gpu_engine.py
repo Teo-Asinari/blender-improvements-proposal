@@ -1164,6 +1164,50 @@ def input_paused():
                 and _session.settings.get("input_paused", False))
 
 
+def request_material_inspect():
+    """Synchronize, then show Blender's material without ending the session."""
+    s = _session
+    if s is None or s.error is not None:
+        return False
+    s.settings["input_paused"] = True
+    s.settings["material_inspect_requested"] = True
+    if not has_unflushed_changes() and s.pending_pixels is None:
+        s.settings["material_inspect"] = True
+        s.settings["material_inspect_requested"] = False
+    else:
+        s.pending_flush = True
+    return True
+
+
+def complete_material_inspect():
+    s = _session
+    if s is None or not s.settings.get("material_inspect_requested", False):
+        return False
+    s.settings["material_inspect_requested"] = False
+    s.settings["material_inspect"] = True
+    s.settings["input_paused"] = True
+    return True
+
+
+def leave_material_inspect():
+    if _session is None:
+        return False
+    _session.settings["material_inspect_requested"] = False
+    _session.settings["material_inspect"] = False
+    _session.settings["input_paused"] = False
+    return True
+
+
+def material_inspect_active():
+    return bool(_session is not None
+                and _session.settings.get("material_inspect", False))
+
+
+def material_inspect_requested():
+    return bool(_session is not None
+                and _session.settings.get("material_inspect_requested", False))
+
+
 def start_session(obj, images, region, channels=None, payloads=None,
                   settings=None):
     """Create the paint session for ``obj``/``images`` (a single Image
@@ -1187,6 +1231,8 @@ def start_session(obj, images, region, channels=None, payloads=None,
     s.settings["preview_mode"] = normalize_preview_mode(
         s.settings.get("preview_mode"))
     s.settings["input_paused"] = False
+    s.settings["material_inspect"] = False
+    s.settings["material_inspect_requested"] = False
     s.coords = coords
     s.uvs = uvs
     s.tri_uv_bboxes = triangle_uv_bboxes(uvs)
@@ -1306,7 +1352,8 @@ def cursor_position():
     return _session.cursor if _session is not None else None
 
 
-def update_stroke_settings(payloads, radius=None, hardness=None, stamp=None):
+def update_stroke_settings(payloads, radius=None, hardness=None, opacity=None,
+                           stamp=None):
     """Refresh values sampled at the next pen-down without restarting.
 
     The target images and channel order are fixed for a session, but brush
@@ -1324,6 +1371,8 @@ def update_stroke_settings(payloads, radius=None, hardness=None, stamp=None):
         s.settings["radius"] = float(radius)
     if hardness is not None:
         s.settings["hardness"] = float(hardness)
+    if opacity is not None:
+        s.settings["opacity"] = max(0.0, min(1.0, float(opacity)))
     s.settings["brush_stamp"] = stamp
     return True
 
@@ -1474,7 +1523,8 @@ def _draw_view():
                 if s.pending_history_action is not None \
                         and not s.dab_queue and not s.pending_finalize:
                     _apply_history_action(s)
-                _draw_composed_preview(s)
+                if not material_inspect_active():
+                    _draw_composed_preview(s)
     except Exception:
         s.latch("draw failed")
 
@@ -2169,8 +2219,9 @@ def _flush_dabs(s, region):
                     if stamp is not None else (radius, pressure))
                 sh.uniform_float("brush_radius_px", dab_radius)
                 sh.uniform_float("brush_center_px", (float(x), float(y)))
-                sh.uniform_float("pressure",
-                                 max(0.0, min(1.0, dab_opacity)))
+                stroke_opacity = float(s.settings.get("opacity", 1.0))
+                sh.uniform_float("pressure", max(
+                    0.0, min(1.0, dab_opacity * stroke_opacity)))
                 draw_batch.draw(sh)
                 s.submit_times.append(time.perf_counter() - t0)
     s.dab_count += len(queue)
@@ -2421,7 +2472,8 @@ def _draw_composed_preview(s):
 
 def _draw_brush_reticle(s):
     """Draw a screen-space circle using the exact GPU dab radius."""
-    if s.cursor is None:
+    if (s.cursor is None or material_inspect_active()
+            or material_inspect_requested()):
         return
     from gpu_extras.batch import batch_for_shader
     x, y = s.cursor

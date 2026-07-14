@@ -121,7 +121,7 @@ class IMPASTO_PT_main(bpy.types.Panel):
             if layer.layer_type != 'GROUP':
                 row = box.row(align=True)
                 row.prop(layer, "blend_mode", text="")
-                row.prop(layer, "opacity", slider=True)
+                row.prop(layer, "opacity", text="Layer Opacity", slider=True)
                 self._draw_bindings(box, state, layer)
                 if layer.layer_type == 'PAINT':
                     self._draw_paint_tools(context, box, layer)
@@ -217,6 +217,7 @@ class IMPASTO_PT_main(bpy.types.Panel):
             row = gpu_col.row(align=True)
             row.prop(layer, "brush_radius")
             row.prop(layer, "brush_hardness", slider=True)
+            gpu_col.prop(layer, "brush_opacity", slider=True)
             row = box.row()
             row.scale_y = 1.25
             row.enabled = not gpu_engine.session_active()
@@ -226,14 +227,26 @@ class IMPASTO_PT_main(bpy.types.Panel):
                       (len(gpu_keys), "s" if len(gpu_keys) != 1 else "")),
                 icon='BRUSH_DATA')
             if gpu_engine.session_active():
-                box.label(text=("GPU input paused — edit settings"
+                box.label(text=("Syncing Blender material…"
+                                if gpu_engine.material_inspect_requested()
+                                else "Blender material inspection"
+                                if gpu_engine.material_inspect_active()
+                                else "GPU input paused — edit settings"
                                 if gpu_engine.input_paused()
                                 else "GPU painting… live GPU preview"),
                           icon='BRUSH_DATA')
-                box.label(text=("Press P to resume painting"
+                box.label(text=("Please wait — resident session preserved"
+                                if gpu_engine.material_inspect_requested()
+                                else "Press V to return to GPU painting"
+                                if gpu_engine.material_inspect_active()
+                                else "Press P to resume painting"
                                 if gpu_engine.input_paused()
                                 else "Press P to pause and edit settings"),
                           icon='INFO')
+                if (not gpu_engine.material_inspect_active()
+                        and not gpu_engine.material_inspect_requested()):
+                    box.label(text="Press V to inspect Blender material",
+                              icon='SHADING_RENDERED')
                 undo_count, redo_count = gpu_engine.history_counts()
                 box.label(text="GPU Undo %d / Redo %d (Ctrl-Z / Ctrl-Shift-Z)"
                           % (undo_count, redo_count), icon='LOOP_BACK')

@@ -156,6 +156,7 @@ try:
     layer.paint_metallic = 0.67
     layer.brush_radius = 93.0
     layer.brush_hardness = 0.27
+    layer.brush_opacity = 0.42
     ops.IMPASTO_OT_gpu_paint._refresh_stroke_settings(
         operator, bpy.context)
     payloads, settings = gpu_engine.stroke_settings_snapshot()
@@ -172,8 +173,23 @@ try:
           and (settings['brush_stamp'] is None
                or abs(settings['brush_stamp'].radius_px - 93.0) < 1e-6)
           and gpu_engine.session_active())
+    check("next stroke sees explicit GPU opacity",
+          abs(settings['opacity'] - 0.42) < 1e-6)
     check("between-stroke edits still queue no image sync",
           gpu_engine.take_pending_pixels() is None)
+
+    inspect_event = NS(type='V', value='PRESS', mouse_x=100, mouse_y=100,
+                       pressure=1.0, ctrl=False, shift=False)
+    check("V enters authoritative material inspection without session exit",
+          ops.IMPASTO_OT_gpu_paint.modal(
+              operator, bpy.context, inspect_event) == {'RUNNING_MODAL'}
+          and gpu_engine.material_inspect_active()
+          and gpu_engine.input_paused() and gpu_engine.session_active())
+    check("V returns directly to resident GPU painting",
+          ops.IMPASTO_OT_gpu_paint.modal(
+              operator, bpy.context, inspect_event) == {'RUNNING_MODAL'}
+          and not gpu_engine.material_inspect_active()
+          and not gpu_engine.input_paused() and gpu_engine.session_active())
 
     gpu_engine.stop_session()
     impasto.unregister()

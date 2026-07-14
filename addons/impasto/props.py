@@ -191,6 +191,11 @@ class ImpastoLayer(bpy.types.PropertyGroup):
     brush_hardness: FloatProperty(
         name="Hardness", default=0.5, min=0.0, max=0.999,
         subtype='FACTOR')
+    brush_opacity: FloatProperty(
+        name="Stroke Opacity",
+        description="Additional opacity multiplier applied to every channel "
+                    "of a GPU stroke",
+        default=1.0, min=0.0, max=1.0, subtype='FACTOR')
     gpu_preview_mode: EnumProperty(
         name="Live Preview",
         description="How the GPU-resident paint overlay is visualized; this "

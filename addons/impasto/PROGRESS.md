@@ -4,6 +4,14 @@ Current consolidated handoff: [`SESSION_2026-07-13.md`](SESSION_2026-07-13.md).
 It records the shipped GPU-resident architecture, validation, known limits,
 new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 
+## 0.6.0 — stroke opacity and authoritative in-session inspection
+
+- Added an explicit GPU Stroke Opacity multiplier; layer opacity remains the
+  separate non-destructive contribution of the complete layer across channels.
+- `V` now flushes the dirty resident region, hides the approximate overlay, and
+  shows Blender's authoritative material without ending the session. `V` again
+  resumes resident painting with GPU textures and undo history preserved.
+
 ## Newly requested roadmap TODOs
 
 - Implement Subsurface painting.

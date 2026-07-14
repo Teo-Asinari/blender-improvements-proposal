@@ -156,6 +156,19 @@ editing path: dab capture pauses while the GPU session remains resident, every
 mouse event passes to Blender's controls, and **P** resumes painting. Resume
 before using RMB/Esc to flush and finish the session.
 
+**Stroke Opacity** multiplies the coverage deposited by each GPU dab across all
+enabled channels (including pressure/brush-strength response). **Layer Opacity**
+is separate and non-destructive: it controls the selected layer's contribution
+to every compiled material channel after painting.
+
+Press **V** during a GPU session to inspect Blender's authoritative material.
+Impasto finalizes the current stroke, synchronizes only the dirty resident
+region into the channel Images, hides its approximate overlay, and preserves
+the resident session and GPU undo history. Press **V** again to restore the GPU
+overlay and paint immediately—there is no operator exit or panel-button restart.
+The synchronization cost itself remains unavoidable because Blender's material
+cannot sample Impasto-owned resident textures directly.
+
 The Metallic and Roughness controls in **Multi-Channel Brush** are stroke
 values: they are written as grayscale into those channel images. The
 **Influence** control beside each channel image is separate; it controls how

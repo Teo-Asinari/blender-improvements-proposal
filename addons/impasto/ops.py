@@ -1000,6 +1000,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             "channel_keys": tuple(keys),
             "brush_stamp": (stamp if stamp is not None
                             and stamp.supported else None),
+            "opacity": layer.brush_opacity,
             "preview_mode": gpu_preview_mode(layer),
         }
         if not gpu_engine.start_session(obj, images, region,
@@ -1075,7 +1076,8 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
                         else layer.brush_radius)
         gpu_engine.update_stroke_settings(
             payloads, radius=self._radius,
-            hardness=layer.brush_hardness, stamp=supported_stamp)
+            hardness=layer.brush_hardness, opacity=layer.brush_opacity,
+            stamp=supported_stamp)
 
     def _refresh_preview_mode(self):
         """Apply a sidebar preview change without restarting the session."""
@@ -1114,6 +1116,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             write_ms += (t1 - t0) * 1000.0
             update_ms += (t2 - t1) * 1000.0
         gpu_engine.record_sync_stats(write_ms, update_ms)
+        gpu_engine.complete_material_inspect()
         # Repaint the composed material and any Image editors.
         for area in bpy.context.screen.areas:
             if area.type in {'VIEW_3D', 'IMAGE_EDITOR'}:
@@ -1151,7 +1154,23 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             return self._finish(context)
 
         etype = event.type
+        if etype == 'V' and event.value == 'PRESS':
+            if (gpu_engine.material_inspect_active()
+                    or gpu_engine.material_inspect_requested()):
+                gpu_engine.leave_material_inspect()
+                self.report({'INFO'}, "GPU paint preview resumed")
+            else:
+                if gpu_engine.stroke_active():
+                    gpu_engine.end_stroke()
+                gpu_engine.request_material_inspect()
+                self.report({'INFO'}, "Syncing Blender material preview")
+            self._region.tag_redraw()
+            return {'RUNNING_MODAL'}
         if etype == 'P' and event.value == 'PRESS':
+            if (gpu_engine.material_inspect_active()
+                    or gpu_engine.material_inspect_requested()):
+                self.report({'INFO'}, "Press V to return to GPU painting")
+                return {'RUNNING_MODAL'}
             if gpu_engine.stroke_active():
                 gpu_engine.end_stroke()
             paused = not gpu_engine.input_paused()
