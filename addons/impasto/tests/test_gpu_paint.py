@@ -81,7 +81,7 @@ try:
               "NEUTRAL_NORMAL_LIGHTING", "HEIGHT_GRAYSCALE"))
     check("preview shader has explicit diagnostic branches",
           "preview_mode == 1" in gpu_engine.PREVIEW_FRAG_SRC
-          and "vec3(0.5, 0.5, 1.0)" in gpu_engine.PREVIEW_FRAG_SRC
+          and "normal_sample.rgb" in gpu_engine.PREVIEW_FRAG_SRC
           and "preview_mode == 2" in gpu_engine.PREVIEW_FRAG_SRC
           and "preview_mode == 3" in gpu_engine.PREVIEW_FRAG_SRC)
     check("unknown preview mode safely normalizes to Lit PBR",

@@ -219,10 +219,14 @@ class IMPASTO_PT_main(bpy.types.Panel):
             row.prop(layer, "brush_hardness", slider=True)
             gpu_col.prop(layer, "brush_opacity", slider=True)
             row = gpu_col.row(align=True)
-            row.prop(layer, "auto_material_preview", text="Auto Material")
+            row.prop(layer, "auto_material_preview", text="Idle Material Sync")
             sub = row.row(align=True)
             sub.enabled = layer.auto_material_preview
             sub.prop(layer, "auto_material_preview_delay", text="Delay")
+            if layer.auto_material_preview:
+                gpu_col.label(text="Idle sync adds GPU readback; disable for "
+                                   "lowest latency",
+                              icon='ERROR')
             row = box.row()
             row.scale_y = 1.25
             row.enabled = not gpu_engine.session_active()
@@ -250,8 +254,17 @@ class IMPASTO_PT_main(bpy.types.Panel):
                           icon='INFO')
                 if (not gpu_engine.material_inspect_active()
                         and not gpu_engine.material_inspect_requested()):
-                    box.label(text="Press V to inspect Blender material",
-                              icon='SHADING_RENDERED')
+                    row = box.row()
+                    row.enabled = not gpu_engine.stroke_active()
+                    row.operator(
+                        ops.IMPASTO_OT_gpu_material_inspect_toggle.bl_idname,
+                        text="Inspect Blender Material",
+                        icon='SHADING_RENDERED')
+                elif gpu_engine.material_inspect_active():
+                    box.operator(
+                        ops.IMPASTO_OT_gpu_material_inspect_toggle.bl_idname,
+                        text="Resume GPU Preview",
+                        icon='PLAY')
                 undo_count, redo_count = gpu_engine.history_counts()
                 box.label(text="GPU Undo %d / Redo %d (Ctrl-Z / Ctrl-Shift-Z)"
                           % (undo_count, redo_count), icon='LOOP_BACK')
@@ -259,8 +272,11 @@ class IMPASTO_PT_main(bpy.types.Panel):
                 row.enabled = not gpu_engine.stroke_active()
                 row.operator(
                     ops.IMPASTO_OT_gpu_flush.bl_idname,
-                    text="Flush GPU Paint to Images",
+                    text="Flush for Save / Export",
                     icon='FILE_REFRESH')
+                box.label(text="Ctrl-S flushes before saving; use Flush before "
+                               "menu Save/Export",
+                          icon='INFO')
                 box.label(text="RMB/Esc flushes and stops",
                           icon='INFO')
             else:

@@ -36,6 +36,8 @@ run_one "$TESTS_DIR/test_multichannel_paint.py" "IMPASTO_MULTICHANNEL_PASSED" ||
 run_one "$TESTS_DIR/test_gpu_paint.py" "IMPASTO_GPU_PAINT_PASSED" || status=1
 run_one "$TESTS_DIR/test_preview_modes.py" "IMPASTO_PREVIEW_MODES_PASSED" || status=1
 run_one "$TESTS_DIR/test_gpu_preview_contract.py" "IMPASTO_GPU_PREVIEW_CONTRACT_PASSED" || status=1
+run_one "$TESTS_DIR/test_ibl_preview.py" "IMPASTO_IBL_PREVIEW_PASSED" || status=1
+run_one "$TESTS_DIR/test_preview_stack.py" "IMPASTO_PREVIEW_STACK_PASSED" || status=1
 run_one "$TESTS_DIR/test_brush_undo.py" "IMPASTO_BRUSH_UNDO_PASSED" || status=1
 run_one "$TESTS_DIR/test_visibility.py" "IMPASTO_VISIBILITY_PASSED" || status=1
 run_one "$TESTS_DIR/test_scalar_channels.py" "IMPASTO_SCALAR_CHANNELS_PASSED" || status=1

@@ -103,6 +103,9 @@ import gpu
 
 from . import visibility
 from . import tile_undo
+from . import ibl
+from . import model
+from . import preview_stack
 
 # ---------------------------------------------------------------------------
 # Tunables
@@ -275,65 +278,124 @@ vec4 straight_sample(sampler2D tex, vec2 uv)
     return c;
 }
 
-float ggx_distribution(float ndh, float roughness)
+vec4 stack_blend(vec4 a, vec4 b, float factor, int mode)
 {
-    float a = max(roughness * roughness, 0.025);
-    float a2 = a * a;
-    float d = ndh * ndh * (a2 - 1.0) + 1.0;
-    return a2 / max(3.14159265 * d * d, 1e-5);
+    float f = clamp(factor, 0.0, 1.0);
+    if (mode == 1) return a + b * f;
+    if (mode == 2) return a - b * f;
+    if (mode == 3) return a * mix(vec4(1.0), b, f);
+    if (mode == 4) return vec4(1.0) -
+        (vec4(1.0) - a) * (vec4(1.0) - b * f);
+    if (mode == 5) {
+        vec4 over = mix(2.0 * a * b,
+                        vec4(1.0) - 2.0 * (vec4(1.0) - a) *
+                        (vec4(1.0) - b),
+                        greaterThanEqual(a, vec4(0.5)));
+        return mix(a, over, f);
+    }
+    return mix(a, b, f);
 }
 
-float smith_visibility(float ndv, float ndl, float roughness)
+vec4 resolve_stack_channel(sampler2D active_tex, sampler2D baseline_tex,
+                           vec4 baseline_value, float baseline_is_texture,
+                           float active_present, float active_factor,
+                           int active_blend, float decode_active_srgb)
 {
-    float k = (roughness + 1.0);
-    k = k * k * 0.125;
-    float gv = ndv / max(ndv * (1.0 - k) + k, 1e-5);
-    float gl = ndl / max(ndl * (1.0 - k) + k, 1e-5);
-    return gv * gl;
+    vec4 value = baseline_is_texture > 0.5
+        ? texture(baseline_tex, uvInterp) : baseline_value;
+    if (active_present > 0.5) {
+        vec4 source = straight_sample(active_tex, uvInterp);
+        if (decode_active_srgb > 0.5)
+            source.rgb = srgb_to_linear(source.rgb);
+        value = stack_blend(value, source, active_factor * source.a,
+                            active_blend);
+    }
+    value.a = 1.0;
+    return value;
 }
 
-vec3 fresnel_schlick(float vdh, vec3 f0)
+vec2 environment_uv(vec3 direction)
 {
-    return f0 + (vec3(1.0) - f0) * pow(1.0 - vdh, 5.0);
+    direction = normalize(direction);
+    return vec2(atan(direction.y, direction.x) / (2.0 * 3.14159265) + 0.5,
+                asin(clamp(direction.z, -1.0, 1.0)) / 3.14159265 + 0.5);
 }
 
-vec3 pbr_light(vec3 n, vec3 v, vec3 l, vec3 radiance, vec3 albedo,
-               float metallic, float roughness)
+vec3 sample_environment_panel(vec3 direction, float panel)
 {
-    vec3 h = normalize(v + l);
-    float ndv = max(dot(n, v), 0.001);
-    float ndl = max(dot(n, l), 0.0);
-    float ndh = max(dot(n, h), 0.0);
-    float vdh = max(dot(v, h), 0.0);
-    vec3 f0 = mix(vec3(0.04), albedo, metallic);
-    vec3 f = fresnel_schlick(vdh, f0);
-    vec3 specular = ggx_distribution(ndh, roughness)
-                  * smith_visibility(ndv, ndl, roughness) * f
-                  / max(4.0 * ndv * ndl, 1e-4);
-    vec3 diffuse = (vec3(1.0) - f) * (1.0 - metallic)
-                 * albedo / 3.14159265;
-    return (diffuse + specular) * radiance * ndl;
+    vec2 uv = environment_uv(direction);
+    /* Half-texel inset prevents bilinear bleed between roughness strips. */
+    float panel_v = (0.5 + uv.y * 63.0) / 64.0;
+    uv.y = (panel + panel_v) / 6.0;
+    return texture(environment_atlas, uv).rgb;
+}
+
+vec3 sample_prefiltered_environment(vec3 direction, float roughness)
+{
+    float level = clamp(roughness, 0.0, 1.0) * 4.0;
+    float lower = floor(level);
+    float upper = min(lower + 1.0, 4.0);
+    return mix(sample_environment_panel(direction, 1.0 + lower),
+               sample_environment_panel(direction, 1.0 + upper),
+               level - lower);
+}
+
+vec3 fresnel_schlick_roughness(float ndv, vec3 f0, float roughness)
+{
+    vec3 grazing = max(vec3(1.0 - roughness), f0);
+    return f0 + (grazing - f0) * pow(1.0 - ndv, 5.0);
+}
+
+/* Epic's split-sum approximation of the integrated GGX environment BRDF. */
+vec2 environment_brdf_ggx(float ndv, float roughness)
+{
+    vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
+    vec4 c1 = vec4(1.0, 0.0425, 1.04, -0.04);
+    vec4 r = roughness * c0 + c1;
+    float a004 = min(r.x * r.x, exp2(-9.28 * ndv)) * r.x + r.y;
+    return vec2(-1.04, 1.04) * a004 + r.zw;
+}
+
+vec3 aces_fitted(vec3 color)
+{
+    return clamp((color * (2.51 * color + 0.03)) /
+                 (color * (2.43 * color + 0.59) + 0.14), 0.0, 1.0);
 }
 
 void main()
 {
+    vec4 base = resolve_stack_channel(
+        base_color_tex, baseline_base_color_tex, baseline_base_color_value,
+        baseline_base_color_is_texture, active_base_color,
+        active_base_color_factor, active_base_color_blend, 1.0);
+    vec4 metal_sample = resolve_stack_channel(
+        metallic_tex, baseline_metallic_tex, baseline_metallic_value,
+        baseline_metallic_is_texture, active_metallic,
+        active_metallic_factor, active_metallic_blend, 0.0);
+    vec4 rough_sample = resolve_stack_channel(
+        roughness_tex, baseline_roughness_tex, baseline_roughness_value,
+        baseline_roughness_is_texture, active_roughness,
+        active_roughness_factor, active_roughness_blend, 0.0);
+    vec4 normal_sample = resolve_stack_channel(
+        normal_tex, baseline_normal_tex, baseline_normal_value,
+        baseline_normal_is_texture, active_normal,
+        active_normal_factor, active_normal_blend, 0.0);
+    vec4 height_sample = resolve_stack_channel(
+        height_tex, baseline_height_tex, baseline_height_value,
+        baseline_height_is_texture, active_height,
+        active_height_factor, active_height_blend, 0.0);
     if (preview_mode == 1) {
-        vec4 raw_normal = straight_sample(normal_tex, uvInterp);
-        float normal_alpha = has_normal > 0.5 ? raw_normal.a : 0.0;
-        vec3 encoded = mix(vec3(0.5, 0.5, 1.0), raw_normal.rgb,
-                           clamp(normal_alpha, 0.0, 1.0));
+        vec3 encoded = normal_sample.rgb;
         fragColor = vec4(encoded, 1.0);
         return;
     }
     if (preview_mode == 3) {
-        float raw_height = texture(height_tex, uvInterp).r;
-        float h = has_height > 0.5 ? raw_height : 0.5;
+        float h = height_sample.r;
         fragColor = vec4(vec3(h), 1.0);
         return;
     }
 
-    vec4 normal_sample = straight_sample(normal_tex, uvInterp);
-    float height = texture(height_tex, uvInterp).r;
+    float height = height_sample.r;
 
     vec3 dpdx = dFdx(worldPos), dpdy = dFdy(worldPos);
     vec2 dudx = dFdx(uvInterp), dudy = dFdy(uvInterp);
@@ -355,9 +417,8 @@ void main()
         bitangent = normalize(cross(geometric_n, tangent));
     }
     vec3 n = geometric_n;
-    if (has_normal > 0.5 && normal_sample.a > 1e-6) {
-        vec3 encoded_n = mix(vec3(0.5, 0.5, 1.0), normal_sample.rgb,
-                             clamp(normal_sample.a, 0.0, 1.0));
+    if (has_normal > 0.5) {
+        vec3 encoded_n = normal_sample.rgb;
         vec3 tangent_n = normalize(encoded_n * 2.0 - 1.0);
         n = normalize(mat3(tangent, bitangent, geometric_n) * tangent_n);
     }
@@ -383,45 +444,56 @@ void main()
         return;
     }
 
-    vec4 base = straight_sample(base_color_tex, uvInterp);
-    vec4 metal_sample = straight_sample(metallic_tex, uvInterp);
-    vec4 rough_sample = straight_sample(roughness_tex, uvInterp);
     vec3 albedo = has_base_color > 0.5
-        ? mix(vec3(0.5), srgb_to_linear(base.rgb), base.a) : vec3(0.5);
+        ? base.rgb : vec3(0.5);
     float metallic = has_metallic > 0.5
-        ? mix(0.0, metal_sample.r, metal_sample.a) : 0.0;
+        ? metal_sample.r : 0.0;
     float roughness = has_roughness > 0.5
-        ? mix(0.5, rough_sample.r, rough_sample.a) : 0.5;
+        ? rough_sample.r : 0.5;
 
-    /* Lightweight, deterministic environment-style PBR preview.
-     * It deliberately composes every resident channel; Blender's material
-     * remains authoritative after an explicit/session-exit flush. */
+    /* Split-sum GGX image-based lighting from Impasto's prefiltered linear
+     * HDR studio atlas. Blender's material remains authoritative after an
+     * explicit/session-exit flush. */
     vec3 v = normalize(camera_position - worldPos);
     metallic = clamp(metallic, 0.0, 1.0);
     roughness = clamp(roughness, 0.04, 1.0);
-    vec3 rgb = pbr_light(n, v, normalize(vec3(0.35, 0.45, 0.82)),
-                         vec3(3.0, 2.8, 2.55), albedo, metallic, roughness);
-    rgb += pbr_light(n, v, normalize(vec3(-0.72, 0.18, 0.48)),
-                     vec3(0.55, 0.72, 1.0), albedo, metallic, roughness);
-    rgb += pbr_light(n, v, normalize(vec3(0.08, -0.82, 0.35)),
-                     vec3(0.7, 0.42, 0.28), albedo, metallic, roughness);
-    float sky = clamp(n.z * 0.5 + 0.5, 0.0, 1.0);
-    vec3 environment = mix(vec3(0.035, 0.028, 0.025),
-                           vec3(0.18, 0.23, 0.32), sky);
     vec3 f0 = mix(vec3(0.04), albedo, metallic);
-    vec3 ambient_diffuse = albedo * (1.0 - metallic) * environment;
-    vec3 ambient_specular = f0 * mix(vec3(0.32), environment * 1.8,
-                                    roughness);
-    rgb += ambient_diffuse + ambient_specular;
-    rgb = rgb / (rgb + vec3(1.0));
+    float ndv = max(dot(n, v), 0.001);
+    vec3 fresnel = fresnel_schlick_roughness(ndv, f0, roughness);
+    vec3 kd = (vec3(1.0) - fresnel) * (1.0 - metallic);
+    vec3 rgb;
+    if (environment_ready > 0.5) {
+        vec3 irradiance = sample_environment_panel(n, 0.0);
+        vec3 reflection = reflect(-v, n);
+        vec3 prefiltered = sample_prefiltered_environment(
+            reflection, roughness);
+        vec2 env_brdf = environment_brdf_ggx(ndv, roughness);
+        vec3 diffuse_ibl = irradiance * albedo * kd;
+        vec3 specular_ibl = prefiltered * (f0 * env_brdf.x + env_brdf.y);
+        rgb = diffuse_ibl + specular_ibl;
+    } else {
+        /* Graceful no-texture fallback: energy-conserving hemispheric light. */
+        float sky = clamp(n.z * 0.5 + 0.5, 0.0, 1.0);
+        vec3 environment = mix(vec3(0.035, 0.028, 0.025),
+                               vec3(0.18, 0.23, 0.32), sky);
+        rgb = environment * (albedo * kd + fresnel);
+    }
+    rgb = aces_fitted(rgb);
 
-    float coverage = 0.0;
-    if (has_base_color > 0.5) coverage = max(coverage, base.a);
-    if (has_metallic > 0.5) coverage = max(coverage, metal_sample.a);
-    if (has_roughness > 0.5) coverage = max(coverage, rough_sample.a);
-    if (has_normal > 0.5) coverage = max(coverage, normal_sample.a);
-    if (has_height > 0.5) coverage = max(coverage,
-                                        clamp(abs(height - 0.5) * 8.0, 0.0, 1.0));
+    float coverage = 1.0;
+    if (resolved_stack < 0.5) {
+        coverage = 0.0;
+        if (active_base_color > 0.5)
+            coverage = max(coverage, straight_sample(base_color_tex, uvInterp).a);
+        if (active_metallic > 0.5)
+            coverage = max(coverage, straight_sample(metallic_tex, uvInterp).a);
+        if (active_roughness > 0.5)
+            coverage = max(coverage, straight_sample(roughness_tex, uvInterp).a);
+        if (active_normal > 0.5)
+            coverage = max(coverage, straight_sample(normal_tex, uvInterp).a);
+        if (active_height > 0.5)
+            coverage = max(coverage, straight_sample(height_tex, uvInterp).a);
+    }
     fragColor = vec4(rgb, coverage * preview_opacity);
 }
 """
@@ -438,6 +510,35 @@ COPY_FRAG_SRC = """
 void main()
 {
     fragColor = texture(source_tex, uvInterp);
+}
+"""
+
+BASELINE_FRAG_SRC = """
+vec4 blend_step(vec4 a, vec4 b, float factor, int mode)
+{
+    float f = clamp(factor, 0.0, 1.0);
+    if (mode == 1) return a + b * f;
+    if (mode == 2) return a - b * f;
+    if (mode == 3) return a * mix(vec4(1.0), b, f);
+    if (mode == 4) return vec4(1.0) -
+        (vec4(1.0) - a) * (vec4(1.0) - b * f);
+    if (mode == 5) {
+        vec4 over = mix(2.0 * a * b,
+                        vec4(1.0) - 2.0 * (vec4(1.0) - a) *
+                        (vec4(1.0) - b),
+                        greaterThanEqual(a, vec4(0.5)));
+        return mix(a, over, f);
+    }
+    return mix(a, b, f);
+}
+
+void main()
+{
+    vec4 a = texture(current_tex, uvInterp);
+    vec4 b = source_is_texture > 0.5
+        ? texture(source_tex, uvInterp) : source_value;
+    float f = factor * (source_uses_alpha > 0.5 ? b.a : 1.0);
+    fragColor = blend_step(a, b, f, blend_mode);
 }
 """
 
@@ -783,13 +884,24 @@ def preview_shader_create_info():
     info.push_constant('VEC3', "camera_position")
     info.push_constant('FLOAT', "preview_opacity")
     info.push_constant('INT', "preview_mode")
+    info.push_constant('FLOAT', "environment_ready")
+    info.push_constant('FLOAT', "resolved_stack")
     for name in ("base_color", "metallic", "roughness", "normal", "height"):
         info.push_constant('FLOAT', "has_" + name)
+        info.push_constant('FLOAT', "active_" + name)
+        info.push_constant('FLOAT', "active_" + name + "_factor")
+        info.push_constant('INT', "active_" + name + "_blend")
+        info.push_constant('VEC4', "baseline_" + name + "_value")
+        info.push_constant('FLOAT', "baseline_" + name + "_is_texture")
     info.sampler(0, 'FLOAT_2D', "base_color_tex")
     info.sampler(1, 'FLOAT_2D', "metallic_tex")
     info.sampler(2, 'FLOAT_2D', "roughness_tex")
     info.sampler(3, 'FLOAT_2D', "normal_tex")
     info.sampler(4, 'FLOAT_2D', "height_tex")
+    info.sampler(5, 'FLOAT_2D', "environment_atlas")
+    for index, name in enumerate(("base_color", "metallic", "roughness",
+                                  "normal", "height"), 6):
+        info.sampler(index, 'FLOAT_2D', "baseline_" + name + "_tex")
     info.vertex_in(0, 'VEC3', "pos")
     info.vertex_in(1, 'VEC2', "uv")
     info.vertex_out(iface)
@@ -815,6 +927,28 @@ def copy_shader_create_info():
     return info
 
 
+def baseline_shader_create_info():
+    iface = gpu.types.GPUStageInterfaceInfo("impasto_baseline_iface")
+    iface.smooth('VEC2', "uvInterp")
+    info = gpu.types.GPUShaderCreateInfo()
+    info.push_constant('VEC2', "uv_origin")
+    info.push_constant('VEC2', "uv_scale")
+    info.push_constant('VEC4', "source_value")
+    info.push_constant('FLOAT', "source_is_texture")
+    info.push_constant('FLOAT', "source_uses_alpha")
+    info.push_constant('FLOAT', "factor")
+    info.push_constant('INT', "blend_mode")
+    info.sampler(0, 'FLOAT_2D', "current_tex")
+    info.sampler(1, 'FLOAT_2D', "source_tex")
+    info.vertex_in(0, 'VEC3', "pos")
+    info.vertex_in(1, 'VEC2', "uv")
+    info.vertex_out(iface)
+    info.fragment_out(0, 'VEC4', "fragColor")
+    info.vertex_source(COPY_VERT_SRC)
+    info.fragment_source(BASELINE_FRAG_SRC)
+    return info
+
+
 # ---------------------------------------------------------------------------
 # Stroke payload planning (pure; headless-testable)
 #
@@ -833,6 +967,102 @@ def copy_shader_create_info():
 # Other channels (emission, subsurface, ...) stay native-paint-only.
 GPU_PAINT_CHANNEL_KEYS = ("base_color", "metallic", "roughness",
                           "normal", "height")
+
+_BLEND_INDEX = {
+    "MIX": 0, "ADD": 1, "SUBTRACT": 2, "MULTIPLY": 3,
+    "SCREEN": 4, "OVERLAY": 5,
+}
+
+
+def resident_stack_runtime_spec(stack_model, active_uid):
+    """Pure lower-stack plan consumed by the live GPU compositor.
+
+    The first implementation deliberately resolves the common, predictable
+    case: one UV domain, no image masks, and the static layers below the
+    resident Paint layer.  Unsupported topology is reported explicitly rather
+    than silently sampling the wrong coordinates.  Upper layers remain a
+    labelled approximation until their affine/nonlinear passes are resident.
+    """
+    try:
+        plan = preview_stack.plan_resident_preview(
+            stack_model, active_uid, GPU_PAINT_CHANNEL_KEYS)
+    except ValueError as exc:
+        return {"enabled": False, "status": "disabled: %s" % exc,
+                "channels": {}}
+    active = next(layer for layer in stack_model.layers
+                  if layer.uid == active_uid)
+    by_uid = {layer.uid: layer for layer in stack_model.layers}
+    relevant_uids = set(plan.lower_layer_uids) | {active_uid}
+    has_image_masks = any(
+        mask.visible and mask.image_name
+        for layer in stack_model.layers if layer.uid in relevant_uids
+        for mask in layer.masks)
+    if has_image_masks:
+        return {"enabled": False,
+                "status": "fallback: image masks require material preview",
+                "channels": {}, "plan": plan}
+    scope = preview_stack.assess_lower_baseline_scope(plan)
+    if not scope.supported:
+        return {"enabled": False,
+                "status": "fallback: %s" % "; ".join(scope.reasons),
+                "channels": {}, "plan": plan}
+
+    channels = {}
+    composition = tuple(reversed(stack_model.layers))
+    active_i = composition.index(active)
+    for key in GPU_PAINT_CHANNEL_KEYS:
+        channel = model.CHANNEL_MAP[key]
+        steps = []
+        for layer in composition[:active_i]:
+            binding = next((b for b in layer.bindings if b.key == key), None)
+            if (binding is None or layer.layer_type == "GROUP"
+                    or not binding.enabled or not layer.visible
+                    or any(not g.visible for g in model._ancestors(
+                        stack_model, layer))):
+                continue
+            image_name = model.binding_image(layer, binding)
+            if (binding.mode == "SHARED" and layer.layer_type == "PAINT"
+                    and image_name):
+                source = {"kind": "IMAGE", "image_name": image_name,
+                          "use_alpha": bool(binding.use_masks)}
+            elif binding.mode == "COLOR":
+                value = (float(binding.color[0]) if channel.kind == "SCALAR"
+                         else tuple(float(x) for x in binding.color))
+                source = {"kind": "CONSTANT", "value": value}
+            elif binding.mode == "VALUE":
+                value = float(binding.value)
+                if channel.kind != "SCALAR":
+                    value = (value, value, value, 1.0)
+                source = {"kind": "CONSTANT", "value": value}
+            else:
+                source = {"kind": "CONSTANT",
+                          "value": model.seed_native(channel)}
+            steps.append({
+                "layer_uid": layer.uid,
+                "source": source,
+                "factor": model.const_factor(stack_model, layer, binding),
+                "blend": model.effective_blend(layer, binding),
+            })
+        active_binding = next(
+            (b for b in active.bindings if b.key == key), None)
+        active_spec = None
+        if active_binding is not None and active_binding.enabled:
+            active_spec = {
+                "factor": model.const_factor(
+                    stack_model, active, active_binding),
+                "blend": model.effective_blend(active, active_binding),
+                # Resident alpha is the live stroke coverage and is applied
+                # exactly once in the preview shader.
+                "use_alpha": True,
+            }
+        channels[key] = {
+            "seed": model.seed_native(channel),
+            "lower_steps": tuple(steps),
+            "active": active_spec,
+        }
+    status = "resolved: same-UV lower stack + active"
+    return {"enabled": True, "status": status, "channels": channels,
+            "plan": plan}
 
 
 def linear_to_srgb(v):
@@ -992,6 +1222,18 @@ class _Session:
         self.copy_shader = None
         self.copy_batch = None
         self.single_fbs = None
+        self.environment_tex = None
+        self.stack_spec = self.settings.get("stack_spec")
+        self.baseline_shader = None
+        self.baseline_batch = None
+        self.baseline_texs = {}
+        self.baseline_values = {}
+        self.baseline_gpu_refs = []
+        self.baseline_build_ms = 0.0
+        self.environment_build_ms = 0.0
+        self.preview_submit_ms = 0.0
+        self.preview_submit_avg_ms = 0.0
+        self.preview_submit_count = 0
         self.gpu_ready = False
         self.probe_lines = None
 
@@ -1151,6 +1393,23 @@ def current_preview_mode():
     return normalize_preview_mode(_session.settings.get("preview_mode"))
 
 
+def preview_runtime_stats():
+    """Non-blocking CPU submission/upload measurements for the live preview."""
+    s = _session
+    if s is None:
+        return {}
+    return {
+        "environment_ready": s.environment_tex is not None,
+        "environment_build_ms": s.environment_build_ms,
+        "baseline_build_ms": s.baseline_build_ms,
+        "stack_preview_status": (s.stack_spec or {}).get(
+            "status", "active layer only"),
+        "preview_submit_ms": s.preview_submit_ms,
+        "preview_submit_avg_ms": s.preview_submit_avg_ms,
+        "preview_submit_count": s.preview_submit_count,
+    }
+
+
 def set_input_paused(paused):
     """Pause viewport dab capture without ending or synchronizing a session."""
     if _session is None:
@@ -1184,6 +1443,9 @@ def complete_material_inspect():
     if s is None or not s.settings.get("material_inspect_requested", False):
         return False
     s.settings["material_inspect_requested"] = False
+    if s.stack_spec is None and s.settings.get("stack_model") is not None:
+        s.stack_spec = resident_stack_runtime_spec(
+            s.settings["stack_model"], s.settings.get("active_layer_uid", ""))
     s.settings["material_inspect"] = True
     s.settings["input_paused"] = True
     return True
@@ -1639,6 +1901,28 @@ def _ensure_gpu(s):
     s.preview_shader = gpu.shader.create_from_info(
         preview_shader_create_info())
     s.copy_shader = gpu.shader.create_from_info(copy_shader_create_info())
+    s.baseline_shader = gpu.shader.create_from_info(
+        baseline_shader_create_info())
+
+    # Blender does not expose Material Preview's prefiltered studio texture as
+    # a public GPU handle. Upload Impasto's deterministic linear-HDR atlas;
+    # shader-side fallback remains available if allocation fails.
+    t_environment = time.perf_counter()
+    try:
+        atlas = ibl.build_environment_atlas()
+        atlas_buffer = gpu.types.Buffer('FLOAT', atlas.shape, atlas)
+        s.environment_tex = gpu.types.GPUTexture(
+            (atlas.shape[1], atlas.shape[0]), format='RGBA16F',
+            data=atlas_buffer)
+    except Exception:
+        s.environment_tex = None
+        traceback.print_exc()
+    s.environment_build_ms = (time.perf_counter() - t_environment) * 1000.0
+    _log_line("GPU_PAINT_IBL source=impasto_studio_atlas size=%dx%d "
+              "upload_ms=%.3f ready=%s" % (
+                  ibl.ATLAS_WIDTH, ibl.ATLAS_PANEL_HEIGHT * ibl.ATLAS_PANELS,
+                  s.environment_build_ms,
+                  "yes" if s.environment_tex is not None else "fallback"))
 
     # Paint textures: N RGBA16F accumulation targets on ONE framebuffer
     # (MRT). Readback goes through fb.read_color(..., slot=i, 'FLOAT')
@@ -1702,11 +1986,96 @@ def _ensure_gpu(s):
                     (1.0, 1.0, 0.0), (-1.0, 1.0, 0.0)],
             "uv": [(0.0, 0.0), (1.0, 0.0),
                    (1.0, 1.0), (0.0, 1.0)]})
+    s.baseline_batch = batch_for_shader(
+        s.baseline_shader, 'TRI_FAN', {
+            "pos": [(-1.0, -1.0, 0.0), (1.0, -1.0, 0.0),
+                    (1.0, 1.0, 0.0), (-1.0, 1.0, 0.0)],
+            "uv": [(0.0, 0.0), (1.0, 0.0),
+                   (1.0, 1.0), (0.0, 1.0)]})
+    _build_stack_baselines(s)
     s.history_backend = _GPUTileBackend(s)
     s.gpu_ready = True
 
     # The research spike's destructive readback characterization is not part
     # of the production Impasto session; normal stroke stats remain enabled.
+
+
+def _vec4(value):
+    if isinstance(value, (tuple, list)):
+        values = tuple(float(v) for v in value)
+        if len(values) >= 4:
+            return values[:4]
+        if len(values) == 3:
+            return values + (1.0,)
+        if len(values) == 1:
+            return (values[0], values[0], values[0], 1.0)
+    v = float(value)
+    return (v, v, v, 1.0)
+
+
+def _build_stack_baselines(s):
+    """Resolve static lower layers without reading resident GPU pixels."""
+    spec = s.stack_spec
+    if not spec or not spec.get("enabled"):
+        return
+    t0 = time.perf_counter()
+    size = s.size
+    try:
+        for key, channel in spec["channels"].items():
+            steps = channel["lower_steps"]
+            if not any(step["source"]["kind"] == "IMAGE" for step in steps):
+                value = channel["seed"]
+                for step in steps:
+                    value = preview_stack.blend_value(
+                        value, step["source"]["value"], step["factor"],
+                        step["blend"])
+                s.baseline_values[key] = _vec4(value)
+                continue
+            ping = gpu.types.GPUTexture((size, size), format='RGBA16F')
+            pong = gpu.types.GPUTexture((size, size), format='RGBA16F')
+            ping.clear(format='FLOAT', value=_vec4(channel["seed"]))
+            current, target = ping, pong
+            for step in steps:
+                source = step["source"]
+                source_tex = current
+                if source["kind"] == "IMAGE":
+                    image = bpy.data.images.get(source["image_name"])
+                    if image is None:
+                        raise RuntimeError("missing lower image %r" %
+                                           source["image_name"])
+                    source_tex = gpu.texture.from_image(image)
+                    s.baseline_gpu_refs.append(source_tex)
+                fb = gpu.types.GPUFrameBuffer(color_slots=(target,))
+                with fb.bind():
+                    gpu.state.viewport_set(0, 0, size, size)
+                    gpu.state.blend_set('NONE')
+                    shader = s.baseline_shader
+                    shader.bind()
+                    shader.uniform_float("uv_origin", (0.0, 0.0))
+                    shader.uniform_float("uv_scale", (1.0, 1.0))
+                    shader.uniform_float("source_value", _vec4(
+                        source.get("value", 0.0)))
+                    shader.uniform_float("source_is_texture",
+                                         1.0 if source["kind"] == "IMAGE" else 0.0)
+                    shader.uniform_float("source_uses_alpha",
+                                         1.0 if source.get("use_alpha") else 0.0)
+                    shader.uniform_float("factor", float(step["factor"]))
+                    shader.uniform_int("blend_mode", _BLEND_INDEX.get(
+                        step["blend"], 0))
+                    shader.uniform_sampler("current_tex", current)
+                    shader.uniform_sampler("source_tex", source_tex)
+                    s.baseline_batch.draw(shader)
+                current, target = target, current
+            s.baseline_texs[key] = current
+        s.baseline_build_ms = (time.perf_counter() - t0) * 1000.0
+        _log_line("GPU_PAINT_STACK status=%s build_ms=%.3f textures=%d" % (
+            spec["status"], s.baseline_build_ms, len(s.baseline_texs)))
+    except Exception as exc:
+        s.baseline_texs.clear()
+        s.baseline_values.clear()
+        spec["enabled"] = False
+        spec["status"] = "fallback: lower baseline build failed: %s" % exc
+        traceback.print_exc()
 
 
 def _characterize_readback(s):
@@ -2448,6 +2817,7 @@ def _draw_composed_preview(s):
             or s.batch_preview is None or s.view_proj is None
             or not s.paint_texs):
         return
+    t0 = time.perf_counter()
     keys = tuple(s.settings.get("channel_keys", ()))
     by_key = {key: s.paint_texs[i] for i, key in enumerate(keys)
               if i < len(s.paint_texs)}
@@ -2464,14 +2834,49 @@ def _draw_composed_preview(s):
     shader.uniform_float("preview_opacity", 1.0)
     shader.uniform_int("preview_mode", preview_mode_index(
         s.settings.get("preview_mode")))
+    shader.uniform_float("environment_ready",
+                         1.0 if s.environment_tex is not None else 0.0)
+    resolved = bool(s.stack_spec and s.stack_spec.get("enabled"))
+    shader.uniform_float("resolved_stack", 1.0 if resolved else 0.0)
     for key in GPU_PAINT_CHANNEL_KEYS:
-        shader.uniform_float("has_" + key, 1.0 if key in by_key else 0.0)
+        channel_spec = (s.stack_spec.get("channels", {}).get(key, {})
+                        if resolved else {})
+        active_spec = channel_spec.get("active") or {}
+        active = key in by_key and bool(active_spec or not resolved)
+        baseline_value = (s.baseline_values.get(key)
+                          or _vec4(channel_spec.get(
+                              "seed", model.seed_native(
+                                  model.CHANNEL_MAP[key]))))
+        baseline_tex = s.baseline_texs.get(key)
+        shader.uniform_float("has_" + key,
+                             1.0 if resolved or active else 0.0)
+        shader.uniform_float("active_" + key, 1.0 if active else 0.0)
+        shader.uniform_float("active_" + key + "_factor",
+                             float(active_spec.get("factor", 1.0)))
+        shader.uniform_int("active_" + key + "_blend", _BLEND_INDEX.get(
+            active_spec.get("blend", "MIX"), 0))
+        shader.uniform_float("baseline_" + key + "_value", baseline_value)
+        shader.uniform_float("baseline_" + key + "_is_texture",
+                             1.0 if baseline_tex is not None else 0.0)
         shader.uniform_sampler(key + "_tex", by_key.get(key, fallback))
+        shader.uniform_sampler("baseline_" + key + "_tex",
+                               baseline_tex or fallback)
+    shader.uniform_sampler("environment_atlas",
+                           (s.environment_tex
+                            if s.environment_tex is not None else fallback))
     gpu.state.blend_set('ALPHA')
     gpu.state.depth_test_set('LESS_EQUAL')
     gpu.state.depth_mask_set(False)
     gpu.state.face_culling_set('BACK')
     s.batch_preview.draw(shader)
+    elapsed = (time.perf_counter() - t0) * 1000.0
+    s.preview_submit_ms = elapsed
+    s.preview_submit_count += 1
+    if s.preview_submit_count == 1:
+        s.preview_submit_avg_ms = elapsed
+    else:
+        s.preview_submit_avg_ms += (
+            elapsed - s.preview_submit_avg_ms) / s.preview_submit_count
 
 
 def _draw_brush_reticle(s):
@@ -2506,6 +2911,9 @@ def _overlay_text_lines(s):
         lines.append("ERROR (see console): %s"
                      % s.error.strip().splitlines()[-1][:80])
         return lines
+    if s.stack_spec:
+        lines.append("stack preview: %s" % s.stack_spec.get(
+            "status", "active layer only"))
     if s.stroke_active:
         n = s.dab_count + len(s.dab_queue)
         line = "stroke: %d dabs" % n

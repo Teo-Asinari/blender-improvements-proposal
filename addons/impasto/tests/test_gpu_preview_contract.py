@@ -61,20 +61,19 @@ check("raw diagnostics return before detail and PBR work",
       raw_normal_at < detail_at and raw_height_at < detail_at)
 check("neutral detail mode returns before microfacet lighting",
       detail_at < neutral_at < pbr_at)
-check("raw branches use branch-local single-channel samples",
-      "raw_normal = straight_sample(normal_tex" in main
-      and "raw_height = texture(height_tex" in main)
-check("base/scalar PBR samples occur only after diagnostic modes",
-      main.index("vec4 base = straight_sample") > neutral_at
-      and main.index("vec4 metal_sample = straight_sample") > neutral_at
-      and main.index("vec4 rough_sample = straight_sample") > neutral_at)
+check("all diagnostic channels use resolved lower-plus-active samples",
+      "resolve_stack_channel" in main
+      and "vec3 encoded = normal_sample.rgb" in main
+      and "float h = height_sample.r" in main)
+check("base/scalar PBR channels reuse the resolved samples",
+      "? base.rgb : vec3(0.5)" in main
+      and "? metal_sample.r : 0.0" in main
+      and "? rough_sample.r : 0.5" in main)
 
-check("PBR channels resolve transparent pixels to neutral defaults",
-      "mix(vec3(0.5), srgb_to_linear(base.rgb), base.a)" in src
-      and "mix(0.0, metal_sample.r, metal_sample.a)" in src
-      and "mix(0.5, rough_sample.r, rough_sample.a)" in src)
-check("normal alpha blends encoded data toward a flat normal",
-      "mix(vec3(0.5, 0.5, 1.0), normal_sample.rgb" in src)
+check("resident alpha gates the active layer exactly once",
+      "active_factor * source.a" in src)
+check("normal is decoded only after encoded-domain stack composition",
+      "vec3 encoded_n = normal_sample.rgb" in src)
 check("degenerate and mirrored UVs have explicit handling",
       "abs(uv_det) > 1e-8" in src and "orientation = sign(uv_det)" in src
       and "cross(axis, geometric_n)" in src)

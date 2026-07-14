@@ -18,6 +18,7 @@ from . import gpu_engine
 from . import model
 from . import paint
 from . import props
+from . import snapshot
 
 DEFAULT_IMAGE_SIZE = 2048
 
@@ -816,7 +817,6 @@ class IMPASTO_OT_native_multichannel_paint(bpy.types.Operator):
         self._tree_name = tree.name
         self._area = context.area
         self._region = region
-        self._area = context.area
         self._original_mode = context.object.mode
         self._original_state = paint.capture_native_state(context)
         self._stroke = []
@@ -1002,6 +1002,9 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
                             and stamp.supported else None),
             "opacity": layer.brush_opacity,
             "preview_mode": gpu_preview_mode(layer),
+            "stack_model": snapshot.snapshot(
+                tree, _context_material(context)),
+            "active_layer_uid": layer.name,
         }
         if not gpu_engine.start_session(obj, images, region,
                                         payloads=payloads,
@@ -1011,6 +1014,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         paint.maybe_switch_material_preview(context)
 
         self._region = region
+        self._area = context.area
         self._tree_name = tree.name
         self._layer_uid = layer.name
         self._channel_keys = tuple(keys)
@@ -1019,6 +1023,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         self._auto_inspect_delay = (layer.auto_material_preview_delay
                                     if layer.auto_material_preview else None)
         self._auto_inspect_deadline = None
+        self._pending_save_as = None
         self._stopping = False
         gpu_engine.set_cursor(event.mouse_x - region.x,
                               event.mouse_y - region.y)
@@ -1124,6 +1129,29 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         for area in bpy.context.screen.areas:
             if area.type in {'VIEW_3D', 'IMAGE_EDITOR'}:
                 area.tag_redraw()
+        return True
+
+    def _perform_deferred_save(self):
+        """Save only after resident textures reached Blender Images."""
+        save_as = self._pending_save_as
+        self._pending_save_as = None
+        if save_as or not bpy.data.filepath:
+            bpy.ops.wm.save_as_mainfile('INVOKE_DEFAULT')
+        else:
+            bpy.ops.wm.save_as_mainfile(
+                filepath=bpy.data.filepath, check_existing=False)
+
+    def _request_save_boundary(self, save_as=False):
+        """Queue a draw-context flush; the modal saves when it completes."""
+        if gpu_engine.stroke_active():
+            gpu_engine.end_stroke()
+        if not gpu_engine.has_unflushed_changes() and not gpu_engine.busy():
+            return False
+        self._pending_save_as = bool(save_as)
+        gpu_engine.request_flush()
+        self._region.tag_redraw()
+        self.report({'INFO'}, "Synchronizing resident GPU paint before save")
+        return True
 
     def _finish(self, context):
         gpu_engine.stop_session()
@@ -1142,6 +1170,14 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
 
         self._apply_pending_sync()
 
+        if (getattr(self, "_pending_save_as", None) is not None
+                and not gpu_engine.busy()):
+            if gpu_engine.has_unflushed_changes():
+                gpu_engine.request_flush()
+                self._region.tag_redraw()
+            else:
+                self._perform_deferred_save()
+
         if self._stopping:
             if not gpu_engine.busy():
                 return self._finish(context)
@@ -1157,6 +1193,12 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             return self._finish(context)
 
         etype = event.type
+        if etype == 'S' and event.value == 'PRESS' and event.ctrl:
+            if self._request_save_boundary(save_as=event.shift):
+                return {'RUNNING_MODAL'}
+            # No resident changes: let Blender's normal Save/Save As shortcut
+            # run without ending the GPU session.
+            return {'PASS_THROUGH'}
         if etype == 'V' and event.value == 'PRESS':
             if (gpu_engine.material_inspect_active()
                     or gpu_engine.material_inspect_requested()):
@@ -1283,6 +1325,33 @@ class IMPASTO_OT_gpu_flush(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class IMPASTO_OT_gpu_material_inspect_toggle(bpy.types.Operator):
+    """Inspect Blender's synchronized material, or resume resident preview"""
+    bl_idname = "impasto.gpu_material_inspect_toggle"
+    bl_label = "Impasto: Toggle Blender Material Inspection"
+    bl_options = {'REGISTER'}
+
+    @classmethod
+    def poll(cls, context):
+        return (gpu_engine.session_active()
+                and not gpu_engine.stroke_active())
+
+    def execute(self, context):
+        if (gpu_engine.material_inspect_active()
+                or gpu_engine.material_inspect_requested()):
+            gpu_engine.leave_material_inspect()
+            message = "Resident GPU preview resumed"
+        elif not gpu_engine.request_material_inspect():
+            return {'CANCELLED'}
+        else:
+            message = "Blender material inspection requested"
+        for area in context.screen.areas:
+            if area.type in {'VIEW_3D', 'IMAGE_EDITOR'}:
+                area.tag_redraw()
+        self.report({'INFO'}, message)
+        return {'FINISHED'}
+
+
 _classes = (
     IMPASTO_OT_stack_init,
     IMPASTO_OT_stack_remove,
@@ -1298,6 +1367,7 @@ _classes = (
     IMPASTO_OT_native_multichannel_paint,
     IMPASTO_OT_gpu_paint,
     IMPASTO_OT_gpu_flush,
+    IMPASTO_OT_gpu_material_inspect_toggle,
 )
 
 

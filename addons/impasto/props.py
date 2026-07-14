@@ -197,11 +197,11 @@ class ImpastoLayer(bpy.types.PropertyGroup):
                     "of a GPU stroke",
         default=1.0, min=0.0, max=1.0, subtype='FACTOR')
     auto_material_preview: BoolProperty(
-        name="Automatic Material Feedback",
-        description="After a brief pause, synchronize the dirty region and "
-                    "show Blender's authoritative material without ending "
-                    "the GPU session",
-        default=True)
+        name="Idle Material Synchronization",
+        description="After a pause, read GPU textures back to Blender Images "
+                    "and show the authoritative material; leave disabled for "
+                    "the lowest painting latency",
+        default=False)
     auto_material_preview_delay: FloatProperty(
         name="Feedback Delay", description="Idle time before authoritative "
         "material feedback", default=0.35, min=0.1, max=2.0,

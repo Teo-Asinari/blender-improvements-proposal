@@ -4,6 +4,19 @@ Current consolidated handoff: [`SESSION_2026-07-13.md`](SESSION_2026-07-13.md).
 It records the shipped GPU-resident architecture, validation, known limits,
 new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 
+## 0.7.0 — image-based PBR and common-stack resident preview
+
+- Replaced fixed preview lights with image-based studio lighting, roughness-
+  filtered reflections, metallic/Fresnel energy response, and tone mapping.
+- Same-UV stacks with the active Paint layer topmost now include lower Fill,
+  Paint, and Kiln-normal layers in the resident preview without readback.
+- Mixed UVs, image masks, and participating upper layers explicitly fall back
+  to active-layer preview. Full arbitrary-stack GPU composition remains later
+  work.
+- Idle synchronization defaults off; Ctrl-S defers save until resident paint
+  reaches Blender Images, while explicit inspection/save/export flushing and
+  normal session-exit flushing remain available.
+
 ## 0.6.0 — stroke opacity and authoritative in-session inspection
 
 - Added an explicit GPU Stroke Opacity multiplier; layer opacity remains the
@@ -11,9 +24,11 @@ new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 - `V` now flushes the dirty resident region, hides the approximate overlay, and
   shows Blender's authoritative material without ending the session. `V` again
   resumes resident painting with GPU textures and undo history preserved.
-- Automatic Material Feedback now performs that handoff after an adjustable
-  idle delay and resumes GPU painting on the next canvas press, eliminating the
-  normal key/button/exit loop. `V` remains an explicit override.
+- Optional Idle Material Synchronization can perform that handoff after an
+  adjustable delay, but now defaults off so routine painting stays resident and
+  zero-readback. `V` / Inspect Blender Material remains the explicit path.
+- Ctrl-S/Ctrl-Shift-S defer saving until a draw-context GPU flush and Blender
+  Image update complete; RMB/Esc still flushes before normal session exit.
 
 ## Newly requested roadmap TODOs
 

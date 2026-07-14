@@ -47,6 +47,8 @@ try:
     layer = tree.impasto.active_layer()
     check("new layers default to composed PBR preview",
           layer.gpu_preview_mode == 'LIT_PBR')
+    check("routine idle material synchronization defaults off",
+          not layer.auto_material_preview)
     rna = layer.bl_rna.properties['gpu_preview_mode']
     check("preview property is persistent RNA state",
           not rna.is_skip_save
@@ -90,6 +92,9 @@ try:
         _preview_mode='RAW_TANGENT_NORMAL',
         _stopping=False,
         _timer=None,
+        _pending_save_as=None,
+        _auto_inspect_delay=None,
+        _auto_inspect_deadline=None,
         _apply_pending_sync=lambda: None,
         report=lambda *_args: None,
     )
@@ -103,6 +108,10 @@ try:
         ops.IMPASTO_OT_gpu_paint._refresh_preview_mode(operator)
     operator._refresh_stroke_settings = lambda context: \
         ops.IMPASTO_OT_gpu_paint._refresh_stroke_settings(operator, context)
+    operator._request_save_boundary = lambda save_as=False: \
+        ops.IMPASTO_OT_gpu_paint._request_save_boundary(
+            operator, save_as)
+    operator._perform_deferred_save = lambda: None
 
     layer.gpu_preview_mode = 'HEIGHT_GRAYSCALE'
     check("live preview edit applies without restarting session",
@@ -111,6 +120,15 @@ try:
           and gpu_engine.session_active())
     check("preview edit queues no CPU image synchronization",
           gpu_engine.take_pending_pixels() is None)
+
+    timer_event = NS(type='TIMER', value='NOTHING', mouse_x=0, mouse_y=0,
+                     pressure=0.0, ctrl=False, shift=False)
+    check("default idle timer performs no inspect or readback",
+          ops.IMPASTO_OT_gpu_paint.modal(
+              operator, bpy.context, timer_event) == {'RUNNING_MODAL'}
+          and not gpu_engine.material_inspect_active()
+          and not gpu_engine.material_inspect_requested()
+          and gpu_engine.take_pending_pixels() is None)
 
     # Sidebar lies outside the 3D WINDOW region. Its clicks must reach normal
     # Blender UI while the modal painter remains active.
@@ -198,8 +216,6 @@ try:
 
     operator._auto_inspect_delay = 0.1
     operator._auto_inspect_deadline = time.monotonic() - 1.0
-    timer_event = NS(type='TIMER', value='NOTHING', mouse_x=0, mouse_y=0,
-                     pressure=0.0, ctrl=False, shift=False)
     check("idle timer automatically enters authoritative material feedback",
           ops.IMPASTO_OT_gpu_paint.modal(
               operator, bpy.context, timer_event) == {'RUNNING_MODAL'}
@@ -214,6 +230,18 @@ try:
           and not gpu_engine.material_inspect_active()
           and gpu_engine.stroke_active() and gpu_engine.session_active())
     gpu_engine.end_stroke()
+
+    save_event = NS(type='S', value='PRESS', mouse_x=100, mouse_y=100,
+                    pressure=1.0, ctrl=True, shift=False)
+    check("Ctrl-S defers save behind a resident GPU flush",
+          ops.IMPASTO_OT_gpu_paint.modal(
+              operator, bpy.context, save_event) == {'RUNNING_MODAL'}
+          and operator._pending_save_as is False
+          and gpu_engine.busy()
+          and gpu_engine.take_pending_pixels() is None)
+    check("material inspect toggle operator is registered",
+          getattr(bpy.types,
+                  'IMPASTO_OT_gpu_material_inspect_toggle', None) is not None)
 
     gpu_engine.stop_session()
     impasto.unregister()

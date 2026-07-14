@@ -120,6 +120,23 @@ images are created or altered).
 
 ### GPU multi-channel painting (experimental)
 
+#### Resident material preview
+
+Lit PBR uses a compact image-based studio environment with roughness-aware
+reflections, metallic Fresnel/energy response, and display tone mapping. For
+the common same-UV setup where the active Paint layer is topmost, it also
+composes lower Fill/Paint layers and a Kiln baked-normal baseline entirely on
+the GPU. Ordinary painting therefore remains resident and performs no routine
+GPU-to-CPU image synchronization.
+
+Stacks with participating layers above the active layer, image masks, or mixed
+UV layouts explicitly fall back to the active-layer preview; the viewport text
+states the fallback instead of implying complete-stack parity. Exact Blender
+studio-light/HDRI pixels are unavailable through the public GPU API, so the
+result is intended to be convincing rather than pixel-identical Material
+Preview. Use explicit inspection only when authoritative Blender evaluation is
+required.
+
 **GPU Paint All Channels** (layer panel, Object menu, or F3) rasterizes
 each brush dab once into every bound channel simultaneously — Base
 Color, Metallic, Roughness, Tangent Normal, and Height — using the
@@ -161,19 +178,23 @@ enabled channels (including pressure/brush-strength response). **Layer Opacity**
 is separate and non-destructive: it controls the selected layer's contribution
 to every compiled material channel after painting.
 
-With **Auto Material** enabled (the default), Impasto waits for a short
-adjustable idle interval after pen-up, synchronizes only the dirty resident
-region into the channel Images, and silently hands the viewport to Blender's
-authoritative material. The next canvas press restores the GPU overlay and
-starts painting automatically. Rapid strokes defer the synchronization, so the
-cost is paid during a genuine pause rather than on every dab. Disable the option
-for uninterrupted resident-only painting.
+**Idle Material Sync** is disabled by default so routine painting remains
+GPU-resident and pays no image readback between strokes. If explicitly enabled,
+Impasto waits for an adjustable idle interval after pen-up, synchronizes the
+dirty resident region into the channel Images, and hands the viewport to
+Blender's authoritative material. The next canvas press restores the GPU
+overlay. This option deliberately trades latency for automatic inspection.
 
 **V** remains a manual inspection override using the same transition. Neither
 automatic nor manual inspection ends the operator or discards resident textures
 or GPU undo history. The synchronization cost itself remains unavoidable
 because Blender's material cannot sample Impasto-owned resident textures
 directly.
+
+Use **Flush for Save / Export** before menu-driven saves or exporters. While
+the GPU modal is active, **Ctrl-S** and **Ctrl-Shift-S** are safer shortcuts:
+Impasto flushes resident changes first and invokes Save/Save As only after the
+Blender Images are current. **RMB/Esc** likewise flushes before normal exit.
 
 The Metallic and Roughness controls in **Multi-Channel Brush** are stroke
 values: they are written as grayscale into those channel images. The

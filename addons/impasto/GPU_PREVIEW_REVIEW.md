@@ -120,6 +120,34 @@ supported Blender Draw asset still contributes spacing, strength, pressure,
 falloff, and texture metadata, but its stored size does not silently override
 the Radius displayed in Impasto.
 
+## Synchronization and save boundaries
+
+Routine painting is GPU-resident by default. `Idle Material Synchronization`
+defaults off because enabling it intentionally reintroduces GPU readback and
+full Blender Image writes after an idle delay. Pen-up, preview-mode changes,
+settings edits, pause/resume, and GPU undo/redo remain zero-readback actions.
+
+Authoritative synchronization occurs only at explicit boundaries:
+
+- `Inspect Blender Material` / `V` synchronizes dirty resident textures, then
+  pauses on Blender's real material while retaining the GPU session.
+- `Flush for Save / Export` updates Blender Images without ending the session.
+- `RMB` / `Esc` flushes before normal session exit.
+- `Ctrl-S` / `Ctrl-Shift-S` inside the active modal is intercepted: Impasto
+  requests a draw-context flush, applies the pending pixels, and invokes Save
+  or Save As only after no resident changes remain.
+
+Blender 5.1 save-handler investigation found that `save_pre` has no guaranteed
+owning viewport GPU context. It therefore cannot execute the readback. A live
+probe also showed that raising `RuntimeError` from `save_pre` is logged but does
+**not** abort serialization (`bpy.ops.wm.save_as_mainfile` still returns
+`FINISHED` and creates the file). A handler-based save guard would consequently
+offer false safety. Menu-triggered Save and arbitrary export add-ons cannot be
+reliably intercepted from this add-on; the active-session UI explicitly tells
+the user to use `Flush for Save / Export` first. This is the safest boundary
+available without modifying Blender or moving resident textures into native
+Image storage continuously.
+
 ## Foreground acceptance checklist
 
 ### Accuracy and legibility
