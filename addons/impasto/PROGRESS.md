@@ -1,5 +1,9 @@
 # Impasto — multi-channel painting milestone progress
 
+Current consolidated handoff: [`SESSION_2026-07-13.md`](SESSION_2026-07-13.md).
+It records the shipped GPU-resident architecture, validation, known limits,
+new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
+
 ## Newly requested roadmap TODOs
 
 - Implement Subsurface painting.
