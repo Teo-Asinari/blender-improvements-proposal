@@ -62,11 +62,15 @@ Impasto currently offers three painting paths:
 
 The GPU path includes a brush-sized reticle, front-surface depth rejection to
 prevent painting through the mesh, per-stroke multi-channel GPU undo/redo, live
-channel-value changes between strokes, and a lightweight environment-style PBR
-preview. The preview is deliberately an approximation rather than Blender's
-exact Material Preview HDRI. Masks, channel isolation, bake-down/export,
+channel-value changes between strokes, and an image-based PBR preview. In the
+common same-UV/topmost-active-layer case, it includes lower Fill/Paint layers
+and Kiln's
+baked normal without routine synchronization. It remains a perceptual
+approximation rather than Blender's exact Material Preview HDRI. Mixed UVs,
+image masks, participating upper layers, channel isolation, bake-down/export,
 arbitrary Blender brush textures, and specialized brush tools remain future
-work; save/export should currently be preceded by an explicit GPU flush.
+work. Ctrl-S safely flushes before saving; menu-driven save/export should be
+preceded by **Flush for Save / Export**.
 
 ## Documents
 
