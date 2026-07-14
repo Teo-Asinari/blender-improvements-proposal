@@ -310,6 +310,12 @@ rewiring generated nodes.
   per-channel contribution, alpha/luminance interpretation, tiling, and
   interaction details remain design-in-progress pending the intended workflow
   description.
+- **Alpha-profile normal painting:** allow a brush alpha/luminance image to act
+  as a relief profile, not only an opacity mask. Its local gradients should
+  generate tangent-space normal detail with adjustable depth/strength and
+  inversion, while preserving the same registered footprint used by the other
+  painted channels. Repeated-stroke and blend semantics must be defined
+  separately from ordinary encoded-normal color deposition.
 - **GPU brush and adjustable-alpha parity:** reimplement useful equivalents of
   Blender's painting brushes on the resident multi-channel GPU path, including
   brush alpha/texture control. Deliver this in compatibility tiers: stamp-based

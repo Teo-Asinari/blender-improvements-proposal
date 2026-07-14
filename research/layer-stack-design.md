@@ -917,6 +917,11 @@ phase with architectural risk; everything after it is additive by design.
    application workflow. Exact stencil projection, transform controls,
    alpha-versus-luminance interpretation, tiling, and per-channel payload rules
    are intentionally left open until the user workflow is specified verbally.
+   The stencil/alpha source must also support a **relief-profile mode** for
+   normal painting: derive tangent-space normal XY from local image gradients,
+   expose depth/strength and inversion, and keep that normal footprint aligned
+   with every other channel. This is distinct from using alpha only as stroke
+   coverage and from depositing an absolute encoded normal RGB value.
 3. **GPU brush-family and alpha parity.** Build resident-GPU equivalents of
    Blender's useful paint brushes and support adjustable brush alphas/textures.
    Treat this as four implementation tiers rather than a direct code port:

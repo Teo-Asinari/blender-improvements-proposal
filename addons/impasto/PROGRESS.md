@@ -38,6 +38,9 @@ new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
   across every enabled channel and supports texture application. Projection,
   transform, masking, and per-channel semantics await the user's detailed
   workflow description.
+- Add 3DCoat-style alpha-profile normal painting: convert alpha/luminance
+  gradients into adjustable, invertible tangent-space normal detail while
+  retaining cross-channel registration.
 - Implement resident-GPU equivalents of Blender's useful brush families plus
   adjustable alpha/brush textures, staged from Draw-style stamps through
   destination-sampling and source/state-heavy tools.
