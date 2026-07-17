@@ -69,6 +69,10 @@ check("base/scalar PBR channels reuse the resolved samples",
       "? base.rgb : vec3(0.5)" in main
       and "? metal_sample.r : 0.0" in main
       and "? rough_sample.r : 0.5" in main)
+check("Lit PBR adds normal- and roughness-sensitive studio keys",
+      "preview_key_light" in src
+      and "distribution = a2" in src
+      and "n, v, normalize(vec3" in main)
 
 check("resident alpha gates the active layer exactly once",
       "active_factor * source.a" in src)
@@ -85,6 +89,10 @@ check("subsurface preview uses Weight and Radius-times-Scale distance",
 check("degenerate and mirrored UVs have explicit handling",
       "abs(uv_det) > 1e-8" in src and "orientation = sign(uv_det)" in src
       and "cross(axis, geometric_n)" in src)
+check("Lit preview uses Blender corner normals instead of triangle normals",
+      "surfaceNormal" in gpu_engine.PREVIEW_VERT_SRC
+      and "geometric_n = normalize(surfaceNormal)" in src
+      and "cross(dpdx, dpdy)" not in src)
 check("height uses screen derivatives rather than four neighbor taps",
       "dFdx(height)" in src and "dFdy(height)" in src
       and "uvInterp + vec2" not in src and "uvInterp - vec2" not in src)

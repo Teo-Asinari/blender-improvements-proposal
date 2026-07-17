@@ -398,6 +398,7 @@ void main()
     gl_Position.z -= %r * gl_Position.w;
     uvInterp = uv;
     worldPos = world.xyz;
+    surfaceNormal = normalize(mat3(transpose(inverse(model_matrix))) * normal);
 }
 """ % CLIP_DEPTH_BIAS
 
@@ -495,6 +496,30 @@ vec2 environment_brdf_ggx(float ndv, float roughness)
     return vec2(-1.04, 1.04) * a004 + r.zw;
 }
 
+vec3 preview_key_light(vec3 n, vec3 v, vec3 l, vec3 albedo, vec3 f0,
+                       float metallic, float roughness, vec3 radiance)
+{
+    vec3 h = normalize(v + l);
+    float ndl = max(dot(n, l), 0.0);
+    float ndv = max(dot(n, v), 0.001);
+    float ndh = max(dot(n, h), 0.0);
+    float vdh = max(dot(v, h), 0.0);
+    float a = max(roughness * roughness, 0.002);
+    float a2 = a * a;
+    float denom = ndh * ndh * (a2 - 1.0) + 1.0;
+    float distribution = a2 / max(3.14159265 * denom * denom, 1e-5);
+    float k = (roughness + 1.0);
+    k = k * k * 0.125;
+    float gv = ndv / (ndv * (1.0 - k) + k);
+    float gl = ndl / (ndl * (1.0 - k) + k);
+    vec3 f = f0 + (vec3(1.0) - f0) * pow(1.0 - vdh, 5.0);
+    vec3 specular = distribution * gv * gl * f /
+                    max(4.0 * ndv * ndl, 1e-4);
+    vec3 diffuse = (vec3(1.0) - f) * (1.0 - metallic) * albedo /
+                   3.14159265;
+    return (diffuse + specular) * radiance * ndl;
+}
+
 vec3 aces_fitted(vec3 color)
 {
     return clamp((color * (2.51 * color + 0.03)) /
@@ -560,7 +585,7 @@ void main()
 
     vec3 dpdx = dFdx(worldPos), dpdy = dFdy(worldPos);
     vec2 dudx = dFdx(uvInterp), dudy = dFdy(uvInterp);
-    vec3 geometric_n = normalize(cross(dpdx, dpdy));
+    vec3 geometric_n = normalize(surfaceNormal);
     if (!gl_FrontFacing) geometric_n = -geometric_n;
     float uv_det = dudx.x * dudy.y - dudx.y * dudy.x;
     vec3 tangent;
@@ -654,6 +679,15 @@ void main()
                           sss_weight * scatter_extent);
         vec3 specular_ibl = prefiltered * (f0 * env_brdf.x + env_brdf.y);
         rgb = diffuse_ibl + specular_ibl;
+        /* A restrained pair of broad studio keys makes painted roughness and
+         * tangent-normal changes legible even on dielectric materials. The
+         * environment remains the dominant illumination. */
+        rgb += preview_key_light(
+            n, v, normalize(vec3(0.42, -0.34, 0.84)), albedo, f0,
+            metallic, roughness, vec3(0.48, 0.43, 0.38));
+        rgb += preview_key_light(
+            n, v, normalize(vec3(-0.58, 0.46, 0.67)), albedo, f0,
+            metallic, roughness, vec3(0.14, 0.19, 0.28));
     } else {
         /* Graceful no-texture fallback: energy-conserving hemispheric light. */
         float sky = clamp(n.z * 0.5 + 0.5, 0.0, 1.0);
@@ -781,17 +815,30 @@ def dab_spacing(radius_px):
     return max(MIN_DAB_SPACING_PX, radius_px * DAB_SPACING_FACTOR)
 
 
+def sanitize_pressure(value, fallback=1.0):
+    """Clamp tablet pressure and replace transient zero/invalid samples.
+
+    Some Windows tablet drivers emit a zero-pressure motion event immediately
+    after pen-down. Treating it literally creates an invisible zero-radius dab
+    and an apparent gap in an otherwise continuous stroke.
+    """
+    try:
+        pressure = float(value)
+    except (TypeError, ValueError):
+        pressure = float(fallback)
+    if not math.isfinite(pressure) or pressure <= 0.0:
+        pressure = float(fallback)
+    return min(1.0, max(0.001, pressure))
+
+
 def build_mesh_soup(obj):
-    """(coords float32 (n,3), uvs float32 (n,2)) triangle soup with
-    per-corner UVs from the mesh's active UV layer, or (None, None)
-    when there is no UV layer. Pure (no gpu) — Object Mode reads via
-    Mesh arrays, same pattern as uv_island_overlay."""
+    """Return per-corner coordinates, UVs, and Blender shading normals."""
     import numpy as np
 
     me = obj.data
     uv_layer = me.uv_layers.active
     if uv_layer is None or len(me.loops) == 0:
-        return None, None
+        return None, None, None
 
     uv = np.empty(len(me.loops) * 2, dtype=np.float32)
     uv_layer.data.foreach_get("uv", uv)
@@ -805,7 +852,7 @@ def build_mesh_soup(obj):
     tris = me.loop_triangles
     n_tris = len(tris)
     if n_tris == 0:
-        return None, None
+        return None, None, None
     tv = np.empty(n_tris * 3, dtype=np.int32)
     tris.foreach_get("vertices", tv)
     tl = np.empty(n_tris * 3, dtype=np.int32)
@@ -813,7 +860,23 @@ def build_mesh_soup(obj):
 
     coords = np.ascontiguousarray(co[tv], dtype=np.float32)
     uvs = np.ascontiguousarray(uv[tl], dtype=np.float32)
-    return coords, uvs
+    corner_normals = getattr(me, "corner_normals", ())
+    if len(corner_normals) == len(me.loops):
+        loop_normals = np.empty(len(me.loops) * 3, dtype=np.float32)
+        corner_normals.foreach_get("vector", loop_normals)
+        loop_normals = loop_normals.reshape(-1, 3)
+        normals = np.ascontiguousarray(loop_normals[tl], dtype=np.float32)
+    else:
+        tri_coords = coords.reshape(-1, 3, 3)
+        face = np.cross(tri_coords[:, 1] - tri_coords[:, 0],
+                        tri_coords[:, 2] - tri_coords[:, 0])
+        lengths = np.linalg.norm(face, axis=1)
+        lengths[lengths < 1e-12] = 1.0
+        face /= lengths[:, None]
+        normals = np.ascontiguousarray(
+            np.repeat(face[:, None, :], 3, axis=1).reshape(-1, 3),
+            dtype=np.float32)
+    return coords, uvs, normals
 
 
 # ---------------------------------------------------------------------------
@@ -1117,6 +1180,7 @@ def preview_shader_create_info():
     iface = gpu.types.GPUStageInterfaceInfo("gpu_paint_spike_preview_iface")
     iface.smooth('VEC2', "uvInterp")
     iface.smooth('VEC3', "worldPos")
+    iface.smooth('VEC3', "surfaceNormal")
     info = gpu.types.GPUShaderCreateInfo()
     info.push_constant('MAT4', "model_matrix")
     info.push_constant('MAT4', "view_proj_matrix")
@@ -1151,6 +1215,7 @@ def preview_shader_create_info():
         info.sampler(index, 'FLOAT_2D', "baseline_" + name + "_tex")
     info.vertex_in(0, 'VEC3', "pos")
     info.vertex_in(1, 'VEC2', "uv")
+    info.vertex_in(2, 'VEC3', "normal")
     info.vertex_out(iface)
     info.fragment_out(0, 'VEC4', "fragColor")
     info.vertex_source(PREVIEW_VERT_SRC)
@@ -1417,6 +1482,7 @@ class _Session:
         # Pure geometry (built eagerly at start — no gpu involved).
         self.coords = None
         self.uvs = None
+        self.normals = None
         self.tri_uv_bboxes = None      # (n_tris, 4), pure numpy
 
         # GPU resources — ALL lazy, created at first draw.
@@ -1489,6 +1555,7 @@ class _Session:
         self.submit_times = []         # seconds, one per dab
         self.dab_queue = []            # (x, y, pressure)
         self.last_px = None            # last dab position (x, y)
+        self.last_pressure = 1.0       # last valid tablet sample
         self.leftover = 0.0
         self.pending_finalize = False
         self.pending_flush = False
@@ -1704,7 +1771,7 @@ def start_session(obj, images, region, channels=None, payloads=None,
         stop_session()
     if not isinstance(images, (list, tuple)):
         images = [images]
-    coords, uvs = build_mesh_soup(obj)
+    coords, uvs, normals = build_mesh_soup(obj)
     if coords is None:
         return False
     channel_count = len(images) if channels is None else int(channels)
@@ -1719,6 +1786,7 @@ def start_session(obj, images, region, channels=None, payloads=None,
     s.settings["material_inspect_requested"] = False
     s.coords = coords
     s.uvs = uvs
+    s.normals = normals
     s.tri_uv_bboxes = triangle_uv_bboxes(uvs)
     _session = s
     keys = tuple(s.settings.get("channel_keys", ()))
@@ -1751,7 +1819,9 @@ def begin_stroke(x, y, pressure):
     s.last_dab_t = None
     s.dab_count = 0
     s.submit_times = []
+    pressure = sanitize_pressure(pressure)
     s.last_px = (x, y)
+    s.last_pressure = pressure
     s.leftover = 0.0
     s.stroke_dirty = None
     s.stroke_dirty_full = False
@@ -1764,14 +1834,23 @@ def move_stroke(x, y, pressure, radius_px):
     if s is None or not s.stroke_active or s.error is not None:
         return
     x0, y0 = s.last_px
+    pressure = sanitize_pressure(pressure, s.last_pressure)
     stamp = s.settings.get("brush_stamp")
-    spacing = (stamp.spacing_px if stamp is not None
-               else dab_spacing(radius_px))
+    if stamp is not None:
+        mean_pressure = (s.last_pressure + pressure) * 0.5
+        pressure_radius, _opacity = stamp.values_at_pressure(mean_pressure)
+        spacing = max(MIN_DAB_SPACING_PX,
+                      2.0 * pressure_radius * stamp.spacing_ratio)
+    else:
+        spacing = dab_spacing(radius_px)
     positions, s.leftover = interpolate_dabs(
         x0, y0, x, y, spacing, s.leftover)
-    for px, py, _t in positions:
-        s.dab_queue.append((px, py, pressure))
+    for px, py, t in positions:
+        sample_pressure = (s.last_pressure
+                           + (pressure - s.last_pressure) * t)
+        s.dab_queue.append((px, py, sample_pressure))
     s.last_px = (x, y)
+    s.last_pressure = pressure
 
 
 def end_stroke():
@@ -2209,7 +2288,8 @@ def _ensure_gpu(s):
     s.batch_prepass = batch_for_shader(
         s.prepass_shader, 'TRIS', {"pos": s.coords})
     s.batch_preview = batch_for_shader(
-        s.preview_shader, 'TRIS', {"pos": s.coords, "uv": s.uvs})
+        s.preview_shader, 'TRIS', {"pos": s.coords, "uv": s.uvs,
+                                  "normal": s.normals})
     s.copy_batch = batch_for_shader(
         s.copy_shader, 'TRI_FAN', {
             "pos": [(-1.0, -1.0, 0.0), (1.0, -1.0, 0.0),

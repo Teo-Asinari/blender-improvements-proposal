@@ -4,6 +4,15 @@ Current consolidated handoff: [`SESSION_2026-07-13.md`](SESSION_2026-07-13.md).
 It records the shipped GPU-resident architecture, validation, known limits,
 new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 
+## 0.9.1 — legible Lit PBR and tablet continuity
+
+- Added restrained GGX studio keys to Lit PBR so roughness, metallic, and
+  tangent-normal strokes remain readable on ordinary dielectric materials.
+- Lit PBR now interpolates Blender's corner normals, respecting smooth and flat
+  mesh shading instead of reconstructing a faceted normal per triangle.
+- Interpolated tablet pressure across generated dabs, ignored transient invalid
+  pressure samples, and made spacing follow the pressure-adjusted brush size.
+
 ## 0.9.0 — normal-profile painting and focused UI
 
 - Added adjustable, invertible alpha-profile tangent-normal painting while

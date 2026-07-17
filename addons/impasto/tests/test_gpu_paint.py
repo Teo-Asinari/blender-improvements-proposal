@@ -102,6 +102,9 @@ try:
           and "roughness" in gpu_engine.PREVIEW_FRAG_SRC
           and "normal_sample" in gpu_engine.PREVIEW_FRAG_SRC
           and "height" in gpu_engine.PREVIEW_FRAG_SRC)
+    check("Lit preview has roughness-sensitive studio keys",
+          "preview_key_light" in gpu_engine.PREVIEW_FRAG_SRC
+          and "roughness * roughness" in gpu_engine.PREVIEW_FRAG_SRC)
     check("preview display mode identifiers are stable",
           gpu_engine.PREVIEW_MODES == (
               "LIT_PBR", "RAW_TANGENT_NORMAL",
@@ -230,6 +233,10 @@ try:
     check("dab interpolation spaces evenly and carries leftover",
           [round(d[0], 6) for d in dabs] == [4.0, 8.0]
           and abs(leftover - 2.0) < 1e-9)
+    check("tablet pressure rejects transient zero and invalid samples",
+          gpu_engine.sanitize_pressure(0.0, 0.4) == 0.4
+          and gpu_engine.sanitize_pressure(float("nan"), 0.6) == 0.6
+          and gpu_engine.sanitize_pressure(2.0) == 1.0)
     rect = gpu_engine.dab_rect_union([(10.0, 20.0), (30.0, 5.0)], 4.0)
     check("dab union rect covers every disc",
           rect == (6.0, 1.0, 34.0, 24.0), str(rect))
@@ -276,8 +283,14 @@ try:
           current_payloads == refreshed
           and current_settings["radius"] == 73.0
           and current_settings["hardness"] == 0.25)
-    gpu_engine.begin_stroke(10.0, 10.0, 1.0)
-    gpu_engine.move_stroke(30.0, 10.0, 1.0, 40.0)
+    gpu_engine.begin_stroke(10.0, 10.0, 0.2)
+    gpu_engine.move_stroke(30.0, 10.0, 0.8, 40.0)
+    queued_pressures = [dab[2] for dab in gpu_engine._session.dab_queue]
+    check("tablet pressure interpolates across generated dabs",
+          queued_pressures[0] == 0.2
+          and queued_pressures[-1] == 0.8
+          and queued_pressures == sorted(queued_pressures),
+          repr(queued_pressures))
     check("stroke state tracks headlessly", gpu_engine.stroke_active())
     gpu_engine.end_stroke()
     check("pen-up does not queue blocking Image synchronization",
