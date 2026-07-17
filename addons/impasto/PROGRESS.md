@@ -4,6 +4,11 @@ Current consolidated handoff: [`SESSION_2026-07-13.md`](SESSION_2026-07-13.md).
 It records the shipped GPU-resident architecture, validation, known limits,
 new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 
+## 0.9.2 — self-occluding resident preview
+
+- The resident preview now uses Impasto's front-surface depth policy, preventing
+  biased rear triangles from showing through self-occluding geometry.
+
 ## 0.9.1 — legible Lit PBR and tablet continuity
 
 - Added restrained GGX studio keys to Lit PBR so roughness, metallic, and

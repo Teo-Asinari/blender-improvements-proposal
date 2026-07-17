@@ -528,6 +528,14 @@ vec3 aces_fitted(vec3 color)
 
 void main()
 {
+    vec2 screen_uv = gl_FragCoord.xy / preview_region_size;
+    float preview_depth = dot(preview_view_depth_plane,
+                              vec4(worldPos, 1.0));
+    if (!impasto_visible_surface(preview_depth_tex, screen_uv, preview_depth,
+                                 preview_depth_epsilon,
+                                 preview_depth_relative_epsilon)) {
+        discard;
+    }
     vec4 base = resolve_stack_channel(
         base_color_tex, baseline_base_color_tex, baseline_base_color_value,
         baseline_base_color_is_texture, active_base_color,
@@ -1189,6 +1197,10 @@ def preview_shader_create_info():
     info.push_constant('INT', "preview_mode")
     info.push_constant('FLOAT', "environment_ready")
     info.push_constant('FLOAT', "resolved_stack")
+    info.push_constant('VEC4', "preview_view_depth_plane")
+    info.push_constant('VEC2', "preview_region_size")
+    info.push_constant('FLOAT', "preview_depth_epsilon")
+    info.push_constant('FLOAT', "preview_depth_relative_epsilon")
     for name in GPU_PAINT_CHANNEL_KEYS:
         info.push_constant('FLOAT', "has_" + name)
         info.push_constant('FLOAT', "active_" + name)
@@ -1213,13 +1225,14 @@ def preview_shader_create_info():
                                   "sss_weight", "sss_radius", "sss_scale"),
                                  16):
         info.sampler(index, 'FLOAT_2D', "baseline_" + name + "_tex")
+    info.sampler(21, 'FLOAT_2D', "preview_depth_tex")
     info.vertex_in(0, 'VEC3', "pos")
     info.vertex_in(1, 'VEC2', "uv")
     info.vertex_in(2, 'VEC3', "normal")
     info.vertex_out(iface)
     info.fragment_out(0, 'VEC4', "fragColor")
     info.vertex_source(PREVIEW_VERT_SRC)
-    info.fragment_source(PREVIEW_FRAG_SRC)
+    info.fragment_source(visibility.GLSL_SOURCE + PREVIEW_FRAG_SRC)
     return info
 
 
@@ -3177,7 +3190,8 @@ def _draw_composed_preview(s):
     """Draw a low-cost PBR approximation from all resident textures."""
     if (not s.gpu_ready or s.preview_shader is None
             or s.batch_preview is None or s.view_proj is None
-            or not s.paint_texs):
+            or not s.paint_texs or s.depth_color_tex is None
+            or s.depth_fb_size is None):
         return
     t0 = time.perf_counter()
     keys = tuple(s.settings.get("channel_keys", ()))
@@ -3200,6 +3214,11 @@ def _draw_composed_preview(s):
                          1.0 if s.environment_tex is not None else 0.0)
     resolved = bool(s.stack_spec and s.stack_spec.get("enabled"))
     shader.uniform_float("resolved_stack", 1.0 if resolved else 0.0)
+    shader.uniform_float("preview_view_depth_plane", s.view_depth_plane)
+    shader.uniform_float("preview_region_size", s.depth_fb_size)
+    shader.uniform_float("preview_depth_epsilon", DEPTH_EPSILON)
+    shader.uniform_float("preview_depth_relative_epsilon",
+                         visibility.DEFAULT_POLICY.relative_epsilon)
     for key in GPU_PAINT_CHANNEL_KEYS:
         channel_spec = (s.stack_spec.get("channels", {}).get(key, {})
                         if resolved else {})
@@ -3226,6 +3245,7 @@ def _draw_composed_preview(s):
     shader.uniform_sampler("environment_atlas",
                            (s.environment_tex
                             if s.environment_tex is not None else fallback))
+    shader.uniform_sampler("preview_depth_tex", s.depth_color_tex)
     gpu.state.blend_set('ALPHA')
     gpu.state.depth_test_set('LESS_EQUAL')
     gpu.state.depth_mask_set(False)
