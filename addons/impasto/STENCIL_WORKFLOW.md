@@ -45,17 +45,19 @@ once into the shared falloff before writing any MRT attachment.
 
 1. **Coverage mask:** intensity controls where configured channel values are
    deposited. This is fully implemented in v1.
-2. **Normal profile:** intensity is a height/profile field. Neighbor samples
-   generate X/Y gradients and a tangent-space normal; strength/depth controls
-   magnitude and Invert reverses raised/recessed relief.
+2. **Normal profile:** intensity is a height/profile field. Aspect-corrected
+   neighboring texel samples generate tangent-space detail; Strength controls
+   magnitude and Invert reverses raised/recessed relief. The detail is
+   slope-composed with the configured Normal paint value and only the Normal
+   target is written.
 
-The pure `stencil.profile_tangent_normal()` contract defines and tests future
+The pure `stencil.profile_tangent_normal()` contract mirrors the shader's
 profile polarity, central differences, strength, inversion, and encoded normal
-output. `StencilSettings` reserves `usage`, `profile_strength`, and
-`profile_invert`. Profile mode is not exposed in the v1 UI/shader: correct
-integration needs aspect-aware neighbor samples, composition with configured
-normal paint, and a decision about linked Height. Treating it as coverage would
-be misleading.
+output. `StencilSettings` carries `usage`, `profile_strength`, and
+`profile_invert` between the persistent layer and GPU session.
+
+Linked Height deposition is explicitly deferred. It needs separate repeated-
+stroke/additive semantics and must not be inferred from Normal-profile opacity.
 
 ## Deferred work
 
@@ -63,8 +65,8 @@ be misleading.
 - Preserve-aspect, fit/reset, rake, jitter, random rotation, tiling, UV, and
   triplanar projection.
 - Color texture application into channel values; v1 uses one synchronized mask.
-- Normal Profile shader integration and optional linked Height deposition.
+- Optional linked Height deposition for Normal Profile.
 - Masks sourced from Impasto layers or procedural node graphs.
-- Move the enlarged dab uniform set to a UBO. Blender warns when create-info
-  exceeds the minimum portable push-constant size; this was pre-existing and
-  stencil transforms make it more visible.
+- The enlarged dab parameter set now uses a vec4-aligned uniform buffer rather
+  than push constants, staying clear of the portable 128-byte push-constant
+  limit as stencil and MRT state grows.

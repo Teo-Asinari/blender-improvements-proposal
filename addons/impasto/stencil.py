@@ -30,7 +30,7 @@ USAGE_ITEMS = (
      "Multiply the shared opacity of every painted channel"),
     ('NORMAL_PROFILE', "Normal Profile",
      "Treat image intensity as height and derive tangent-normal detail "
-     "from its gradients (reserved contract; not rasterized in v1)"),
+     "from its gradients; only the Normal channel is painted"),
 )
 USAGE_IDS = frozenset(item[0] for item in USAGE_ITEMS)
 
@@ -157,9 +157,8 @@ def profile_tangent_normal(left, right, down, up, strength=1.0,
                            invert=False):
     """Encoded tangent normal derived from a sampled height profile.
 
-    This is the tested contract for 3DCoat-style normal-detail alphas. V1 uses
-    images as shared coverage; a later shader may sample neighboring profile
-    texels and must match this central-difference polarity and normalization.
+    This mirrors the GPU shader's central-difference polarity and
+    normalization for 3DCoat-style normal-detail alphas.
     """
     sign = -1.0 if invert else 1.0
     dx = (float(right) - float(left)) * 0.5 * float(strength) * sign

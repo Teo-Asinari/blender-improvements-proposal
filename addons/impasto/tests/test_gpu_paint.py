@@ -49,13 +49,14 @@ try:
           "fragColor =" in one and "fragColor1" not in one)
     check("N=4 source assigns four distinct outputs",
           all(("fragColor%d =" % i) in four for i in (1, 2, 3))
-          and all(("brush_value%d" % i) in four for i in range(4)))
+          and all(("brush_values[%d]" % i) in four for i in range(4)))
     additive = gpu_engine.dab_frag_src(2, additive=True)
     check("additive variant premultiplies the signed payload",
-          "brush_value0.rgb * brush_value0.a" in additive
-          and "brush_value1.rgb * brush_value1.a" in additive)
+          "brush_values[0].rgb" in additive
+          and "brush_values[0].a" in additive
+          and "brush_values[1].rgb" in additive)
     check("alpha-blend variant deposits the raw payload color",
-          "vec4(brush_value0.rgb," in one)
+          "vec4(dab_params.brush_values[0].rgb," in one)
     try:
         gpu_engine.dab_frag_src(gpu_engine.MAX_CHANNELS + 1)
         check("channel-count ceiling enforced", False)
@@ -64,6 +65,33 @@ try:
     info = gpu_engine.dab_shader_create_info(4)
     check("create-info population works headless (pure bookkeeping)",
           info is not None)
+    check("dab shader uses a std140-friendly UBO contract",
+          "struct ImpastoDabParams" in gpu_engine.DAB_UBO_TYPEDEF
+          and "dab_params.model_matrix" in gpu_engine.DAB_VERT_SRC
+          and "dab_params.view_proj_matrix" in
+          gpu_engine._DAB_FRAG_PRELUDE)
+    matrix = ((1.0, 2.0, 3.0, 4.0),
+              (5.0, 6.0, 7.0, 8.0),
+              (9.0, 10.0, 11.0, 12.0),
+              (13.0, 14.0, 15.0, 16.0))
+    packed = gpu_engine.dab_uniform_data(
+        matrix, matrix, (0.0, 0.0, 1.0, 2.0), (800, 600), (20, 30),
+        40, 0.5, 1e-4, 2e-5, True, 0.75, True, True, False, 0.6,
+        (0.25, 0.75), (1.2, 0.8), 0.4,
+        ((0.1, 0.2, 0.3, 0.9),))
+    check("dab UBO pack is contiguous vec4 std140 data",
+          packed.shape == (gpu_engine.DAB_UBO_VEC4_COUNT, 4)
+          and packed.dtype.name == "float32"
+          and packed.flags.c_contiguous)
+    check("dab UBO pack transposes matrices to GLSL column-major order",
+          tuple(packed[gpu_engine.DAB_UBO_MODEL]) == (1.0, 5.0, 9.0, 13.0))
+    check("dab UBO pack preserves dynamic and MRT values",
+          tuple(packed[gpu_engine.DAB_UBO_REGION_CENTER]) ==
+          (800.0, 600.0, 20.0, 30.0)
+          and abs(packed[gpu_engine.DAB_UBO_PAINT_FLAGS, 1] - 0.75) < 1e-6
+          and all(abs(float(a) - b) < 1e-6 for a, b in zip(
+              packed[gpu_engine.DAB_UBO_BRUSH_VALUES],
+              (0.1, 0.2, 0.3, 0.9))))
     preview_info = gpu_engine.preview_shader_create_info()
     check("composed preview create-info covers every PBR paint channel",
           preview_info is not None

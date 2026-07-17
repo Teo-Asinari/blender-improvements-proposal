@@ -54,11 +54,14 @@ try:
         paint.brush_stencil_image = stencil_image
         paint.brush_stencil_projection = 'BRUSH_ALPHA'
         paint.brush_stencil_interpretation = 'LUMINANCE'
+        paint.brush_stencil_usage = 'NORMAL_PROFILE'
         paint.brush_stencil_opacity = 0.7
         paint.brush_stencil_position = (0.25, 0.75)
         paint.brush_stencil_scale = (0.2, 0.3)
         paint.brush_stencil_brush_scale = (1.2, 0.8)
         paint.brush_stencil_rotation = 0.4
+        paint.brush_stencil_profile_strength = 2.5
+        paint.brush_stencil_profile_invert = True
         binding = paint.bindings.add()
         binding.name = "roughness"
         canvas = bpy.data.images.new("Persisted Roughness Canvas", 8, 8,
@@ -109,6 +112,7 @@ try:
           and paint.brush_stencil_image.name == "Persisted Brush Stencil"
           and paint.brush_stencil_projection == 'BRUSH_ALPHA'
           and paint.brush_stencil_interpretation == 'LUMINANCE'
+          and paint.brush_stencil_usage == 'NORMAL_PROFILE'
           and abs(paint.brush_stencil_opacity - 0.7) < 1e-6
           and all(abs(a - b) < 1e-6 for a, b in zip(
               paint.brush_stencil_position, (0.25, 0.75)))
@@ -116,7 +120,9 @@ try:
               paint.brush_stencil_scale, (0.2, 0.3)))
           and all(abs(a - b) < 1e-6 for a, b in zip(
               paint.brush_stencil_brush_scale, (1.2, 0.8)))
-          and abs(paint.brush_stencil_rotation - 0.4) < 1e-6)
+          and abs(paint.brush_stencil_rotation - 0.4) < 1e-6
+          and abs(paint.brush_stencil_profile_strength - 2.5) < 1e-6
+          and paint.brush_stencil_profile_invert)
     check("load handler self-healed removed node", tree.nodes.get(victim_name) is not None)
     check("self-healed graph converges cleanly", not engine.reconcile_stack(tree).errors)
     print("IMPASTO_PERSISTENCE_PASSED")

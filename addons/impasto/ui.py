@@ -73,7 +73,7 @@ class IMPASTO_PT_main(bpy.types.Panel):
         chan_labels = ", ".join(
             model.CHANNEL_MAP[c.name].label for c in state.channels
             if c.enabled and c.name in model.CHANNEL_MAP)
-        layout.label(text="Channels: %s" % chan_labels)
+        layout.label(text=chan_labels, icon='MATERIAL')
         kiln_tex = (mat.node_tree.nodes.get("Kiln Bake Target")
                     if mat.use_nodes else None)
         if (kiln_tex is not None
@@ -93,16 +93,8 @@ class IMPASTO_PT_main(bpy.types.Panel):
         op.layer_type = 'PAINT'
         op.channel_key = 'base_color'
         op = col.operator(ops.IMPASTO_OT_layer_add.bl_idname, text="",
-                          icon='RNDCURVE')
-        op.layer_type = 'PAINT'
-        op.channel_key = 'height'
-        op = col.operator(ops.IMPASTO_OT_layer_add.bl_idname, text="",
                           icon='SNAP_FACE')
         op.layer_type = 'FILL'
-        layout.operator_menu_enum(ops.IMPASTO_OT_layer_add.bl_idname,
-                                  "channel_key",
-                                  text="Add Channel Paint Layer",
-                                  icon='ADD')
         col.operator(ops.IMPASTO_OT_layer_remove.bl_idname, text="",
                      icon='TRASH')
         col.separator()
@@ -122,7 +114,12 @@ class IMPASTO_PT_main(bpy.types.Panel):
                 row = box.row(align=True)
                 row.prop(layer, "blend_mode", text="")
                 row.prop(layer, "opacity", text="Layer Opacity", slider=True)
-                self._draw_bindings(box, state, layer)
+                row = box.row(align=True)
+                row.prop(layer, "ui_show_channels", text="Channels",
+                         icon='TRIA_DOWN' if layer.ui_show_channels
+                         else 'TRIA_RIGHT', emboss=False)
+                if layer.ui_show_channels:
+                    self._draw_bindings(box, state, layer)
                 if layer.layer_type == 'PAINT':
                     self._draw_paint_tools(context, box, layer)
             else:
@@ -133,6 +130,119 @@ class IMPASTO_PT_main(bpy.types.Panel):
                         text="Rebuild", icon='FILE_REFRESH')
 
     def _draw_paint_tools(self, context, box, layer):
+        keys = [key for key, _image in ops.gpu_paint_targets(layer)]
+        paint = box.box()
+        row = paint.row(align=True)
+        row.label(text="Paint", icon='BRUSH_DATA')
+        row.label(text="%d channel%s" %
+                  (len(keys), "s" if len(keys) != 1 else ""))
+        if not keys:
+            paint.label(text="Enable a painted channel above", icon='INFO')
+            return
+
+        paint.prop(layer, "paint_workflow", text="")
+        values = paint.column(align=True)
+        if 'base_color' in keys:
+            values.prop(layer, "paint_color", text="Base Color")
+        if 'roughness' in keys:
+            values.prop(layer, "paint_roughness", text="Roughness", slider=True)
+        if 'metallic' in keys:
+            values.prop(layer, "paint_metallic", text="Metallic", slider=True)
+        if 'normal' in keys:
+            values.prop(layer, "paint_normal", text="Normal")
+        if 'height' in keys:
+            row = values.row(align=True)
+            row.prop(layer, "paint_height_direction", expand=True)
+            row.prop(layer, "paint_height_strength", text="Step")
+        if 'emission_color' in keys:
+            values.prop(layer, "paint_emission_color", text="Emission")
+        if 'emission_strength' in keys:
+            values.prop(layer, "paint_emission_strength", text="Strength")
+        if 'sss_weight' in keys:
+            values.prop(layer, "paint_sss_weight", text="SSS Weight", slider=True)
+        if 'sss_radius' in keys:
+            values.prop(layer, "paint_sss_radius", text="SSS Radius")
+        if 'sss_scale' in keys:
+            values.prop(layer, "paint_sss_scale", text="SSS Scale")
+
+        if layer.paint_workflow == 'GPU':
+            row = paint.row(align=True)
+            row.prop(layer, "brush_radius")
+            row.prop(layer, "brush_hardness", slider=True)
+            paint.prop(layer, "brush_opacity", slider=True)
+
+        row = paint.row()
+        row.scale_y = 1.35
+        row.enabled = not gpu_engine.session_active()
+        if layer.paint_workflow == 'GPU':
+            row.operator(ops.IMPASTO_OT_gpu_paint.bl_idname,
+                         text="Start GPU Painting", icon='BRUSH_DATA')
+        else:
+            row.operator(ops.IMPASTO_OT_native_multichannel_paint.bl_idname,
+                         text="Start Blender Brush Replay", icon='TPAINT_HLT')
+
+        row = paint.row(align=True)
+        row.prop(layer, "ui_show_advanced", text="Advanced",
+                 icon='TRIA_DOWN' if layer.ui_show_advanced
+                 else 'TRIA_RIGHT', emboss=False)
+        if layer.ui_show_advanced:
+            self._draw_advanced_paint(paint, layer)
+        if gpu_engine.session_active():
+            self._draw_gpu_session(paint)
+        if gpu_engine.last_error():
+            paint.label(text="GPU paint failed — see console", icon='ERROR')
+
+    def _draw_advanced_paint(self, box, layer):
+        col = box.column(align=True)
+        col.prop(layer, "gpu_preview_mode", text="Live Preview")
+        stencil_box = col.box()
+        stencil_box.prop(layer, "brush_stencil_enabled")
+        controls = stencil_box.column(align=True)
+        controls.enabled = layer.brush_stencil_enabled
+        controls.template_ID(layer, "brush_stencil_image", open="image.open")
+        controls.prop(layer, "brush_stencil_projection", expand=True)
+        controls.prop(layer, "brush_stencil_interpretation", expand=True)
+        controls.prop(layer, "brush_stencil_usage", expand=True)
+        controls.prop(layer, "brush_stencil_opacity", slider=True)
+        if layer.brush_stencil_projection == 'VIEW_STENCIL':
+            controls.prop(layer, "brush_stencil_position")
+            controls.prop(layer, "brush_stencil_scale")
+        else:
+            controls.prop(layer, "brush_stencil_brush_scale")
+        controls.prop(layer, "brush_stencil_rotation")
+        if layer.brush_stencil_usage == 'NORMAL_PROFILE':
+            controls.prop(layer, "brush_stencil_profile_strength", slider=True)
+            controls.prop(layer, "brush_stencil_profile_invert")
+        row = col.row(align=True)
+        row.prop(layer, "auto_material_preview", text="Idle Sync")
+        delay = row.row(align=True)
+        delay.enabled = layer.auto_material_preview
+        delay.prop(layer, "auto_material_preview_delay", text="Delay")
+
+    def _draw_gpu_session(self, box):
+        if gpu_engine.material_inspect_requested():
+            box.label(text="Synchronizing material…", icon='FILE_REFRESH')
+        elif gpu_engine.material_inspect_active():
+            box.label(text="Inspecting Blender material", icon='SHADING_RENDERED')
+        elif gpu_engine.input_paused():
+            box.label(text="Painting paused — P to resume", icon='PAUSE')
+        else:
+            box.label(text="GPU painting active — P to pause", icon='REC')
+        if (not gpu_engine.material_inspect_active()
+                and not gpu_engine.material_inspect_requested()):
+            row = box.row()
+            row.enabled = not gpu_engine.stroke_active()
+            row.operator(ops.IMPASTO_OT_gpu_material_inspect_toggle.bl_idname,
+                         text="Inspect Material", icon='SHADING_RENDERED')
+        elif gpu_engine.material_inspect_active():
+            box.operator(ops.IMPASTO_OT_gpu_material_inspect_toggle.bl_idname,
+                         text="Resume Painting", icon='PLAY')
+        row = box.row()
+        row.enabled = not gpu_engine.stroke_active()
+        row.operator(ops.IMPASTO_OT_gpu_flush.bl_idname,
+                     text="Flush for Save / Export", icon='FILE_REFRESH')
+
+    def _draw_legacy_paint_tools(self, context, box, layer):
         bound = [b.name for b in layer.bindings
                  if b.enabled and b.mode == 'SHARED'
                  and b.name in model.CHANNEL_MAP]
@@ -255,6 +365,7 @@ class IMPASTO_PT_main(bpy.types.Panel):
                                   expand=True)
             stencil_controls.prop(layer, "brush_stencil_interpretation",
                                   expand=True)
+            stencil_controls.prop(layer, "brush_stencil_usage", expand=True)
             stencil_controls.prop(layer, "brush_stencil_opacity", slider=True)
             if layer.brush_stencil_projection == 'VIEW_STENCIL':
                 stencil_controls.prop(layer, "brush_stencil_position")
@@ -262,12 +373,17 @@ class IMPASTO_PT_main(bpy.types.Panel):
             else:
                 stencil_controls.prop(layer, "brush_stencil_brush_scale")
             stencil_controls.prop(layer, "brush_stencil_rotation")
-            stencil_controls.label(
-                text="One mask modulates every painted channel identically",
-                icon='INFO')
-            stencil_controls.label(
-                text="Normal-profile relief is reserved for a later pass",
-                icon='NORMALS_FACE')
+            if layer.brush_stencil_usage == 'NORMAL_PROFILE':
+                stencil_controls.prop(
+                    layer, "brush_stencil_profile_strength", slider=True)
+                stencil_controls.prop(layer, "brush_stencil_profile_invert")
+                stencil_controls.label(
+                    text="Writes Normal only; linked Height is deferred",
+                    icon='NORMALS_FACE')
+            else:
+                stencil_controls.label(
+                    text="One mask modulates every channel identically",
+                    icon='INFO')
             row = gpu_col.row(align=True)
             row.prop(layer, "auto_material_preview", text="Idle Material Sync")
             sub = row.row(align=True)

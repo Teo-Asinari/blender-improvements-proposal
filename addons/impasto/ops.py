@@ -705,10 +705,15 @@ def gpu_stencil_settings(layer):
         projection=projection,
         interpretation=getattr(
             layer, "brush_stencil_interpretation", 'ALPHA'),
+        usage=getattr(layer, "brush_stencil_usage", 'COVERAGE'),
         opacity=getattr(layer, "brush_stencil_opacity", 1.0),
         position=getattr(layer, "brush_stencil_position", (0.5, 0.5)),
         scale=scale,
-        rotation=getattr(layer, "brush_stencil_rotation", 0.0))
+        rotation=getattr(layer, "brush_stencil_rotation", 0.0),
+        profile_strength=getattr(
+            layer, "brush_stencil_profile_strength", 1.0),
+        profile_invert=getattr(
+            layer, "brush_stencil_profile_invert", False))
 
 
 def _gpu_stamp(context, radius=None):

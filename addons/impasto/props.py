@@ -228,6 +228,8 @@ class ImpastoLayer(bpy.types.PropertyGroup):
     brush_stencil_interpretation: EnumProperty(
         name="Mask From", items=stencil.INTERPRETATION_ITEMS,
         default='ALPHA')
+    brush_stencil_usage: EnumProperty(
+        name="Usage", items=stencil.USAGE_ITEMS, default='COVERAGE')
     brush_stencil_opacity: FloatProperty(
         name="Stencil Opacity", default=1.0, min=0.0, max=1.0,
         subtype='FACTOR')
@@ -245,6 +247,15 @@ class ImpastoLayer(bpy.types.PropertyGroup):
         default=(1.0, 1.0), min=0.001, soft_max=2.0)
     brush_stencil_rotation: FloatProperty(
         name="Rotation", default=0.0, subtype='ANGLE')
+    brush_stencil_profile_strength: FloatProperty(
+        name="Relief Strength",
+        description="Strength of tangent-normal detail derived from image "
+                    "intensity gradients",
+        default=1.0, min=0.0, soft_max=8.0)
+    brush_stencil_profile_invert: BoolProperty(
+        name="Invert Relief",
+        description="Reverse raised and recessed normal-profile detail",
+        default=False)
     auto_material_preview: BoolProperty(
         name="Idle Material Synchronization",
         description="After a pause, read GPU textures back to Blender Images "
@@ -261,6 +272,15 @@ class ImpastoLayer(bpy.types.PropertyGroup):
                     "does not alter painted channel data",
         items=GPU_PREVIEW_MODE_ITEMS,
         default='LIT_PBR')
+    paint_workflow: EnumProperty(
+        name="Paint Engine",
+        items=(('GPU', "GPU Multi-Channel",
+                "Resident multi-channel painting with live preview"),
+               ('BLENDER', "Blender Brush Replay",
+                "Replay the active Blender brush into each channel")),
+        default='GPU')
+    ui_show_channels: BoolProperty(name="Channels", default=True)
+    ui_show_advanced: BoolProperty(name="Advanced", default=False)
 
 
 class ImpastoChannel(bpy.types.PropertyGroup):

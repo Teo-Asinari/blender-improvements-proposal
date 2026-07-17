@@ -133,6 +133,39 @@ MAX_DABS_PER_EVENT = 256
 # reports what GPUFrameBuffer actually accepts on this build/GPU).
 MAX_CHANNELS = 16
 
+# Dab parameters live in one std140-friendly float UBO.  Keeping every field
+# vec4-aligned avoids backend-specific padding (and lets Python upload a plain
+# contiguous float32 array).  The former push-constant declaration could grow
+# beyond Vulkan's portable 128-byte minimum once stencils/MRT were enabled.
+DAB_UBO_NAME = "dab_params"
+DAB_UBO_SLOT = 0
+DAB_UBO_MODEL = 0
+DAB_UBO_VIEW_PROJ = 4
+DAB_UBO_VIEW_DEPTH = 8
+DAB_UBO_REGION_CENTER = 9
+DAB_UBO_BRUSH_DEPTH = 10
+DAB_UBO_PAINT_FLAGS = 11
+DAB_UBO_STENCIL_FLAGS = 12
+DAB_UBO_STENCIL_TRANSFORM = 13
+DAB_UBO_PROFILE_FLAGS = 14
+DAB_UBO_BRUSH_VALUES = 15
+DAB_UBO_VEC4_COUNT = DAB_UBO_BRUSH_VALUES + MAX_CHANNELS
+
+DAB_UBO_TYPEDEF = """
+struct ImpastoDabParams {
+    mat4 model_matrix;
+    mat4 view_proj_matrix;
+    vec4 view_depth_plane;
+    vec4 region_brush_center;  /* region_size.xy, brush_center_px.xy */
+    vec4 brush_depth;          /* radius, hardness, abs eps, rel eps */
+    vec4 paint_flags;          /* occlusion, pressure, stencil, projection */
+    vec4 stencil_flags;        /* interpretation, opacity, rotation, unused */
+    vec4 stencil_transform;    /* position.xy, scale.xy */
+    vec4 profile_flags;        /* usage, strength, invert, unused */
+    vec4 brush_values[16];
+};
+"""
+
 # Stable engine/UI contract for diagnostic live-preview display modes.
 PREVIEW_MODES = (
     "LIT_PBR",
@@ -165,7 +198,7 @@ void main()
     /* Rasterize in UV space: the UV coordinate IS the clip position, so
      * every covered fragment is exactly one texel of the paint texture. */
     gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
-    worldPos = (model_matrix * vec4(pos, 1.0)).xyz;
+    worldPos = (dab_params.model_matrix * vec4(pos, 1.0)).xyz;
 }
 """
 
@@ -173,11 +206,30 @@ void main()
 # the single-channel and MRT variants; dab_frag_src() appends the
 # per-attachment output assignments.
 _DAB_FRAG_PRELUDE = """
+float impasto_stencil_intensity(vec2 sample_uv)
+{
+    vec4 sample_value = texture(stencil_tex, clamp(sample_uv, 0.0, 1.0));
+    return (dab_params.stencil_flags.x < 0.5)
+        ? sample_value.a
+        : dot(sample_value.rgb, vec3(0.2126, 0.7152, 0.0722));
+}
+
+vec3 compose_profile_normal(vec3 configured, vec3 detail)
+{
+    vec3 base_n = normalize(configured * 2.0 - 1.0);
+    vec3 detail_n = normalize(detail * 2.0 - 1.0);
+    float base_z = max(base_n.z, 1e-4);
+    float detail_z = max(detail_n.z, 1e-4);
+    vec3 combined = normalize(vec3(base_n.xy / base_z
+                                   + detail_n.xy / detail_z, 1.0));
+    return combined * 0.5 + 0.5;
+}
+
 void main()
 {
     /* Project this texel's 3D point through the same view_proj the
      * depth prepass used. */
-    vec4 clip = view_proj_matrix * vec4(worldPos, 1.0);
+    vec4 clip = dab_params.view_proj_matrix * vec4(worldPos, 1.0);
     if (clip.w <= 0.0) {
         discard;   /* behind the eye */
     }
@@ -185,6 +237,9 @@ void main()
 
     /* Screen-space brush disc test (region pixels, origin bottom-left,
      * matching Blender's region-relative mouse coordinates). */
+    vec2 region_size = dab_params.region_brush_center.xy;
+    vec2 brush_center_px = dab_params.region_brush_center.zw;
+    float brush_radius_px = dab_params.brush_depth.x;
     vec2 px = (ndc.xy * 0.5 + 0.5) * region_size;
     float d = distance(px, brush_center_px);
     if (d > brush_radius_px) {
@@ -193,15 +248,16 @@ void main()
 
     /* Occlusion: compare positive linear view-space depth against the
      * frontmost value stored by the prepass. */
-    if (use_occlusion > 0.5) {
+    if (dab_params.paint_flags.x > 0.5) {
         vec2 suv = ndc.xy * 0.5 + 0.5;
         if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) {
             discard;
         }
-        float view_depth = dot(view_depth_plane, vec4(worldPos, 1.0));
+        float view_depth = dot(dab_params.view_depth_plane,
+                               vec4(worldPos, 1.0));
         if (!impasto_visible_surface(scene_depth_tex, suv, view_depth,
-                                     depth_epsilon,
-                                     depth_relative_epsilon)) {
+                                     dab_params.brush_depth.z,
+                                     dab_params.brush_depth.w)) {
             discard;   /* this texel's surface point is hidden */
         }
     }
@@ -209,25 +265,30 @@ void main()
     /* Round brush falloff: 1 inside the hardness core, smoothstep to 0
      * at the rim. MUST match engine.brush_falloff() (tested headless). */
     float t = d / max(brush_radius_px, 1e-6);
-    float h = clamp(brush_hardness, 0.0, 0.999);
+    float h = clamp(dab_params.brush_depth.y, 0.0, 0.999);
     float f = 1.0 - smoothstep(h, 1.0, t);
 
     /* Evaluate one shared image mask before any MRT output so every enabled
      * material channel receives exactly the same spatial modulation. */
     float stencil_factor = 1.0;
-    if (use_stencil > 0.5) {
+    vec3 profile_normal = vec3(0.5, 0.5, 1.0);
+    bool profile_mode = (dab_params.paint_flags.z > 0.5 &&
+                         dab_params.profile_flags.x > 0.5);
+    if (dab_params.paint_flags.z > 0.5) {
         vec2 stencil_center;
         vec2 stencil_half_extent;
-        if (stencil_projection == 0) {
-            stencil_center = stencil_position * region_size;
-            stencil_half_extent = 0.5 * stencil_scale * region_size;
+        if (dab_params.paint_flags.w < 0.5) {
+            stencil_center = dab_params.stencil_transform.xy * region_size;
+            stencil_half_extent = 0.5 * dab_params.stencil_transform.zw *
+                                  region_size;
         } else {
             stencil_center = brush_center_px;
-            stencil_half_extent = brush_radius_px * stencil_scale;
+            stencil_half_extent = brush_radius_px *
+                                  dab_params.stencil_transform.zw;
         }
         vec2 delta = px - stencil_center;
-        float cs = cos(stencil_rotation);
-        float sn = sin(stencil_rotation);
+        float cs = cos(dab_params.stencil_flags.z);
+        float sn = sin(dab_params.stencil_flags.z);
         vec2 local = vec2(cs * delta.x + sn * delta.y,
                          -sn * delta.x + cs * delta.y);
         vec2 stencil_uv = local / (2.0 * max(stencil_half_extent,
@@ -236,12 +297,32 @@ void main()
             any(greaterThan(stencil_uv, vec2(1.0)))) {
             stencil_factor = 0.0;
         } else {
-            vec4 stencil_sample = texture(stencil_tex, stencil_uv);
-            float luminance = dot(stencil_sample.rgb,
-                                  vec3(0.2126, 0.7152, 0.0722));
-            float mask_value = (stencil_interpretation == 0)
-                ? stencil_sample.a : luminance;
-            stencil_factor = clamp(mask_value * stencil_opacity, 0.0, 1.0);
+            if (profile_mode) {
+                vec2 profile_size = vec2(textureSize(stencil_tex, 0));
+                vec2 profile_texel = 1.0 / max(profile_size, vec2(1.0));
+                vec2 profile_aspect = profile_size /
+                    max(min(profile_size.x, profile_size.y), 1.0);
+                float left = impasto_stencil_intensity(
+                    stencil_uv - vec2(profile_texel.x, 0.0));
+                float right = impasto_stencil_intensity(
+                    stencil_uv + vec2(profile_texel.x, 0.0));
+                float down = impasto_stencil_intensity(
+                    stencil_uv - vec2(0.0, profile_texel.y));
+                float up = impasto_stencil_intensity(
+                    stencil_uv + vec2(0.0, profile_texel.y));
+                float direction = (dab_params.profile_flags.z > 0.5)
+                    ? -1.0 : 1.0;
+                vec2 gradient = 0.5 * vec2(right - left, up - down) *
+                    profile_aspect * dab_params.profile_flags.y * direction;
+                vec3 detail_n = normalize(vec3(-gradient, 1.0));
+                profile_normal = detail_n * 0.5 + 0.5;
+                stencil_factor = clamp(dab_params.stencil_flags.y,
+                                       0.0, 1.0);
+            } else {
+                float mask_value = impasto_stencil_intensity(stencil_uv);
+                stencil_factor = clamp(mask_value *
+                    dab_params.stencil_flags.y, 0.0, 1.0);
+            }
         }
     }
     f *= stencil_factor;
@@ -249,20 +330,43 @@ void main()
 
 # v0.2.0's single-channel source, byte-for-byte (the N=1 case must not
 # regress): prelude + the one output assignment.
-def dab_frag_src(channels=1, additive=False):
+def dab_frag_src(channels=1, additive=False, profile_slots=None,
+                 profile_enabled=None):
     """MRT fragment source with one independent RGBA payload per slot."""
     if channels > MAX_CHANNELS:
         raise ValueError("channels > MAX_CHANNELS")
+    profile_slots = tuple(profile_slots or (False,) * channels)
+    if len(profile_slots) != channels:
+        raise ValueError("profile_slots must match channels")
+    if profile_enabled is None:
+        profile_enabled = any(profile_slots)
     lines = []
     for i in range(channels):
         output = "fragColor" if i == 0 else "fragColor%d" % i
-        if additive:
+        if profile_slots[i]:
             lines.append(
-                "    %s = vec4(brush_value%d.rgb * brush_value%d.a * "
-                "pressure * f, pressure * f);" % (output, i, i))
+                "    %s = profile_mode ? vec4(compose_profile_normal("
+                "dab_params.brush_values[%d].rgb, profile_normal), "
+                "dab_params.brush_values[%d].a * dab_params.paint_flags.y "
+                "* f) : vec4(dab_params.brush_values[%d].rgb, "
+                "dab_params.brush_values[%d].a * dab_params.paint_flags.y "
+                "* f);" % (output, i, i, i, i))
+        elif profile_enabled:
+            lines.append(
+                "    %s = profile_mode ? vec4(0.0) : "
+                "vec4(dab_params.brush_values[%d].rgb, "
+                "dab_params.brush_values[%d].a * dab_params.paint_flags.y "
+                "* f);" % (output, i, i))
+        elif additive:
+            lines.append(
+                "    %s = vec4(dab_params.brush_values[%d].rgb * "
+                "dab_params.brush_values[%d].a * "
+                "dab_params.paint_flags.y * f, "
+                "dab_params.paint_flags.y * f);" % (output, i, i))
         else:
-            lines.append("    %s = vec4(brush_value%d.rgb, "
-                         "brush_value%d.a * pressure * f);"
+            lines.append("    %s = vec4(dab_params.brush_values[%d].rgb, "
+                         "dab_params.brush_values[%d].a * "
+                         "dab_params.paint_flags.y * f);"
                          % (output, i, i))
     return _DAB_FRAG_PRELUDE + "\n".join(lines) + "\n}\n"
 
@@ -921,30 +1025,15 @@ _read_into_numpy = False
 # ---------------------------------------------------------------------------
 
 
-def dab_shader_create_info(channels=1, additive=False):
+def dab_shader_create_info(channels=1, additive=False, profile_slots=None,
+                           profile_enabled=None):
+    if channels > MAX_CHANNELS:
+        raise ValueError("channels > MAX_CHANNELS")
     iface = gpu.types.GPUStageInterfaceInfo("gpu_paint_spike_dab_iface")
     iface.smooth('VEC3', "worldPos")
     info = gpu.types.GPUShaderCreateInfo()
-    info.push_constant('MAT4', "model_matrix")
-    info.push_constant('MAT4', "view_proj_matrix")
-    info.push_constant('VEC4', "view_depth_plane")
-    info.push_constant('VEC2', "region_size")
-    info.push_constant('VEC2', "brush_center_px")
-    info.push_constant('FLOAT', "brush_radius_px")
-    info.push_constant('FLOAT', "brush_hardness")
-    info.push_constant('FLOAT', "depth_epsilon")
-    info.push_constant('FLOAT', "depth_relative_epsilon")
-    info.push_constant('FLOAT', "use_occlusion")
-    info.push_constant('FLOAT', "pressure")
-    info.push_constant('FLOAT', "use_stencil")
-    info.push_constant('INT', "stencil_projection")
-    info.push_constant('INT', "stencil_interpretation")
-    info.push_constant('FLOAT', "stencil_opacity")
-    info.push_constant('VEC2', "stencil_position")
-    info.push_constant('VEC2', "stencil_scale")
-    info.push_constant('FLOAT', "stencil_rotation")
-    for i in range(channels):
-        info.push_constant('VEC4', "brush_value%d" % i)
+    info.typedef_source(DAB_UBO_TYPEDEF)
+    info.uniform_buf(DAB_UBO_SLOT, "ImpastoDabParams", DAB_UBO_NAME)
     info.sampler(0, 'FLOAT_2D', "scene_depth_tex")
     info.sampler(1, 'FLOAT_2D', "stencil_tex")
     info.vertex_in(0, 'VEC3', "pos")
@@ -955,8 +1044,58 @@ def dab_shader_create_info(channels=1, additive=False):
         info.fragment_out(i, 'VEC4', "fragColor%d" % i)
     info.vertex_source(DAB_VERT_SRC)
     info.fragment_source(visibility.GLSL_SOURCE
-                         + dab_frag_src(channels, additive=additive))
+                         + dab_frag_src(channels, additive=additive,
+                                       profile_slots=profile_slots,
+                                       profile_enabled=profile_enabled))
     return info
+
+
+def dab_uniform_data(model_matrix, view_proj_matrix, view_depth_plane,
+                     region_size, brush_center, radius, hardness,
+                     depth_epsilon, depth_relative_epsilon, occlusion,
+                     pressure, use_stencil, stencil_projection,
+                     stencil_interpretation, stencil_opacity,
+                     stencil_position, stencil_scale, stencil_rotation,
+                     brush_values, profile_usage=False,
+                     profile_strength=1.0, profile_invert=False, data=None):
+    """Pack dab state into the all-vec4 std140 UBO layout.
+
+    Matrices are transposed before flattening because mathutils/numpy expose
+    rows while GLSL's default matrix storage is column-major.  Integer-like
+    switches are floats intentionally, keeping the whole buffer padding-free.
+    """
+    import numpy as np
+    if data is None:
+        data = np.zeros((DAB_UBO_VEC4_COUNT, 4), dtype=np.float32)
+    else:
+        data.fill(0.0)
+    data[DAB_UBO_MODEL:DAB_UBO_MODEL + 4] = np.asarray(
+        model_matrix, dtype=np.float32).T
+    data[DAB_UBO_VIEW_PROJ:DAB_UBO_VIEW_PROJ + 4] = np.asarray(
+        view_proj_matrix, dtype=np.float32).T
+    data[DAB_UBO_VIEW_DEPTH] = tuple(view_depth_plane)
+    data[DAB_UBO_REGION_CENTER] = (
+        float(region_size[0]), float(region_size[1]),
+        float(brush_center[0]), float(brush_center[1]))
+    data[DAB_UBO_BRUSH_DEPTH] = (
+        float(radius), float(hardness), float(depth_epsilon),
+        float(depth_relative_epsilon))
+    data[DAB_UBO_PAINT_FLAGS] = (
+        1.0 if occlusion else 0.0, float(pressure),
+        1.0 if use_stencil else 0.0,
+        1.0 if stencil_projection else 0.0)
+    data[DAB_UBO_STENCIL_FLAGS] = (
+        1.0 if stencil_interpretation else 0.0,
+        float(stencil_opacity), float(stencil_rotation), 0.0)
+    data[DAB_UBO_STENCIL_TRANSFORM] = (
+        float(stencil_position[0]), float(stencil_position[1]),
+        float(stencil_scale[0]), float(stencil_scale[1]))
+    data[DAB_UBO_PROFILE_FLAGS] = (
+        1.0 if profile_usage else 0.0, float(profile_strength),
+        1.0 if profile_invert else 0.0, 0.0)
+    for index, value in enumerate(brush_values[:MAX_CHANNELS]):
+        data[DAB_UBO_BRUSH_VALUES + index] = value
+    return data
 
 
 def prepass_shader_create_info():
@@ -1282,6 +1421,8 @@ class _Session:
 
         # GPU resources — ALL lazy, created at first draw.
         self.dab_shaders = None
+        self.dab_ubos = None
+        self.dab_ubo_data = None
         self.prepass_shader = None
         self.preview_shader = None
         self.paint_texs = None         # list of N RGBA16F GPUTextures
@@ -1972,9 +2113,19 @@ def _ensure_gpu(s):
         for line in s.probe_lines:
             _log_line("GPU_PAINT_SPIKE_PROBE %s" % line)
 
+    channel_keys = tuple(s.settings.get("channel_keys", ()))
     s.dab_shaders = [gpu.shader.create_from_info(
-        dab_shader_create_info(len(indices), additive=(blend == 'ADD')))
+        dab_shader_create_info(
+            len(indices), additive=(blend == 'ADD'),
+            profile_enabled=True,
+            profile_slots=tuple(
+                index < len(channel_keys) and channel_keys[index] == 'normal'
+                for index in indices)))
         for blend, indices in s.target_batches]
+    s.dab_ubo_data = [np.zeros((DAB_UBO_VEC4_COUNT, 4), dtype=np.float32)
+                      for _shader in s.dab_shaders]
+    s.dab_ubos = [gpu.types.GPUUniformBuf(data)
+                  for data in s.dab_ubo_data]
     s.prepass_shader = gpu.shader.create_from_info(
         prepass_shader_create_info())
     s.preview_shader = gpu.shader.create_from_info(
@@ -2664,9 +2815,10 @@ def _flush_dabs(s, region):
                 s.stroke_transaction.touch_rect(
                     channel, rect, (s.size, s.size))
 
-    for batch_index, ((blend, indices), fb, sh, draw_batch) in enumerate(
+    for batch_index, ((blend, indices), fb, sh, ubo, ubo_data,
+                      draw_batch) in enumerate(
             zip(s.target_batches, s.paint_fbs, s.dab_shaders,
-                s.batch_dabs)):
+                s.dab_ubos, s.dab_ubo_data, s.batch_dabs)):
         with fb.bind():
             fb.viewport_set(0, 0, s.size, s.size)
             gpu.state.blend_set('ADDITIVE' if blend == 'ADD' else 'ALPHA')
@@ -2674,53 +2826,57 @@ def _flush_dabs(s, region):
             gpu.state.depth_mask_set(False)
             gpu.state.face_culling_set('NONE')
             sh.bind()
-            sh.uniform_float("model_matrix", s.model)
-            sh.uniform_float("view_proj_matrix", s.view_proj)
-            sh.uniform_float("view_depth_plane", s.view_depth_plane)
-            sh.uniform_float("region_size",
-                             (float(region.width), float(region.height)))
-            sh.uniform_float("brush_radius_px", radius)
-            sh.uniform_float("brush_hardness", hardness)
-            sh.uniform_float("depth_epsilon", DEPTH_EPSILON)
-            sh.uniform_float("depth_relative_epsilon",
-                             visibility.DEFAULT_POLICY.relative_epsilon)
-            sh.uniform_float("use_occlusion", 1.0 if occlusion else 0.0)
-            sh.uniform_sampler("scene_depth_tex", s.depth_color_tex)
-            sh.uniform_float("use_stencil", 1.0 if use_stencil else 0.0)
-            sh.uniform_int("stencil_projection", 1 if
-                           s.settings.get("stencil_projection") ==
-                           'BRUSH_ALPHA' else 0)
-            sh.uniform_int("stencil_interpretation", 1 if
-                           s.settings.get("stencil_interpretation") ==
-                           'LUMINANCE' else 0)
-            sh.uniform_float("stencil_opacity", float(
-                s.settings.get("stencil_opacity", 1.0)))
-            sh.uniform_float("stencil_position", tuple(
-                s.settings.get("stencil_position", (0.5, 0.5))))
-            sh.uniform_float("stencil_scale", tuple(
-                s.settings.get("stencil_scale", (0.35, 0.35))))
-            sh.uniform_float("stencil_rotation", float(
-                s.settings.get("stencil_rotation", 0.0)))
-            # All declared samplers must be bound even when the branch is off.
-            sh.uniform_sampler("stencil_tex", stencil_tex if use_stencil
-                               else s.depth_color_tex)
+            brush_values = []
             for local, target_index in enumerate(indices):
                 payload = s.payloads[target_index]
                 value = tuple(payload.get("value", (0.0, 0.0, 0.0)))[:3]
-                sh.uniform_float(
-                    "brush_value%d" % local,
-                    (value[0], value[1], value[2],
-                     float(payload.get("strength", 1.0))))
+                brush_values.append((
+                    value[0], value[1], value[2],
+                    float(payload.get("strength", 1.0))))
+            stencil_projection = (
+                s.settings.get("stencil_projection") == 'BRUSH_ALPHA')
+            stencil_interpretation = (
+                s.settings.get("stencil_interpretation") == 'LUMINANCE')
+            stencil_position = tuple(
+                s.settings.get("stencil_position", (0.5, 0.5)))
+            stencil_scale = tuple(
+                s.settings.get("stencil_scale", (0.35, 0.35)))
+            stencil_opacity = float(
+                s.settings.get("stencil_opacity", 1.0))
+            stencil_rotation = float(
+                s.settings.get("stencil_rotation", 0.0))
+            profile_usage = (
+                s.settings.get("stencil_usage") == 'NORMAL_PROFILE')
+            profile_strength = float(
+                s.settings.get("stencil_profile_strength", 1.0))
+            profile_invert = bool(
+                s.settings.get("stencil_profile_invert", False))
+            dab_uniform_data(
+                s.model, s.view_proj, s.view_depth_plane,
+                (region.width, region.height), (0.0, 0.0), radius,
+                hardness, DEPTH_EPSILON,
+                visibility.DEFAULT_POLICY.relative_epsilon, occlusion, 0.0,
+                use_stencil, stencil_projection, stencil_interpretation,
+                stencil_opacity, stencil_position, stencil_scale,
+                stencil_rotation, brush_values, profile_usage,
+                profile_strength, profile_invert, data=ubo_data)
+            ubo.update(ubo_data)
+            sh.uniform_block(DAB_UBO_NAME, ubo)
+            sh.uniform_sampler("scene_depth_tex", s.depth_color_tex)
+            # All declared samplers must be bound even when the branch is off.
+            sh.uniform_sampler("stencil_tex", stencil_tex if use_stencil
+                               else s.depth_color_tex)
             for (x, y, pressure) in queue:
                 t0 = time.perf_counter()
                 dab_radius, dab_opacity = (
                     stamp.values_at_pressure(pressure)
                     if stamp is not None else (radius, pressure))
-                sh.uniform_float("brush_radius_px", dab_radius)
-                sh.uniform_float("brush_center_px", (float(x), float(y)))
                 stroke_opacity = float(s.settings.get("opacity", 1.0))
-                sh.uniform_float("pressure", max(
-                    0.0, min(1.0, dab_opacity * stroke_opacity)))
+                ubo_data[DAB_UBO_REGION_CENTER, 2:4] = (float(x), float(y))
+                ubo_data[DAB_UBO_BRUSH_DEPTH, 0] = dab_radius
+                ubo_data[DAB_UBO_PAINT_FLAGS, 1] = max(
+                    0.0, min(1.0, dab_opacity * stroke_opacity))
+                ubo.update(ubo_data)
                 draw_batch.draw(sh)
                 s.submit_times.append(time.perf_counter() - t0)
     s.dab_count += len(queue)

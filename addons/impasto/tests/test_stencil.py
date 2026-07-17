@@ -88,6 +88,7 @@ try:
     layer.brush_stencil_image = mask
     layer.brush_stencil_projection = 'BRUSH_ALPHA'
     layer.brush_stencil_interpretation = 'LUMINANCE'
+    layer.brush_stencil_usage = 'NORMAL_PROFILE'
     layer.brush_stencil_opacity = 0.6
     layer.brush_stencil_position = (0.25, 0.75)
     check("Brush Alpha defaults to one full brush diameter",
@@ -95,12 +96,17 @@ try:
           and ops.gpu_stencil_settings(layer).scale == (1.0, 1.0))
     layer.brush_stencil_brush_scale = (1.2, 0.8)
     layer.brush_stencil_rotation = 0.4
+    layer.brush_stencil_profile_strength = 2.5
+    layer.brush_stencil_profile_invert = True
     settings = ops.gpu_stencil_settings(layer)
     check("persistent layer state maps to plain GPU settings",
           settings.active and settings.image_name == mask.name
           and settings.projection == 'BRUSH_ALPHA'
           and settings.interpretation == 'LUMINANCE'
+          and settings.usage == 'NORMAL_PROFILE'
           and settings.opacity > 0.59
+          and settings.profile_strength == 2.5
+          and settings.profile_invert
           and settings.position == (0.25, 0.75)
           and all(abs(a - b) < 1e-6 for a, b in
                   zip(settings.scale, (1.2, 0.8))))
@@ -115,11 +121,22 @@ try:
           source.count("texture(stencil_tex") == 1
           and "f *= stencil_factor" in source)
     check("every MRT output uses the same modulated falloff",
-          all(("pressure * f" in line) for line in source.splitlines()
+          all(("paint_flags.y * f" in line) for line in source.splitlines()
               if "fragColor" in line and "=" in line))
     info = gpu_engine.dab_shader_create_info(4)
     check("shader create-info exposes stencil sampler and transform",
           info is not None)
+    profile_source = gpu_engine.dab_frag_src(
+        2, profile_slots=(False, True))
+    check("normal-profile shader uses aspect-aware neighboring samples",
+          "textureSize(stencil_tex, 0)" in profile_source
+          and "profile_texel" in profile_source
+          and "profile_aspect" in profile_source)
+    check("normal-profile output composes with configured normal",
+          "compose_profile_normal" in profile_source
+          and "profile_normal" in profile_source)
+    check("normal-profile mode suppresses non-Normal MRT outputs",
+          "fragColor = profile_mode ? vec4(0.0)" in profile_source)
 
     targets = ops.gpu_paint_targets(layer)
     keys = tuple(key for key, _image in targets)

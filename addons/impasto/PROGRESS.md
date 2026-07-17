@@ -4,6 +4,16 @@ Current consolidated handoff: [`SESSION_2026-07-13.md`](SESSION_2026-07-13.md).
 It records the shipped GPU-resident architecture, validation, known limits,
 new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 
+## 0.9.0 — normal-profile painting and focused UI
+
+- Added adjustable, invertible alpha-profile tangent-normal painting while
+  preserving registered multi-channel stencil coverage.
+- Migrated dab parameters to a structured GPU uniform buffer for improved
+  backend portability and room for future brush settings.
+- Reorganized the sidebar around one selected paint engine and one primary
+  action; channel details and advanced stencil/preview/sync controls now use
+  progressive disclosure.
+
 ## 0.7.0 — image-based PBR and common-stack resident preview
 
 - Replaced fixed preview lights with image-based studio lighting, roughness-
@@ -38,9 +48,6 @@ new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
   to deliberate color/value texture application. Additional projection,
   transform, masking, and per-channel semantics await the user's detailed
   workflow description.
-- Add 3DCoat-style alpha-profile normal painting: convert alpha/luminance
-  gradients into adjustable, invertible tangent-space normal detail while
-  retaining cross-channel registration.
 - Implement resident-GPU equivalents of Blender's useful brush families plus
   adjustable alpha/brush textures, staged from Draw-style stamps through
   destination-sampling and source/state-heavy tools.
@@ -228,5 +235,5 @@ matches the synced result.
 - GUI acceptance pass (real strokes; checklist in README) — now also
   covers the premultiply fix above.
 - GPU stroke undo (region snapshot/restore) — phase 6 productization.
-- Seam padding/dilation post-pass; UBO for dab matrices (>128 B push
-  constants warn on some backends).
+- Seam padding/dilation post-pass. Dab matrices, stencil state, and MRT payloads
+  now use a vec4-aligned UBO instead of oversized push constants.
