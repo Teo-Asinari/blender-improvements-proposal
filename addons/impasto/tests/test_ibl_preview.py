@@ -61,9 +61,9 @@ check("missing environment has a graceful energy-conserving fallback",
       and "albedo * kd + fresnel" in src)
 check("diagnostic branches still return before IBL work",
       src.index("if (preview_mode == 1)")
-      < src.index("sample_prefiltered_environment(\n            reflection")
+      < src.index("vec3 prefiltered = sample_prefiltered_environment")
       and src.index("if (preview_mode == 3)")
-      < src.index("sample_prefiltered_environment(\n            reflection"))
+      < src.index("vec3 prefiltered = sample_prefiltered_environment"))
 check("atlas construction stays a one-time modest CPU cost",
       build_ms < 250.0, "%.2f ms" % build_ms)
 

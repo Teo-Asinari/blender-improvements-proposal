@@ -272,6 +272,26 @@ class ImpastoLayer(bpy.types.PropertyGroup):
                     "does not alter painted channel data",
         items=GPU_PREVIEW_MODE_ITEMS,
         default='LIT_PBR')
+    preview_environment_exposure: FloatProperty(
+        name="Environment Exposure",
+        description="Preview-only environment brightness in exposure stops",
+        default=0.0, min=-4.0, max=4.0)
+    preview_environment_rotation: FloatProperty(
+        name="Environment Rotation",
+        description="Rotate the preview environment around the model",
+        default=0.0, subtype='ANGLE')
+    preview_key_strength: FloatProperty(
+        name="Key Strength",
+        description="Brightness of the main preview studio light",
+        default=1.0, min=0.0, soft_max=8.0)
+    preview_key_rotation: FloatProperty(
+        name="Key Rotation",
+        description="Rotate the main preview light around the model",
+        default=0.0, subtype='ANGLE')
+    preview_fill_strength: FloatProperty(
+        name="Fill Strength",
+        description="Brightness of the broad light revealing recessed areas",
+        default=1.0, min=0.0, soft_max=8.0)
     paint_workflow: EnumProperty(
         name="Paint Engine",
         items=(('GPU', "GPU Multi-Channel",

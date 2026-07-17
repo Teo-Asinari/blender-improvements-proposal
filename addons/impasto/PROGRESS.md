@@ -4,6 +4,13 @@ Current consolidated handoff: [`SESSION_2026-07-13.md`](SESSION_2026-07-13.md).
 It records the shipped GPU-resident architecture, validation, known limits,
 new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 
+## 0.9.3 — configurable preview lighting and Kiln normals
+
+- Added live preview-only environment exposure/rotation, key strength/rotation,
+  and fill strength in a compact lighting popover without texture readback.
+- Kiln baked-normal baselines now ignore non-authoritative bake alpha, including
+  legacy imported layers, so they remain visible in Lit PBR.
+
 ## 0.9.2 — self-occluding resident preview
 
 - The resident preview now uses Impasto's front-surface depth policy, preventing

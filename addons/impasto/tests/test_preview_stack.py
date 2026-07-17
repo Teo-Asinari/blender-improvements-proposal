@@ -129,7 +129,10 @@ check("runtime preserves Kiln as baseline-only Normal channel",
       runtime["channels"]["normal"]["active"] is None
       and runtime["channels"]["normal"]["lower_steps"][0]["source"]
       == {"kind": "IMAGE", "image_name": "Kiln Normal",
-          "use_alpha": True})
+          "use_alpha": False})
+check("resident Kiln baseline ignores non-authoritative bake alpha",
+      not runtime["channels"]["normal"]["lower_steps"][0]["source"]
+      ["use_alpha"])
 
 preview_src = gpu_engine.PREVIEW_FRAG_SRC
 check("resolved active alpha is applied exactly once",

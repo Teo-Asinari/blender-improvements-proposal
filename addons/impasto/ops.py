@@ -148,6 +148,11 @@ def import_normal_baseline(mat, image, uv_map="", fallback_node_name=""):
         binding = next(b for b in imported.bindings if b.name == "normal")
         binding.image_name = image.name
         binding.enabled = True
+        # A baked tangent-normal target is an opaque material channel.  Its
+        # alpha is not a paint/mask coverage channel (some bakers leave it at
+        # zero), so allowing it to gate the layer can erase the Kiln baseline
+        # in the resident preview and compiled material alike.
+        binding.use_masks = False
         # Keep/re-establish it as the bottom baseline on repeated bakes.
         index = next(i for i, layer in enumerate(state.layers)
                      if layer.name == imported.name)
@@ -691,6 +696,17 @@ def gpu_preview_mode(layer):
     return mode if mode in props.GPU_PREVIEW_MODE_IDS else 'LIT_PBR'
 
 
+def gpu_preview_lighting(layer):
+    """Persistent display-only controls for the resident PBR preview."""
+    return {
+        "preview_environment_exposure": layer.preview_environment_exposure,
+        "preview_environment_rotation": layer.preview_environment_rotation,
+        "preview_key_strength": layer.preview_key_strength,
+        "preview_key_rotation": layer.preview_key_rotation,
+        "preview_fill_strength": layer.preview_fill_strength,
+    }
+
+
 def gpu_stencil_settings(layer):
     """Persistent layer stencil state as an immutable runtime contract."""
     image = getattr(layer, "brush_stencil_image", None)
@@ -1021,6 +1037,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
                 tree, _context_material(context)),
             "active_layer_uid": layer.name,
         }
+        settings.update(gpu_preview_lighting(layer))
         settings.update(gpu_stencil_settings(layer).as_gpu_settings())
         if not gpu_engine.start_session(obj, images, region,
                                         payloads=payloads,
@@ -1119,6 +1136,18 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         self._preview_mode = mode
         self._region.tag_redraw()
         return True
+
+    def _refresh_preview_lighting(self):
+        """Apply sidebar lighting edits without restarting or synchronizing."""
+        tree = bpy.data.node_groups.get(self._tree_name)
+        layer = (tree.impasto.layers.get(self._layer_uid)
+                 if tree is not None else None)
+        if layer is None:
+            return False
+        changed = gpu_engine.set_preview_lighting(gpu_preview_lighting(layer))
+        if changed:
+            self._region.tag_redraw()
+        return changed
 
     def _apply_pending_sync(self):
         """Write an explicitly flushed readback into the channel Image
@@ -1298,6 +1327,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             return {'RUNNING_MODAL'}
         elif etype == 'TIMER':
             self._refresh_preview_mode()
+            self._refresh_preview_lighting()
             if (self._auto_inspect_deadline is not None
                     and time.monotonic() >= self._auto_inspect_deadline
                     and not gpu_engine.busy()

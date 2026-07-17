@@ -19,7 +19,7 @@ if ADDONS not in sys.path:
     sys.path.insert(0, ADDONS)
 
 import impasto
-from impasto import compat, engine, model, paint
+from impasto import compat, engine, model, ops, paint
 
 
 def check(name, condition, detail=""):
@@ -97,6 +97,11 @@ try:
 
     check("stack init", bpy.ops.impasto.stack_init(
         template="PRINCIPLED_STANDARD") == {"FINISHED"})
+    kiln_layer = ops.import_normal_baseline(
+        mat, baked, uv_map="PaintUV", fallback_node_name="Kiln Normal Map")
+    kiln_binding = kiln_layer.bindings.get("normal")
+    check("Kiln normal baseline does not use bake alpha as coverage",
+          kiln_binding is not None and not kiln_binding.use_masks)
     check("add paint", bpy.ops.impasto.layer_add(
         layer_type="PAINT") == {"FINISHED"})
 

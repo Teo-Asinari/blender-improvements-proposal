@@ -461,6 +461,13 @@ vec2 environment_uv(vec3 direction)
                 asin(clamp(direction.z, -1.0, 1.0)) / 3.14159265 + 0.5);
 }
 
+vec3 rotate_around_z(vec3 direction, float angle)
+{
+    float c = cos(angle), s = sin(angle);
+    return vec3(c * direction.x - s * direction.y,
+                s * direction.x + c * direction.y, direction.z);
+}
+
 vec3 sample_environment_panel(vec3 direction, float panel)
 {
     vec2 uv = environment_uv(direction);
@@ -667,10 +674,14 @@ void main()
     vec3 kd = (vec3(1.0) - fresnel) * (1.0 - metallic);
     vec3 rgb;
     if (environment_ready > 0.5) {
-        vec3 irradiance = sample_environment_panel(n, 0.0);
+        float environment_intensity = exp2(preview_lighting.x);
+        vec3 environment_n = rotate_around_z(n, preview_lighting.y);
+        vec3 irradiance = sample_environment_panel(environment_n, 0.0)
+                          * environment_intensity;
         vec3 reflection = reflect(-v, n);
         vec3 prefiltered = sample_prefiltered_environment(
-            reflection, roughness);
+            rotate_around_z(reflection, preview_lighting.y), roughness)
+            * environment_intensity;
         vec2 env_brdf = environment_brdf_ggx(ndv, roughness);
         vec3 diffuse_ibl = irradiance * albedo * kd;
         vec3 scatter_distance = sss_radius * sss_scale;
@@ -680,7 +691,8 @@ void main()
                                      scatter_distance.g),
                                  max(scatter_distance.b, 1e-5));
         vec3 scatter_tint = scatter_distance / max_distance;
-        vec3 back_irradiance = sample_environment_panel(-n, 0.0);
+        vec3 back_irradiance = sample_environment_panel(-environment_n, 0.0)
+                               * environment_intensity;
         vec3 scattered = (irradiance + back_irradiance * scatter_tint)
                          * 0.5 * albedo * kd;
         diffuse_ibl = mix(diffuse_ibl, scattered,
@@ -691,11 +703,14 @@ void main()
          * tangent-normal changes legible even on dielectric materials. The
          * environment remains the dominant illumination. */
         rgb += preview_key_light(
-            n, v, normalize(vec3(0.42, -0.34, 0.84)), albedo, f0,
-            metallic, roughness, vec3(0.48, 0.43, 0.38));
+            n, v, normalize(rotate_around_z(vec3(0.42, -0.34, 0.84),
+                                           preview_lighting.w)), albedo, f0,
+            metallic, roughness, vec3(0.48, 0.43, 0.38)
+                                   * preview_lighting.z);
         rgb += preview_key_light(
             n, v, normalize(vec3(-0.58, 0.46, 0.67)), albedo, f0,
-            metallic, roughness, vec3(0.14, 0.19, 0.28));
+            metallic, roughness, vec3(0.14, 0.19, 0.28)
+                                   * preview_fill.x);
     } else {
         /* Graceful no-texture fallback: energy-conserving hemispheric light. */
         float sky = clamp(n.z * 0.5 + 0.5, 0.0, 1.0);
@@ -1196,6 +1211,8 @@ def preview_shader_create_info():
     info.push_constant('FLOAT', "preview_opacity")
     info.push_constant('INT', "preview_mode")
     info.push_constant('FLOAT', "environment_ready")
+    info.push_constant('VEC4', "preview_lighting")
+    info.push_constant('VEC4', "preview_fill")
     info.push_constant('FLOAT', "resolved_stack")
     info.push_constant('VEC4', "preview_view_depth_plane")
     info.push_constant('VEC2', "preview_region_size")
@@ -1347,8 +1364,15 @@ def resident_stack_runtime_spec(stack_model, active_uid):
             image_name = model.binding_image(layer, binding)
             if (binding.mode == "SHARED" and layer.layer_type == "PAINT"
                     and image_name):
+                # Kiln bake targets predate this invariant and may already be
+                # stored in files with use_masks=True.  Their alpha is not
+                # authoritative coverage, so keep existing imported baselines
+                # visible without requiring a destructive stack migration.
+                opaque_kiln_normal = (
+                    key == "normal" and layer.label == "Kiln Baked Normal")
                 source = {"kind": "IMAGE", "image_name": image_name,
-                          "use_alpha": bool(binding.use_masks)}
+                          "use_alpha": (bool(binding.use_masks)
+                                        and not opaque_kiln_normal)}
             elif binding.mode == "COLOR":
                 value = (float(binding.color[0]) if channel.kind == "SCALAR"
                          else tuple(float(x) for x in binding.color))
@@ -1683,6 +1707,20 @@ def set_preview_mode(mode):
         return False
     s.settings["preview_mode"] = normalize_preview_mode(mode)
     return True
+
+
+def set_preview_lighting(values):
+    """Update display-only lighting for the active resident preview."""
+    s = _session
+    if s is None:
+        return False
+    changed = False
+    for key, value in values.items():
+        value = float(value)
+        if s.settings.get(key) != value:
+            s.settings[key] = value
+            changed = True
+    return changed
 
 
 def current_preview_mode():
@@ -3212,6 +3250,13 @@ def _draw_composed_preview(s):
         s.settings.get("preview_mode")))
     shader.uniform_float("environment_ready",
                          1.0 if s.environment_tex is not None else 0.0)
+    shader.uniform_float("preview_lighting", (
+        float(s.settings.get("preview_environment_exposure", 0.0)),
+        float(s.settings.get("preview_environment_rotation", 0.0)),
+        float(s.settings.get("preview_key_strength", 1.0)),
+        float(s.settings.get("preview_key_rotation", 0.0))))
+    shader.uniform_float("preview_fill", (
+        float(s.settings.get("preview_fill_strength", 1.0)), 0.0, 0.0, 0.0))
     resolved = bool(s.stack_spec and s.stack_spec.get("enabled"))
     shader.uniform_float("resolved_stack", 1.0 if resolved else 0.0)
     shader.uniform_float("preview_view_depth_plane", s.view_depth_plane)

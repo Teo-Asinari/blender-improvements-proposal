@@ -194,7 +194,9 @@ class IMPASTO_PT_main(bpy.types.Panel):
 
     def _draw_advanced_paint(self, box, layer):
         col = box.column(align=True)
-        col.prop(layer, "gpu_preview_mode", text="Live Preview")
+        row = col.row(align=True)
+        row.prop(layer, "gpu_preview_mode", text="Live Preview")
+        row.popover(panel="IMPASTO_PT_preview_lighting", text="", icon='LIGHT')
         stencil_box = col.box()
         stencil_box.prop(layer, "brush_stencil_enabled")
         controls = stencil_box.column(align=True)
@@ -503,6 +505,33 @@ class IMPASTO_PT_main(bpy.types.Panel):
                              icon='IMAGE_DATA' if image else 'ERROR')
 
 
+class IMPASTO_PT_preview_lighting(bpy.types.Panel):
+    """Compact popover; keeps five diagnostic controls out of the sidebar."""
+    bl_idname = "IMPASTO_PT_preview_lighting"
+    bl_label = "Preview Lighting"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'HEADER'
+
+    def draw(self, context):
+        obj = context.object
+        mat = obj.active_material if obj is not None else None
+        tree = engine.find_stack_for_material(mat)
+        layer = tree.impasto.active_layer() if tree is not None else None
+        if layer is None:
+            self.layout.label(text="No active Impasto layer", icon='INFO')
+            return
+        col = self.layout.column(align=True)
+        col.label(text="Environment", icon='WORLD')
+        col.prop(layer, "preview_environment_exposure", text="Exposure")
+        col.prop(layer, "preview_environment_rotation", text="Rotation")
+        col.separator()
+        col.label(text="Studio Lights", icon='LIGHT')
+        col.prop(layer, "preview_key_strength", text="Key")
+        col.prop(layer, "preview_key_rotation", text="Key Rotation")
+        col.prop(layer, "preview_fill_strength", text="Fill")
+        col.label(text="Preview only — paint data is unchanged", icon='INFO')
+
+
 class IMPASTO_MT_main(bpy.types.Menu):
     bl_idname = "IMPASTO_MT_main"
     bl_label = "Impasto"
@@ -536,6 +565,7 @@ _MENUS = ("VIEW3D_MT_object",)
 _classes = (
     IMPASTO_UL_layers,
     IMPASTO_PT_main,
+    IMPASTO_PT_preview_lighting,
     IMPASTO_MT_main,
 )
 

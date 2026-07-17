@@ -106,6 +106,8 @@ try:
         ops.IMPASTO_OT_gpu_paint._over_interface_region(operator, event)
     operator._refresh_preview_mode = lambda: \
         ops.IMPASTO_OT_gpu_paint._refresh_preview_mode(operator)
+    operator._refresh_preview_lighting = lambda: \
+        ops.IMPASTO_OT_gpu_paint._refresh_preview_lighting(operator)
     operator._refresh_stroke_settings = lambda context: \
         ops.IMPASTO_OT_gpu_paint._refresh_stroke_settings(operator, context)
     operator._request_save_boundary = lambda save_as=False: \
@@ -119,6 +121,14 @@ try:
           and gpu_engine.current_preview_mode() == 'HEIGHT_GRAYSCALE'
           and gpu_engine.session_active())
     check("preview edit queues no CPU image synchronization",
+          gpu_engine.take_pending_pixels() is None)
+
+    layer.preview_environment_exposure = 1.5
+    layer.preview_fill_strength = 2.0
+    check("live lighting edits apply without restarting session",
+          operator._refresh_preview_lighting()
+          and gpu_engine.session_active())
+    check("lighting edits queue no CPU image synchronization",
           gpu_engine.take_pending_pixels() is None)
 
     timer_event = NS(type='TIMER', value='NOTHING', mouse_x=0, mouse_y=0,

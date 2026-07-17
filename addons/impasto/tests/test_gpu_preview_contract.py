@@ -73,6 +73,19 @@ check("Lit PBR adds normal- and roughness-sensitive studio keys",
       "preview_key_light" in src
       and "distribution = a2" in src
       and "n, v, normalize(vec3" in main)
+check("Lit PBR lighting is driven by compact live preview uniforms",
+      'push_constant(\'VEC4\', "preview_lighting")' in
+      inspect.getsource(gpu_engine.preview_shader_create_info)
+      and "environment_intensity = exp2(preview_lighting.x)" in main
+      and "rotate_around_z(reflection, preview_lighting.y)" in main
+      and "preview_lighting.z" in main
+      and "preview_fill.x" in main)
+check("preview lighting updates do not rebuild or synchronize textures",
+      "set_preview_lighting" in dir(gpu_engine)
+      and "request_flush" not in
+      inspect.getsource(gpu_engine.set_preview_lighting)
+      and "environment_tex" not in
+      inspect.getsource(gpu_engine.set_preview_lighting))
 
 check("resident alpha gates the active layer exactly once",
       "active_factor * source.a" in src)
@@ -85,7 +98,7 @@ check("emission color and HDR strength remain independently resolved",
 check("subsurface preview uses Weight and Radius-times-Scale distance",
       "vec3 scatter_distance = sss_radius * sss_scale" in src
       and "sss_weight * scatter_extent" in src
-      and "sample_environment_panel(-n, 0.0)" in src)
+      and "sample_environment_panel(-environment_n, 0.0)" in src)
 check("degenerate and mirrored UVs have explicit handling",
       "abs(uv_det) > 1e-8" in src and "orientation = sign(uv_det)" in src
       and "cross(axis, geometric_n)" in src)
