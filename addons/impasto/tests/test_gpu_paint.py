@@ -36,24 +36,29 @@ for target in (0.2, 0.8):
     check("pressure opacity survives dense dab overlap at %.1f" % target,
           abs(accumulated - target) < 1e-6, repr(accumulated))
 
-effective, ring_px, percentages, multiplier = gpu_engine.sss_caliper_layout(
+effective, ring_px, percentages, too_small = gpu_engine.sss_caliper_layout(
     0.01, (1.0, 0.5, 0.25), 100.0, 2.0)
 check("SSS caliper uses Scale times RGB Radius",
       effective == (0.01, 0.005, 0.0025))
-check("SSS caliper auto-magnifies tiny distances by labelled decades",
-      ring_px == (10.0, 5.0, 2.5) and multiplier == 10.0)
+check("SSS caliper projects literal distances without magnification",
+      ring_px == (1.0, 0.5, 0.25) and not too_small)
 check("SSS caliper reports mesh-relative effective distances",
       percentages == (0.5, 0.25, 0.125))
-effective, ring_px, _percentages, multiplier = gpu_engine.sss_caliper_layout(
+effective, ring_px, _percentages, too_small = gpu_engine.sss_caliper_layout(
     0.5, (1.0, 0.2, 0.1), 100.0, 10.0)
-check("legible SSS calipers are not magnified",
-      ring_px == (50.0, 10.0, 5.0) and multiplier == 1.0)
-_effective, zoomed_px, _percentages, zoomed_multiplier = \
+check("large SSS calipers remain literal",
+      ring_px == (50.0, 10.0, 5.0) and not too_small)
+_effective, zoomed_px, _percentages, zoomed_too_small = \
     gpu_engine.sss_caliper_layout(
         0.01, (1.0, 0.5, 0.25), 25.0, 2.0)
 check("zoom changes ring pixels continuously without changing magnification",
-      zoomed_px == (2.5, 1.25, 0.625)
-      and zoomed_multiplier == 10.0)
+      zoomed_px == (0.25, 0.125, 0.0625)
+      and not zoomed_too_small)
+_effective, tiny_px, _percentages, tiny_warning = \
+    gpu_engine.sss_caliper_layout(
+        0.0001, (1.0, 0.5, 0.25), 100.0, 2.0)
+check("tiny mesh-relative SSS distances warn without scaling",
+      tiny_px == (0.01, 0.005, 0.0025) and tiny_warning)
 
 
 try:

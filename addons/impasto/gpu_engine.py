@@ -3710,26 +3710,22 @@ def _draw_brush_reticle(s):
 
 
 def sss_caliper_layout(scale, radius_rgb, pixels_per_unit, bbox_diagonal,
-                       minimum_mesh_fraction=0.05):
+                       warning_mesh_fraction=0.001):
     """Pure caliper math shared by the viewport overlay and tests.
 
-    Distances remain in Blender scene units. Magnification is derived from
-    mesh size, never screen pixels, so zoom cannot trigger decade-size jumps.
-    The label always reports the unscaled measurement.
+    Distances and projected pixels are always literal. ``too_small`` only
+    requests a warning; it never changes the displayed geometry.
     """
     scale = max(0.0, float(scale))
     effective = tuple(scale * max(0.0, float(v)) for v in radius_rgb[:3])
     largest = max(effective, default=0.0)
-    target = max(0.0, bbox_diagonal) * max(0.0, minimum_mesh_fraction)
-    multiplier = 1.0
-    while (largest > 0.0 and largest * multiplier < target
-           and multiplier < 1e6):
-        multiplier *= 10.0
-    pixels = tuple(v * max(0.0, pixels_per_unit) * multiplier
-                   for v in effective)
+    pixels = tuple(v * max(0.0, pixels_per_unit) for v in effective)
     pct = tuple((100.0 * v / bbox_diagonal) if bbox_diagonal > 0.0 else 0.0
                 for v in effective)
-    return effective, pixels, pct, multiplier
+    too_small = bool(largest > 0.0 and bbox_diagonal > 0.0
+                     and largest / bbox_diagonal
+                     < max(0.0, warning_mesh_fraction))
+    return effective, pixels, pct, too_small
 
 
 def _format_scene_length(value, scene_unit_scale=1.0):
@@ -3806,7 +3802,7 @@ def _draw_sss_caliper(s, region, rv3d):
     _world, pixels_per_unit, bbox_diagonal = surface
     scale = float(s.settings.get("sss_caliper_scale", 0.0))
     radius = tuple(s.settings.get("sss_caliper_radius", (1.0, 0.2, 0.1)))
-    effective, radii_px, percentages, multiplier = sss_caliper_layout(
+    effective, radii_px, percentages, too_small = sss_caliper_layout(
         scale, radius, pixels_per_unit, bbox_diagonal)
     if max(radii_px, default=0.0) <= 0.0:
         return
@@ -3839,9 +3835,8 @@ def _draw_sss_caliper(s, region, rv3d):
         labels,
         "Colored rings zoom with mesh; white brush ring stays screen-sized",
     ]
-    if multiplier > 1.0:
-        lines.append("Visual magnification x%d; labels are actual distances"
-                     % int(multiplier))
+    if too_small:
+        lines.append("WARNING: SSS rings are very small relative to this mesh")
     blf.size(0, 11)
     for index, line in enumerate(lines):
         blf.position(0, s.cursor[0] + 14, s.cursor[1] + 16 + index * 15, 0)

@@ -1,5 +1,11 @@
 # Impasto — multi-channel painting milestone progress
 
+## 0.9.19 — literal SSS caliper scale
+
+- Removed all automatic visual magnification from the SSS rings.
+- Rings now always use their literal projected scene-space radii; very small
+  effective distances produce a mesh-relative warning instead.
+
 ## 0.9.18 — live and self-identifying SSS caliper
 
 - The Show SSS Caliper toggle now updates during an active GPU paint session.

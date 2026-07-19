@@ -3,9 +3,11 @@
 The Subsurface controls include an optional **Show SSS Caliper** overlay for
 GPU painting. Hover the brush over the mesh to see camera-facing red, green,
 and blue rings for `Scale × Radius RGB`, plus the real distances and their
-percentages of the mesh bounding-box diagonal. Tiny distances are enlarged by
-a clearly labelled display multiplier; moving the cursor off the mesh hides
-the aid rather than presenting an invalid depth estimate.
+percentages of the mesh bounding-box diagonal. There is no display multiplier:
+every ring uses its literal projected scene size. A
+warning appears when the effective distances are extremely small relative to
+the mesh. Moving the cursor off the mesh hides the aid rather than presenting
+an invalid depth estimate.
 
 Impasto is an in-development, non-destructive PBR layer stack for Blender
 materials. Phase 1 establishes the stack data model and compiler: fill layers,
