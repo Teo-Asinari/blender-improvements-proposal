@@ -1,472 +1,185 @@
 # Impasto
 
-The Subsurface controls include an optional **Show SSS Caliper** overlay for
-GPU painting. Hover the brush over the mesh to see camera-facing red, green,
-and blue rings for `Scale × Radius RGB`, plus the real distances and their
-percentages of the mesh bounding-box diagonal. There is no display multiplier:
-every ring uses its literal projected scene size. A
-warning appears when the effective distances are extremely small relative to
-the mesh. Moving the cursor off the mesh hides the aid rather than presenting
-an invalid depth estimate.
-
-Impasto is an in-development, non-destructive PBR layer stack for Blender
-materials. Phase 1 establishes the stack data model and compiler: fill layers,
-pass-through groups, channel bindings, paint-mask graph structure, minimal node
-reconciliation, and a small 3D Viewport sidebar for creating and arranging the
-stack without working directly in the Shader Editor.
-
-> **Development status:** Phase 1 stack foundation, the Phase 3
-> native-paint workflow, and the first multi-channel painting milestone:
-> one logical Paint layer with a separate canvas per channel, painted
-> either natively (one channel at a time), by replaying one active Blender
-> brush stroke across every channel, or with the experimental GPU brush.
-> The v0.9 interface keeps the normal workflow compact: choose the paint
-> engine, set channel values, and start painting; preview, stencil, and idle
-> synchronization controls live under **Advanced**. Masks, channel isolation,
-> and bake-down/export remain later work.
-
-## Phase 1 scope
-
-The current milestone includes:
-
-- stack, layer, binding, mask, and material state stored in the generated root
-  shader node group;
-- fill layers and pass-through groups;
-- Base Color and Roughness bindings;
-- pure model-to-graph compilation with committed golden specifications;
-- minimal reconciliation that repairs drift and produces zero mutations when
-  the graph already matches;
-- two-tier debounce so uniform edits do not structurally rebuild the graph;
-- a minimal **Impasto** N-panel with stack creation, layer add/remove/reorder,
-  visibility, opacity, blend controls, and manual rebuild.
-
-The binding design and complete roadmap live in
-[`../../research/layer-stack-design.md`](../../research/layer-stack-design.md).
-
-## Install for development
-
-Impasto uses Blender's legacy add-on packaging (`bl_info`) and targets Blender
-5.1.2 during Phase 1.
-
-1. Zip the `impasto` folder itself, so the archive contains
-   `impasto/__init__.py` at its root.
-2. In Blender, choose `Edit > Preferences > Add-ons > Install from Disk...`,
-   select the zip, and enable **Impasto**.
-
-For local development, copy or symlink `addons/impasto/` into Blender's
-`scripts/addons/` directory. Do not include `tests/` or `__pycache__/` in a
-release archive.
-
-## Paint with Blender's native brush
-
-1. Select a mesh with a material that uses nodes and contains a Principled
-   BSDF.
-2. Open the 3D Viewport sidebar with `N`, then choose the **Impasto** tab.
-3. Create a new layer stack.
-4. Add a Paint layer. It creates a transparent 2048 x 2048 image using the
-   mesh's currently active UV map.
-5. Select that layer and click **Start Painting**. Impasto makes its image
-   Blender's explicit image-paint canvas, enters Texture Paint mode, selects
-   Blender 5.1's main Paint brush tool, and switches the invoking Solid
-   viewport to Material Preview.
-6. Use Blender's normal Texture Paint brushes. Strokes update the image sampled
-   by the generated Impasto layer graph, so they appear through the material.
-7. Add Fill or Group layers, bind available channels, and adjust layer order,
-   opacity, blend mode, and visibility.
-8. Use **Rebuild Stack** only to repair or explicitly regenerate the compiled
-   graph; ordinary uniform edits should not require it.
-
-Selecting another Paint layer switches the canvas but does not force a mode
-change. The explicit button is the safe way to enter Texture Paint. If a layer's
-stored UV map or image was deleted, activation stops and reports what is missing
-instead of allowing Blender to paint into a different target.
-
-### Kiln normal-bake interoperability
-
-When Kiln bakes onto a material that already has an Impasto stack, the baked
-image is inserted as a **Kiln Baked Normal** Paint layer at the bottom of the
-stack. Existing layers and the active paint layer are preserved, and Impasto
-remains the sole owner of the Principled BSDF Normal input.
-
-For a file made with an older version, select the object and click **Import /
-Repair Kiln Normal** in the Impasto panel. The button reuses the image in the
-material's **Kiln Bake Target** node, so no rebake is required. Repeating the
-repair updates the same baseline layer rather than creating duplicates.
-
-### One layer, one canvas per channel
-
-A Paint layer is one logical layer whose bindings each own a dedicated
-image (`binding.image_name`), created with the correct colorspace: color
-channels sRGB, scalars and tangent normals Non-Color, Height seeded at
-opaque neutral mid-gray. Adding a channel to a Paint layer (the `+`
-rows in the Channels list, or **Add Channel Paint Layer** for a fresh
-single-channel layer) creates that channel's canvas at the layer's
-existing resolution, so all canvases of one layer stay equal-sized.
-
-Blender's native brush still edits exactly one image at a time: each
-painted channel row shows a brush button that makes that channel's
-canvas the native paint target, and **Start Painting** picks the
-layer's first painted channel. One native stroke lands in one channel —
-that is the deliberate single-channel editing path.
-
-The initial template is not permanent. Use **Add Material Channel** to expand
-an existing Standard stack, either registering a channel globally or also
-binding it to the selected Paint/Fill layer. Adding Emission Color/Strength or
-Subsurface Weight/Radius/Scale to a Paint layer creates only the missing
-dedicated canvases, at the layer's existing resolution and with the correct
-sRGB/Non-Color storage. Repeating an add is safe and creates no duplicate image
-or binding. Existing canvas identity and pixels are preserved. Subsurface IOR
-and Anisotropy may be registered for material control, but are intentionally
-not paint-canvas channels.
-
-**Blender Brush → N Channels** is the native multi-channel path. Impasto
-records region position, pressure, size, tilt, and timing, then invokes
-Blender's own `paint.image_paint` stroke once for each enabled channel at
-pen-up. The active Brush asset, its texture/falloff/spacing behavior, and the
-workspace tool are not replaced. Impasto temporarily substitutes Base Color,
-Metallic, Roughness, Normal, or signed Height values, then restores the user's
-canvas, brush colors, blend mode, and image-paint mode even on failure.
-
-Draw-style Blender brushes are the supported baseline. Stroke-driven
-Soften/Smear brushes use the same replay mechanism, but Clone, Fill, gradients,
-and other tools with extra source/state requirements still need interactive
-qualification. A replay appears after pen-up rather than while the pointer is
-moving, because Blender's Python paint API accepts a completed stroke and one
-canvas per invocation.
-
-Files saved by earlier Impasto versions stored a single canvas on the
-layer; they keep working unchanged, and opening them migrates the
-stored state to per-channel form automatically (schema 1 to 2, no
-images are created or altered).
-
-### GPU multi-channel painting (experimental)
-
-#### Resident material preview
-
-Lit PBR uses a compact image-based studio environment with roughness-aware
-reflections, metallic Fresnel/energy response, and display tone mapping. For
-the common same-UV setup where the active Paint layer is topmost, it also
-composes eligible lower Fill/Paint layers into a baseline entirely on the GPU.
-Ordinary painting therefore remains resident and performs no routine GPU-to-CPU
-image synchronization.
-
-The preview uses the mesh's Blender corner normals rather than flat
-per-triangle shading, and its own front-surface depth rejects rear geometry so
-back faces do not show through the overlay. Open the light-icon popover beside
-**Live Preview** to adjust environment exposure/rotation, key strength/rotation,
-and fill strength without leaving the resident painting session. These are
-display-only controls; they do not alter the material or painted images.
-
-Enabled stencils now have a live GPU-resident placement preview. **Viewport
-Stencil** draws a translucent camera-facing image and boundary using its exact
-position, scale, and rotation; **Brush Alpha** previews the transformed image
-at the cursor footprint. No preview readback or image synchronization occurs.
-
-#### Preview-only Base Normal Map fallback
-
-When an existing material normal cannot be represented by the restricted
-resident stack, choose an explicit **Base Normal Map** for GPU preview. The
-fallback samples the selected image with its selected UV map, applies an
-adjustable normal strength, and can invert the green channel for opposite-Y
-normal-map conventions. Strength zero is flat; strength one preserves the
-decoded map direction.
-
-This is deliberately **preview-only**. It affects Lit PBR, Raw Tangent Normal,
-and Neutral Normal Lighting while the resident GPU session is active. It does
-not modify Blender nodes, the Impasto layer stack, source images, saved paint,
-Kiln bakes, or export/render output. A missing image or invalid UV safely falls
-back to a flat normal. Use **Inspect Blender Material** for authoritative
-material evaluation.
-
-Lower tangent-normal images are planned before the first preview draw, and
-Kiln bakes whose alpha is zero or non-authoritative are uploaded without losing
-their Non-Color RGB whether Kiln is the baseline or selected canvas. This does
-**not** provide true layered-normal composition: an opaque upper normal canvas
-still replaces lower normal layers under encoded-RGB MIX semantics. RNM/UDN
-composition is required for two opaque normal maps to combine as detail.
-**Raw Tangent Normal** remains the quickest diagnostic because it shows the
-resolved encoded texture before lighting.
-
-Stacks with participating layers above the active layer, image masks, or mixed
-UV layouts explicitly fall back to the active-layer preview; the viewport text
-states the fallback instead of implying complete-stack parity. Exact Blender
-studio-light/HDRI pixels are unavailable through the public GPU API, so the
-result is intended to be convincing rather than pixel-identical Material
-Preview. Use explicit inspection only when authoritative Blender evaluation is
-required.
-
-**GPU Paint All Channels** (layer panel, Object menu, or F3) rasterizes
-each brush dab once into every bound channel simultaneously — Base
-Color, Metallic, Roughness, Tangent Normal, and Height — using the
-layer's Multi-Channel Brush values. Material channels alpha-blend;
-Height is a separate additive pass driven by the same stroke, so
-**Raise/Lower** accumulate relief around the neutral mid-gray canvas
-exactly like the native Height brush. Left mouse paints, right mouse or
-Esc flushes the resident canvases and stops. Pen-up is GPU-only: it performs
-no readback and no full-image `Image.pixels` writes. The viewport draws a live
-PBR approximation composed directly from the resident Base Color, Metallic,
-Roughness, Tangent Normal, and Height textures. Blender's material becomes
-authoritative again after **Flush GPU Paint to Images** or session exit. A
-screen-space reticle uses the same Radius value as the GPU dabs.
-GPU projection rejects hidden fragments using a front-surface prepass stored
-as linear view-space depth. Native multi-channel replay temporarily enables
-Blender's Occlude and Backface Culling options, then restores their prior
-values.
-The panel lists the exact target channels and includes their count in the
-button label. Multi-channel painting operates on bindings of the **selected
-Paint layer**; use the `+` channel rows on that same layer to add simultaneous
-targets. Separate Paint layers are intentionally separate strokes.
-
-Tablet pressure is sanitized and interpolated between generated dabs, while
-spacing follows the pressure-adjusted brush radius. This keeps quick pen
-strokes continuous instead of producing visibly separated stamps. The
-explicit **Pressure: Opacity** and **Pressure: Size** toggles are authoritative
-for the GPU brush and can be changed between strokes. Pressure opacity is
-spacing-compensated so overlapping dabs retain a visibly graded stroke-level
-response instead of rapidly accumulating to full opacity.
-
-The **Live Preview** selector can be changed while the GPU session remains
-active: **Lit PBR** shows the composed material approximation, **Raw Tangent
-Normal** displays encoded normal RGB, **Neutral Normal Lighting** isolates
-normal and Height relief on a neutral surface, and **Height Grayscale** shows
-the Height field directly. These are display modes only and never modify the
-painted images. Sidebar color, Metallic, Roughness, normal, Height, Radius, and
-Hardness controls are also editable between strokes; the next stroke uses the
-new values without a flush, readback, or loss of GPU undo history. Clicks
-outside the painting region pass through to Blender's UI. Because overlapping
-N-panel event routing varies by Blender layout, press **P** for the guaranteed
-editing path: dab capture pauses while the GPU session remains resident, every
-mouse event passes to Blender's controls, and **P** resumes painting. Resume
-before using RMB/Esc to flush and finish the session.
-
-**Stroke Opacity** multiplies the coverage deposited by each GPU dab across all
-enabled channels (including pressure/brush-strength response). **Layer Opacity**
-is separate and non-destructive: it controls the selected layer's contribution
-to every compiled material channel after painting.
-
-**Idle Material Sync** is disabled by default so routine painting remains
-GPU-resident and pays no image readback between strokes. If explicitly enabled,
-Impasto waits for an adjustable idle interval after pen-up, synchronizes the
-dirty resident region into the channel Images, and hands the viewport to
-Blender's authoritative material. The next canvas press restores the GPU
-overlay. This option deliberately trades latency for automatic inspection.
-
-**V** remains a manual inspection override using the same transition. Neither
-automatic nor manual inspection ends the operator or discards resident textures
-or GPU undo history. The synchronization cost itself remains unavoidable
-because Blender's material cannot sample Impasto-owned resident textures
-directly.
-
-Use **Flush for Save / Export** before menu-driven saves or exporters. While
-the GPU modal is active, **Ctrl-S** and **Ctrl-Shift-S** are safer shortcuts:
-Impasto flushes resident changes first and invokes Save/Save As only after the
-Blender Images are current. **RMB/Esc** likewise flushes before normal exit.
-
-The Metallic and Roughness controls in **Multi-Channel Brush** are stroke
-values: they are written as grayscale into those channel images. The
-**Influence** control beside each channel image is separate; it controls how
-strongly that image layer is composited and therefore appears as a Mix factor
-inside Impasto's generated node group. New images start transparent (visually
-blank) so an untouched Paint layer has no material effect.
-
-### Cross-channel image stencil, brush alpha, and normal profiles
-
-Enable **Image Stencil** in the GPU Brush section and choose a Blender Image.
-**Planar Viewport** fixes a numerically positioned/scaled/rotated image in the
-viewport; **Brush Footprint** maps it onto every dab. **Alpha Channel** or
-**Grayscale** chooses which image data is read. **Paint Coverage** applies it
-as one mask shared by every enabled channel, preserving GPU-resident feedback
-and atomic undo. With **Normal Relief**, grayscale intensity is
-treated as relief: local gradients generate tangent-space normal detail, with
-adjustable strength and inversion. This affects the Normal target only; linked
-Height deposition is not yet implemented. [STENCIL_WORKFLOW.md](STENCIL_WORKFLOW.md)
-specifies the transforms and profile contract.
-
-The growing per-dab shader state is packed into a vec4-aligned uniform buffer
-(UBO), avoiding the portable push-constant size limit. This is an internal
-capacity/compatibility improvement; it does not change the painting workflow.
-
-Notes and current limits:
-
-- Base Color brush values are sRGB-encoded on deposit so the painted
-  swatch renders as picked; blending still happens in stored space, not
-  scene-linear composited space.
-- GPU strokes use an Impasto-owned, memory-bounded tile history. Ctrl-Z and
-  Ctrl-Shift-Z restore every channel of one stroke atomically without CPU
-  readback. Stop the session before undoing ordinary Blender stack operations.
-- Supported Blender Draw brushes contribute their effective unified/local
-  size, spacing, strength, and size/strength pressure behavior to GPU stamps.
-  Clone, Smear, Soften, Fill, Gradient, and Mask remain explicit compatibility
-  fallbacks. Impasto Image Stencil/Brush Alpha images are integrated, but
-  automatic import of a Blender brush asset's texture and arbitrary custom
-  falloff-curve sampling are not yet integrated.
-- One native multi-channel replay invokes Blender image paint once per canvas.
-  Blender 5.1 exposes no Python undo-group API, so those channel operations
-  currently occupy separate native paint-undo entries rather than one Ctrl-Z.
-- Occlusion is depth-prepass based; a stroke uses the view it was
-  painted in. Orbiting between strokes is fine.
-- If the GPU session fails on a backend/driver, Impasto reports once
-  and native painting is unaffected.
-- Saving/exporting while a GPU session is active is not yet an automatic flush
-  boundary. Use **Flush GPU Paint to Images**, or RMB/Esc to finish, first.
-
-**Resolution tradeoff:** new canvases default to 2048 x 2048. The
-layer-creation operator offers 1K/2K/4K per layer. Painting no longer pays the
-resolution-dependent full-image synchronization cost at each pen lift; an
-explicit/session-exit flush still does. At 4K that flush may take hundreds of
-milliseconds, but it is amortized across the complete resident session.
-
-### Normal and height painting
-
-**Tangent Normal (RGB)** bindings treat the paint image as an absolute
-tangent-space normal map. Images
-are stored as **Non-Color**, conventional encoded RGB `(0.5, 0.5, 1.0)` is a
-flat normal, and the compiled shader decodes the blended image through Blender's
-Normal Map node. Create a dedicated Tangent Normal channel Paint layer, activate
-it, and paint/import encoded tangent-normal colors.
-Blender's ordinary color brush does not generate sculpt-like normals from brush
-pressure; it deposits the encoded RGB direction you choose. Repeating the same
-stroke therefore does not accumulate additional relief. Use a Height Detail
-layer for brush-built relief, and reserve Tangent Normal for painting/importing
-encoded normal directions.
-
-**Height Detail** is a grayscale derivative field centered on neutral mid-gray.
-The **Raise** and **Lower** buttons configure Blender's native brush to ADD or
-SUBTRACT white, so repeated strokes accumulate above or below 0.5. Constant
-black, gray, or white regions are all geometrically flat; visible bump comes
-from spatial gradients and stroke falloff, not the absolute shade. The result
-feeds Blender's Bump node. When Normal and Height are both present, the decoded
-tangent normal feeds the Bump node's Normal input, and the combined result drives
-Principled. Multiple Normal layers currently use an approximate MIX of encoded
-normal colors before decoding. An opaque upper canvas therefore replaces the
-lower normal rather than adding its detail. Implementing RNM/UDN vector
-composition is an open correctness item, separate from the fixed preview
-wiring and alpha-upload bugs.
-Native brush undo is Blender's normal paint undo and stack operators use normal
-operator undo.
-
-### GUI acceptance checklist
-
-Headless tests verify target setup and graph wiring, but cannot synthesize a
-real viewport brush stroke. Before packaging a release, verify interactively:
-
-- create a stack on a UV-unwrapped mesh and add two Paint layers;
-- click **Start Painting**, paint a visible stroke in Material Preview,
-  and confirm it appears in the Impasto material;
-- select the other layer, confirm its image becomes the canvas, and paint a
-  visually distinct stroke without changing the first image;
-- undo and redo each native stroke, then undo a stack operation, confirming the
-  two Blender undo paths interleave normally;
-- save, reopen, select the paint layer, and confirm activation restores its
-  saved image and UV target;
-- delete or rename the stored UV map and confirm activation reports the missing
-  UV rather than painting elsewhere;
-- add Roughness and Height to a Base Color Paint layer, start **GPU Paint
-  All Channels**, and confirm one stroke changes color, roughness, and
-  relief together in Material Preview after pen lift;
-- use **Blender Brush → 3 Channels** with a textured/falloff Brush asset,
-  confirm all three images receive the same footprint with their respective
-  PBR values, and confirm the original canvas, brush color, and blend return;
-- confirm Raise strokes accumulate upward relief and Lower strokes recess
-  it, and that repeated strokes deepen the effect;
-- paint the front of a sphere with the GPU brush and confirm the back
-  stays clean (occlusion), confirm the radius reticle follows the pointer and
-  the composed material remains visible, then stop with RMB/Esc and confirm the
-  Image editor shows each channel's synced canvas;
-- confirm native per-channel brush buttons still edit exactly one
-  canvas each after a GPU session ends.
-
-Impasto owns its generated root and per-layer node groups. Treat those graphs
-as build artifacts: edit the stack through Impasto rather than manually
-rewiring generated nodes.
-
-## Roadmap additions
-
-- **Implemented — subsurface painting:** native and GPU multi-channel painting
-  support Principled Weight, Radius RGB, and Scale with Non-Color canvases,
-  factor/vector/distance semantics, registry defaults, atomic undo, and a live
-  scatter approximation. IOR and Anisotropy remain Fill/compiler controls.
-- **Implemented — emission / luminosity painting:** Emission Color and
-  Emission Strength paint together or independently. Color uses an sRGB canvas;
-  HDR strength remains a separate unclipped Non-Color scalar and is tone-mapped
-  only for the resident display. See `EMISSION_SUBSURFACE_PAINT.md`.
-- **Cross-channel image stencils and texture application:** v1 supplies a
-  shared Alpha/Luminance mask in Viewport Stencil and Brush Alpha projection,
-  with position, X/Y scale, rotation, and opacity. Deferred work includes
-  direct manipulation, tiling/UV projection, and color-value application.
-- **Implemented — alpha-profile normal painting:** a brush alpha/luminance
-  image can act as a relief profile; local gradients generate tangent-space
-  normal detail with adjustable strength and inversion. Optional linked Height
-  deposition remains deferred because it needs separate additive semantics.
-- **Material and stencil library previews:** add Substance-style spherical
-  thumbnails for multi-channel material presets, larger stencil-image previews,
-  and a recent-material palette. Each swatch should persist its channel values
-  and show them in a tooltip alongside the rendered sphere. This requires a
-  preset/asset model and cached preview renderer, so it remains separate from
-  the lightweight live viewport stencil overlay.
-- **Implemented, preview-only — Base Normal Map fallback:** explicitly bind an
-  existing tangent-normal image and UV to resident Lit/diagnostic preview, with
-  strength and green-channel inversion. This is a display aid, not stack
-  composition or material/export wiring; full arbitrary-UV normal-stack
-  composition remains future work.
-- **Implemented — post-creation channel expansion:** Standard stacks can add
-  missing Emission and paintable Subsurface channels without rebuilding the
-  stack from a larger template or replacing existing layer data. Future work
-  may add one-click bundle presets; the current grouped menu keeps each added
-  channel explicit.
-- **Automatic Kiln preview-normal discovery:** when no manual Base Normal Map
-  override is selected, discover the material's Kiln bake target and recorded
-  UV automatically. Preserve the explicit picker as the authoritative override
-  and show whether the resolved source is Automatic or Manual.
-- **GPU brush and adjustable-alpha parity:** reimplement useful equivalents of
-  Blender's painting brushes on the resident multi-channel GPU path, including
-  brush alpha/texture control. Deliver this in compatibility tiers: stamp-based
-  Draw variants first; textured/alpha stamps and custom falloff next;
-  framebuffer-dependent Soften/Blur, Smear, and Mask brushes after that; then
-  source/state-heavy Clone, Fill, Gradient, and specialized tools. Match the
-  useful behavior and asset semantics without depending on Blender's private
-  paint-engine implementation details.
-
-## Phase 1 acceptance gates
-
-Phase 1 is complete only when all of these pass:
-
-- pure golden and invariant tests;
-- real-Blender zero-delta second reconciliation and tamper repair;
-- save/reload and append persistence with stable UIDs, ordering, and bindings;
-- undo across stack operators and cache rebuild;
-- register, unregister, and re-register lifecycle;
-- every operator exposed in the sidebar, a menu, and F3 search with an
-  `Impasto:` label prefix;
-- slider drags produce no node-tree mutations, verified by the delta log;
-- the manual GUI responsiveness and undo-interleaving checklist in the design
-  document.
-
-## Tests
-
-Pure compiler tests live in `tests/test_model.py`. A complete Phase 1 package
-must also provide a `tests/run_tests.sh` Blender wrapper and headless lifecycle,
-reconciliation, persistence, undo, and registration tests. The wrapper must
-check explicit success sentinels because Blender can exit with status 0 after a
-Python exception.
-
-## Packaging checklist
-
-Before distributing a Phase 1 archive:
-
-- ensure `addons/impasto/__init__.py` exists and contains `bl_info`, module
-  registration, and clean unregister logic;
-- ensure the zip root is `impasto/`, not the repository root or the contents of
-  `impasto/` without their parent folder;
-- include runtime Python modules and this README;
-- exclude `tests/`, golden fixtures, `__pycache__/`, `.pyc` files, and local
-  logs;
-- confirm no `Flapjack`, `flapjack`, `PBRStack`, or `pbrstack` identifier
-  remains in runtime code, fixtures, docs, archive paths, or generated names;
-- install the built archive into a clean Blender profile and run the
-  register/re-register and smoke checks.
+Impasto 0.9.19 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
+painting. It stores material work as ordered Paint and Fill layers, compiles
+the stack into a Principled BSDF material, and provides a GPU-resident painting
+session with immediate material feedback.
+
+Impasto is under active development. The GPU workflow is the primary painting
+path. **Blender Brush Replay is an embryonic, fundamentally non-performant
+prototype and is not intended for serious work.**
+
+## Current feature set
+
+- Ordered Paint and Fill layers with visibility, opacity, blend mode, and
+  per-channel influence.
+- One image canvas per painted channel, with 1K, 2K, or 4K layer resolution.
+- Channels for Base Color, Metallic, Roughness, Tangent Normal, Height, Alpha,
+  Emission Color/Strength, and Subsurface Weight/Radius/Scale.
+- Post-creation channel expansion without replacing existing canvases.
+- GPU multi-channel strokes with tablet-pressure control for size and opacity.
+- GPU-resident per-stroke undo and deferred synchronization to Blender Images.
+- Lit PBR and diagnostic live previews.
+- Image stencils as a viewport projection or brush-following alpha.
+- Grayscale-stencil normal relief.
+- Configurable preview lighting and a preview-only Base Normal Map fallback.
+- Kiln baked-normal import/repair.
+- A literal-scale SSS Caliper during GPU painting.
+
+Subsurface IOR and Anisotropy can be registered for material control, but are
+not GPU paint-canvas channels.
+
+## Install
+
+Impasto currently targets Blender 5.1.
+
+1. Copy `addons/impasto/` into Blender's `scripts/addons/` directory, or zip
+   the `impasto` folder so `impasto/__init__.py` is at the archive root.
+2. Enable **Impasto** in Blender's Add-ons preferences.
+3. Select a UV-unwrapped mesh with a node-based material.
+4. Open `3D Viewport > N sidebar > Impasto`.
+
+## Recommended workflow
+
+1. Create an Impasto layer stack.
+2. Add or select a Paint layer.
+3. Expand **Layer Channels** and add the channels that layer should own.
+4. Under **Brush Controls**, select **GPU Multi-Channel**.
+5. Set Brush Radius, Brush Hardness, Brush Opacity, pressure behavior, and the
+   values to deposit into each painted channel.
+6. Start GPU Painting.
+7. Use LMB to paint. RMB or Esc flushes the resident canvases and exits.
+
+During a session:
+
+- `P` pauses/resumes dab capture so sidebar controls can be edited safely.
+- `V` flushes current changes and temporarily shows Blender's authoritative
+  material; use it again to resume the Impasto preview.
+- Ctrl-Z / Ctrl-Shift-Z operate Impasto's atomic multi-channel stroke history.
+- **Flush for Save / Export** synchronizes resident canvases to Blender Images.
+
+Ordinary GPU strokes remain resident at pen-up. Synchronization is explicit or
+performed when the session exits; 4K is viable, but uses substantially more
+VRAM and makes synchronization slower.
+
+## Painting engines
+
+### GPU Multi-Channel
+
+This is the intended engine. One stroke writes simultaneously to every enabled
+paint binding on the selected layer. Base Color, Emission Color, and encoded
+tangent normals use RGB values; scalar channels use grayscale values; Height
+uses signed additive deposition.
+
+The active Blender Draw brush contributes the basic stamp size, spacing,
+strength, and supported pressure behavior. Impasto does not yet reproduce the
+full behavior of every Blender brush asset. Clone, Smear, Soften, Fill,
+Gradient, Mask, arbitrary brush textures, and custom falloff parity remain
+incomplete.
+
+### Blender Brush Replay (Prototype)
+
+This path records a stroke and replays Blender image painting separately into
+each target canvas after pen-up. It is slow, visually delayed, and cannot
+provide the resident multi-channel behavior of the GPU engine. It remains only
+as a compatibility experiment and should not be treated as a production
+painting workflow.
+
+Single-channel native image painting is still available from individual
+channel rows when direct editing of one canvas is useful.
+
+## Live preview
+
+The resident preview offers:
+
+- **Lit PBR** for approximate material evaluation.
+- **Raw Tangent Normal** for encoded normal-map inspection.
+- **Neutral Normal Lighting** for isolating Normal and Height response.
+- **Height Grayscale** for inspecting the height canvas.
+
+Lit PBR uses Impasto's own configurable studio lighting. It is not Blender
+Material Preview. For common same-UV stacks with the active layer on top, it
+can include eligible lower Paint/Fill layers. Upper participating layers,
+mixed UV layouts, image masks, and other unsupported stack structures may fall
+back to an active-layer-only preview. Use **Inspect Material** when Blender's
+actual shader evaluation is required.
+
+The preview-only **Base Normal Map** picker can display an existing tangent
+normal image while painting. It does not alter the node graph, stack, render,
+export, or source image. Kiln normal data can also be imported or repaired as a
+baseline layer. Multiple opaque normal layers still use encoded-RGB mixing;
+true RNM/UDN layered-normal composition remains unimplemented.
+
+## Image stencils
+
+An Image Stencil has three independent choices:
+
+- **Placement:** fixed Viewport Stencil or brush-following footprint.
+- **Image interpretation:** Alpha Channel or Grayscale.
+- **Application:** shared Paint Coverage or Normal Relief.
+
+Normal Relief derives tangent-space normal direction from grayscale gradients;
+it does not interpret grayscale directly as normal-map RGB. See
+[STENCIL_WORKFLOW.md](STENCIL_WORKFLOW.md) for the detailed transform and
+sampling contract.
+
+## Emission and subsurface painting
+
+Emission Color and Emission Strength are independent channels. Strength is an
+unclipped HDR scalar.
+
+Principled subsurface color comes from Base Color. The paintable SSS controls
+are:
+
+- **Weight:** how much subsurface scattering contributes.
+- **Scale:** the overall scene-space travel distance.
+- **Radius RGB:** relative red, green, and blue travel distances.
+
+The optional **Show SSS Caliper** overlay is currently visible only during GPU
+painting. Its colored rings show the literal projected distances
+`Scale × Radius R/G/B`; the white circle is the screen-sized brush radius.
+There is no visual magnification. Extremely small distances produce a warning
+relative to the mesh bounding-box diagonal.
+
+## Storage and material ownership
+
+Each Paint binding owns a dedicated Blender Image at the layer's resolution.
+Display-color channels use sRGB storage; scalar, Height, and normal data use
+Non-Color storage. Older single-canvas layer data migrates to the current
+per-binding schema without replacing its images.
+
+Impasto owns its generated root and per-layer node groups. Treat those node
+graphs as build artifacts and edit the material stack through Impasto.
+Removing a stack restores displaced pre-existing Principled links where they
+were recorded.
+
+## Important limitations
+
+- The live preview is an Impasto approximation, not Blender Material Preview.
+- GPU painting currently requires UV-mapped image canvases.
+- Full arbitrary layered-normal composition is not implemented.
+- Image masks are represented in the stack model but are not a complete
+  production mask workflow.
+- Material preset spheres, stencil thumbnails, and recent-material swatches
+  remain roadmap work.
+- The SSS Caliper is tied to an active GPU paint session; a persistent pinned
+  inspection mode remains future work.
+- GPU canvases consume real VRAM. One 4K RGBA16F channel is approximately
+  128 MB before preview, depth, and undo resources.
+
+## Tests and development notes
+
+Run the Blender regression suite with:
+
+```bash
+addons/impasto/tests/run_tests.sh
+```
+
+The runner checks explicit success sentinels because Blender may exit with a
+zero status after a Python exception. Current release history, validation, and
+open work are tracked in [PROGRESS.md](PROGRESS.md). Architectural background
+is in [`../../research/layer-stack-design.md`](../../research/layer-stack-design.md).
 
 ## License
 
-GPL-2.0-or-later, consistent with Blender add-on requirements and the SPDX
-headers in the source files.
+GPL-2.0-or-later.
