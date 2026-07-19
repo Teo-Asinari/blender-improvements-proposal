@@ -11,8 +11,10 @@ stack without working directly in the Shader Editor.
 > one logical Paint layer with a separate canvas per channel, painted
 > either natively (one channel at a time), by replaying one active Blender
 > brush stroke across every channel, or with the experimental GPU brush.
-> Masks, channel isolation, and
-> bake-down/export remain later work.
+> The v0.9 interface keeps the normal workflow compact: choose the paint
+> engine, set channel values, and start painting; preview, stencil, and idle
+> synchronization controls live under **Advanced**. Masks, channel isolation,
+> and bake-down/export remain later work.
 
 ## Phase 1 scope
 
@@ -125,9 +127,21 @@ images are created or altered).
 Lit PBR uses a compact image-based studio environment with roughness-aware
 reflections, metallic Fresnel/energy response, and display tone mapping. For
 the common same-UV setup where the active Paint layer is topmost, it also
-composes lower Fill/Paint layers and a Kiln baked-normal baseline entirely on
-the GPU. Ordinary painting therefore remains resident and performs no routine
-GPU-to-CPU image synchronization.
+composes eligible lower Fill/Paint layers into a baseline entirely on the GPU.
+Ordinary painting therefore remains resident and performs no routine GPU-to-CPU
+image synchronization.
+
+The preview uses the mesh's Blender corner normals rather than flat
+per-triangle shading, and its own front-surface depth rejects rear geometry so
+back faces do not show through the overlay. Open the light-icon popover beside
+**Live Preview** to adjust environment exposure/rotation, key strength/rotation,
+and fill strength without leaving the resident painting session. These are
+display-only controls; they do not alter the material or painted images.
+
+Lower tangent-normal layers, including Kiln bakes whose alpha is zero or
+non-authoritative, are uploaded as raw Non-Color RGB and composed into the
+resident baseline. **Raw Tangent Normal** remains the quickest diagnostic: it
+shows the resolved encoded normal texture before lighting.
 
 Stacks with participating layers above the active layer, image masks, or mixed
 UV layouts explicitly fall back to the active-layer preview; the viewport text
@@ -158,6 +172,10 @@ The panel lists the exact target channels and includes their count in the
 button label. Multi-channel painting operates on bindings of the **selected
 Paint layer**; use the `+` channel rows on that same layer to add simultaneous
 targets. Separate Paint layers are intentionally separate strokes.
+
+Tablet pressure is sanitized and interpolated between generated dabs, while
+spacing follows the pressure-adjusted brush radius. This keeps quick pen
+strokes continuous instead of producing visibly separated stamps.
 
 The **Live Preview** selector can be changed while the GPU session remains
 active: **Lit PBR** shows the composed material approximation, **Raw Tangent
@@ -203,14 +221,21 @@ strongly that image layer is composited and therefore appears as a Mix factor
 inside Impasto's generated node group. New images start transparent (visually
 blank) so an untouched Paint layer has no material effect.
 
-### Cross-channel image stencil and brush alpha
+### Cross-channel image stencil, brush alpha, and normal profiles
 
 Enable **Image Stencil** in the GPU Brush section and choose a Blender Image.
 **Viewport Stencil** fixes a numerically positioned/scaled/rotated image in the
 viewport; **Brush Alpha** maps it onto every dab. Alpha or grayscale luminance
 drives one mask shared by every enabled channel, preserving GPU-resident
-feedback and atomic undo. [STENCIL_WORKFLOW.md](STENCIL_WORKFLOW.md) specifies
-the transforms and the reserved 3DCoat-style normal-profile contract.
+feedback and atomic undo. With **Normal Profile**, grayscale intensity is
+treated as relief: local gradients generate tangent-space normal detail, with
+adjustable strength and inversion. This affects the Normal target only; linked
+Height deposition is not yet implemented. [STENCIL_WORKFLOW.md](STENCIL_WORKFLOW.md)
+specifies the transforms and profile contract.
+
+The growing per-dab shader state is packed into a vec4-aligned uniform buffer
+(UBO), avoiding the portable push-constant size limit. This is an internal
+capacity/compatibility improvement; it does not change the painting workflow.
 
 Notes and current limits:
 
@@ -319,12 +344,10 @@ rewiring generated nodes.
   shared Alpha/Luminance mask in Viewport Stencil and Brush Alpha projection,
   with position, X/Y scale, rotation, and opacity. Deferred work includes
   direct manipulation, tiling/UV projection, and color-value application.
-- **Alpha-profile normal painting:** allow a brush alpha/luminance image to act
-  as a relief profile, not only an opacity mask. Its local gradients should
-  generate tangent-space normal detail with adjustable depth/strength and
-  inversion, while preserving the same registered footprint used by the other
-  painted channels. Repeated-stroke and blend semantics must be defined
-  separately from ordinary encoded-normal color deposition.
+- **Implemented — alpha-profile normal painting:** a brush alpha/luminance
+  image can act as a relief profile; local gradients generate tangent-space
+  normal detail with adjustable strength and inversion. Optional linked Height
+  deposition remains deferred because it needs separate additive semantics.
 - **GPU brush and adjustable-alpha parity:** reimplement useful equivalents of
   Blender's painting brushes on the resident multi-channel GPU path, including
   brush alpha/texture control. Deliver this in compatibility tiers: stamp-based

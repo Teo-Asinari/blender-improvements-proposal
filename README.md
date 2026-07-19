@@ -43,7 +43,7 @@ default `0.1 m` voxel size from triggering a prohibitively expensive operation
 without review. A viewport guide draws grid slices and voxel-sized samples at
 all eight bounding-box corners so scale can be judged visually.
 
-### [Impasto](addons/impasto/) — v0.8.0 (active development)
+### [Impasto](addons/impasto/) — v0.9.4 (active development)
 
 A non-destructive Principled-PBR layer stack with Fill, Paint, and pass-through
 Group layers. One logical Paint layer can own separate Base Color, Metallic,
@@ -61,18 +61,21 @@ Impasto currently offers three painting paths:
   textures GPU-resident, previews the composed PBR result while painting, and
   flushes them to Blender images explicitly or on session exit.
 
-The GPU path includes a brush-sized reticle, front-surface depth rejection to
-prevent painting through the mesh, per-stroke multi-channel GPU undo/redo, live
-channel-value changes between strokes, an image-based PBR preview, and a shared
-image stencil or per-dab brush alpha across every painted channel. In the
-common same-UV/topmost-active-layer case, it includes lower Fill/Paint layers
-and Kiln's
-baked normal without routine synchronization. It remains a perceptual
-approximation rather than Blender's exact Material Preview HDRI. Mixed UVs,
-image masks, participating upper layers, channel isolation, bake-down/export,
-arbitrary Blender brush textures, and specialized brush tools remain future
-work. Ctrl-S safely flushes before saving; menu-driven save/export should be
-preceded by **Flush for Save / Export**.
+The streamlined GPU workflow includes a brush-sized reticle, front-surface
+depth rejection for both painting and preview, per-stroke multi-channel GPU
+undo/redo, continuous pressure-aware tablet strokes, and a Lit PBR preview with
+adjustable environment, key, and fill lighting. It uses Blender corner normals
+for smooth shading and makes roughness, metallic, tangent-normal, and Height
+changes visible without routine synchronization. A shared image stencil can
+act as a viewport stencil, per-dab alpha, or grayscale normal profile. In the
+common same-UV/topmost-active-layer case, lower Fill/Paint layers—including
+alpha-zero Kiln tangent-normal bakes—are composed as a resident baseline. The
+preview remains a perceptual approximation rather than Blender's exact
+Material Preview HDRI.
+Mixed UVs, image masks, participating upper layers, channel isolation,
+bake-down/export, arbitrary Blender brush textures, and specialized brush tools
+remain future work. Ctrl-S safely flushes before saving; menu-driven
+save/export should be preceded by **Flush for Save / Export**.
 
 ## Documents
 

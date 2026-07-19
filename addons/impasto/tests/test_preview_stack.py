@@ -146,6 +146,12 @@ check("active Base decodes once while baseline stays scene-linear",
 draw_src = __import__("inspect").getsource(gpu_engine._draw_composed_preview)
 check("resolved channels remain enabled without active paint targets",
       '1.0 if resolved or active else 0.0' in draw_src)
+baseline_build_src = __import__("inspect").getsource(
+    gpu_engine._build_stack_baselines)
+check("opaque lower images preserve raw RGB despite bake alpha",
+      'image.pixels.foreach_get(pixels)' in baseline_build_src
+      and 'pixels.reshape(-1, 4)[:, 3] = 1.0' in baseline_build_src
+      and 'if source.get("use_alpha")' in baseline_build_src)
 
 # Verify every affine formula and collapse against direct sequential blending.
 steps = ((0.3, 0.25, "MIX"), (0.8, 0.5, "MULTIPLY"),
@@ -203,6 +209,41 @@ expected_normal = preview_stack.blend_value(
 check("resident normal layers over Kiln baked baseline",
       all(abs(a - b) < 1e-12 for a, b in
           zip(got_normal, expected_normal)), repr(got_normal))
+
+# A newly active top normal canvas is transparent away from its strokes.  In
+# those pixels Raw Tangent Normal, Neutral Normal Lighting, and Lit PBR must
+# all receive the lower/Kiln result rather than the active canvas's neutral
+# RGB.  The three modes branch only after the common normal_sample resolve.
+transparent_active = {"active": {
+    "normal": preview_stack.PixelSample((0.5, 0.5, 1.0, 1.0), 0.0),
+}}
+lower_only_normal = preview_stack.compose_channel_pixel(
+    kiln_only, "normal", normal_samples, transparent_active)
+check("transparent active normal preserves Kiln normal for every preview",
+      all(abs(a - b) < 1e-12 for a, b in zip(
+          lower_only_normal, normal_samples["Kiln Normal"].value)),
+      repr(lower_only_normal))
+
+opaque_active = {"active": {
+    "normal": preview_stack.PixelSample((0.8, 0.5, 1.0, 1.0), 1.0),
+}}
+top_only_normal = preview_stack.compose_channel_pixel(
+    kiln_only, "normal", normal_samples, opaque_active)
+check("opaque active normal remains authoritative over Kiln normal",
+      all(abs(a - b) < 1e-12 for a, b in zip(
+          top_only_normal, opaque_active["active"]["normal"].value)),
+      repr(top_only_normal))
+
+normal_resolve_at = preview_src.index("vec4 normal_sample = resolve_stack_channel")
+raw_at = preview_src.index("if (preview_mode == 1)")
+decode_at = preview_src.index("if (has_normal > 0.5)")
+neutral_at = preview_src.index("if (preview_mode == 2)")
+pbr_at = preview_src.index("vec3 v = normalize(camera_position - worldPos)")
+check("Raw, Neutral, and Lit all consume the same resolved normal stack",
+      normal_resolve_at < raw_at < decode_at < neutral_at < pbr_at
+      and "vec3 encoded = normal_sample.rgb" in preview_src[raw_at:decode_at]
+      and "vec3 encoded_n = normal_sample.rgb" in
+          preview_src[decode_at:neutral_at])
 
 # Inverted mask and use_masks=False follow compiler factor semantics.
 inverted = model.MaskModel(uid="inv", image_name="Inv", opacity=0.5,

@@ -2404,7 +2404,27 @@ def _build_stack_baselines(s):
                     if image is None:
                         raise RuntimeError("missing lower image %r" %
                                            source["image_name"])
-                    source_tex = gpu.texture.from_image(image)
+                    if source.get("use_alpha"):
+                        source_tex = gpu.texture.from_image(image)
+                    else:
+                        # Opaque channel images (notably Kiln normal bakes)
+                        # may carry zero/non-authoritative alpha. Blender's
+                        # cached image texture can premultiply that alpha,
+                        # destroying RGB before the compositor gets a chance
+                        # to ignore it. Upload raw pixels and establish opaque
+                        # alpha at this boundary instead.
+                        import numpy as np
+                        width, height = (int(image.size[0]),
+                                         int(image.size[1]))
+                        pixels = np.empty(width * height * 4,
+                                          dtype=np.float32)
+                        image.pixels.foreach_get(pixels)
+                        pixels.reshape(-1, 4)[:, 3] = 1.0
+                        buffer = gpu.types.Buffer(
+                            'FLOAT', (height, width, 4),
+                            pixels.reshape(height, width, 4))
+                        source_tex = gpu.types.GPUTexture(
+                            (width, height), format='RGBA16F', data=buffer)
                     s.baseline_gpu_refs.append(source_tex)
                 fb = gpu.types.GPUFrameBuffer(color_slots=(target,))
                 with fb.bind():

@@ -4,6 +4,14 @@ Current consolidated handoff: [`SESSION_2026-07-13.md`](SESSION_2026-07-13.md).
 It records the shipped GPU-resident architecture, validation, known limits,
 new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 
+## 0.9.4 — reliable lower normal baselines
+
+- Opaque lower-channel images now upload from raw Blender pixels with forced
+  alpha, preventing alpha-zero Kiln bakes from losing their tangent-normal RGB
+  before resident baseline composition.
+- Expanded resident normal-stack regression coverage and refreshed the global
+  and add-on READMEs for the 0.9.x painting and preview improvements.
+
 ## 0.9.3 — configurable preview lighting and Kiln normals
 
 - Added live preview-only environment exposure/rotation, key strength/rotation,
