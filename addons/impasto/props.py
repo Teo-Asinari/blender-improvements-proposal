@@ -210,6 +210,12 @@ class ImpastoLayer(bpy.types.PropertyGroup):
                     "scene units; unlike Weight, this controls depth",
         default=0.05, min=0.0, soft_max=1.0,
         subtype='DISTANCE', unit='LENGTH')
+    show_sss_caliper: BoolProperty(
+        name="Show SSS Caliper",
+        description="Show camera-facing RGB rings at the brush cursor for "
+                    "Subsurface Scale multiplied by Radius; tiny distances "
+                    "are magnified and labelled",
+        default=False)
     brush_radius: FloatProperty(
         name="Brush Radius", default=50.0, min=1.0, soft_max=500.0,
         subtype='PIXEL')

@@ -36,6 +36,19 @@ for target in (0.2, 0.8):
     check("pressure opacity survives dense dab overlap at %.1f" % target,
           abs(accumulated - target) < 1e-6, repr(accumulated))
 
+effective, ring_px, percentages, multiplier = gpu_engine.sss_caliper_layout(
+    0.01, (1.0, 0.5, 0.25), 100.0, 2.0)
+check("SSS caliper uses Scale times RGB Radius",
+      effective == (0.01, 0.005, 0.0025))
+check("SSS caliper auto-magnifies tiny distances by labelled decades",
+      ring_px == (100.0, 50.0, 25.0) and multiplier == 100.0)
+check("SSS caliper reports mesh-relative effective distances",
+      percentages == (0.5, 0.25, 0.125))
+effective, ring_px, _percentages, multiplier = gpu_engine.sss_caliper_layout(
+    0.5, (1.0, 0.2, 0.1), 100.0, 10.0)
+check("legible SSS calipers are not magnified",
+      ring_px == (50.0, 10.0, 5.0) and multiplier == 1.0)
+
 
 try:
     impasto.register()

@@ -815,6 +815,16 @@ def gpu_preview_lighting(layer):
     }
 
 
+def gpu_sss_caliper(layer, scene):
+    """Plain runtime settings for the GPU paint cursor overlay."""
+    return {
+        "sss_caliper_enabled": bool(layer.show_sss_caliper),
+        "sss_caliper_scale": float(layer.paint_sss_scale),
+        "sss_caliper_radius": tuple(layer.paint_sss_radius),
+        "scene_unit_scale": float(scene.unit_settings.scale_length or 1.0),
+    }
+
+
 def gpu_preview_base_normal(layer):
     """Persistent display-only base-normal settings for the live preview."""
     image = getattr(layer, "preview_base_normal_image", None)
@@ -1174,6 +1184,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
                 and "normal" in keys else ()),
         }
         settings.update(gpu_preview_lighting(layer))
+        settings.update(gpu_sss_caliper(layer, context.scene))
         settings.update(gpu_preview_base_normal(layer))
         settings.update(gpu_stencil_settings(layer).as_gpu_settings())
         if not gpu_engine.start_session(obj, images, region,
@@ -1258,7 +1269,8 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             payloads, radius=self._radius,
             hardness=layer.brush_hardness, opacity=layer.brush_opacity,
             stamp=supported_stamp,
-            stencil_settings=gpu_stencil_settings(layer).as_gpu_settings())
+            stencil_settings=gpu_stencil_settings(layer).as_gpu_settings(),
+            caliper_settings=gpu_sss_caliper(layer, context.scene))
 
     def _refresh_preview_mode(self):
         """Apply a sidebar preview change without restarting the session."""

@@ -1,5 +1,17 @@
 # Impasto — multi-channel painting milestone progress
 
+## 0.9.17 — subsurface caliper
+
+- Optional cursor-centred RGB rings visualize effective Subsurface distances
+  (`Scale × Radius RGB`) during GPU painting.
+- Ring projection uses the actual mesh ray hit under the cursor, so scene
+  distance is converted at the correct view depth rather than confused with
+  brush pixels. Off-mesh cursors intentionally show no caliper.
+- The readout includes compact scene-unit values, percentages of the world
+  bounding-box diagonal, and a labelled power-of-ten magnifier for distances
+  too small to see directly.
+- Immutable ring geometry and its shader are cached for the paint session.
+
 Current consolidated handoff: [`SESSION_2026-07-13.md`](SESSION_2026-07-13.md).
 It records the shipped GPU-resident architecture, validation, known limits,
 new brush/channel/stencil roadmap, and add-on-versus-core conclusions.

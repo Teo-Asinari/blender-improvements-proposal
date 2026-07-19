@@ -1684,6 +1684,8 @@ class _Session:
         self.preview_submit_count = 0
         self.gpu_ready = False
         self.probe_lines = None
+        self.overlay_circle_batch = None
+        self.overlay_color_shader = None
 
         # Prepass cache: key of the view state the prepass was rendered
         # for, plus the matrices captured at that moment (the dab shader
@@ -2158,7 +2160,8 @@ def cursor_position():
 
 
 def update_stroke_settings(payloads, radius=None, hardness=None, opacity=None,
-                           stamp=None, stencil_settings=None):
+                           stamp=None, stencil_settings=None,
+                           caliper_settings=None):
     """Refresh values sampled at the next pen-down without restarting.
 
     The target images and channel order are fixed for a session, but brush
@@ -2181,6 +2184,8 @@ def update_stroke_settings(payloads, radius=None, hardness=None, opacity=None,
     s.settings["brush_stamp"] = stamp
     if stencil_settings is not None:
         s.settings.update(dict(stencil_settings))
+    if caliper_settings is not None:
+        s.settings.update(dict(caliper_settings))
     return True
 
 
@@ -2346,6 +2351,7 @@ def _draw_pixel():
     try:
         _draw_stencil_preview(s, region)
         _draw_brush_reticle(s)
+        _draw_sss_caliper(s, region, bpy.context.region_data)
         _draw_stats_overlay(s)
     except Exception:
         # Text overlay must never take the viewport down; latch quietly.
@@ -3688,6 +3694,140 @@ def _draw_brush_reticle(s):
         batch.draw(shader)
     finally:
         gpu.state.blend_set(prior_blend)
+
+
+def sss_caliper_layout(scale, radius_rgb, pixels_per_unit, bbox_diagonal,
+                       minimum_pixels=18.0):
+    """Pure caliper math shared by the viewport overlay and tests.
+
+    Distances remain in Blender scene units.  A decade multiplier is used
+    only for display when the largest effective radius would otherwise be
+    too small to read; the label always reports the unscaled measurement.
+    """
+    scale = max(0.0, float(scale))
+    effective = tuple(scale * max(0.0, float(v)) for v in radius_rgb[:3])
+    largest_px = max(effective, default=0.0) * max(0.0, pixels_per_unit)
+    multiplier = 1.0
+    while (largest_px > 0.0 and largest_px * multiplier < minimum_pixels
+           and multiplier < 1e6):
+        multiplier *= 10.0
+    pixels = tuple(v * max(0.0, pixels_per_unit) * multiplier
+                   for v in effective)
+    pct = tuple((100.0 * v / bbox_diagonal) if bbox_diagonal > 0.0 else 0.0
+                for v in effective)
+    return effective, pixels, pct, multiplier
+
+
+def _format_scene_length(value, scene_unit_scale=1.0):
+    """Compact metric label for a Blender-unit distance."""
+    metres = abs(float(value)) * max(float(scene_unit_scale), 1e-12)
+    if metres >= 1.0:
+        return "%.3g m" % metres
+    if metres >= 1e-3:
+        return "%.3g mm" % (metres * 1e3)
+    if metres >= 1e-6:
+        return "%.3g um" % (metres * 1e6)
+    return "%.3g nm" % (metres * 1e9)
+
+
+def _sss_cursor_surface(s, region, rv3d):
+    """Return (world hit, pixels/world-unit, bbox diagonal), or None.
+
+    The ray hit is deliberate: a screen radius calculated at the object
+    origin is misleading on meshes with meaningful depth variation.
+    """
+    if s.cursor is None or rv3d is None:
+        return None
+    obj = bpy.data.objects.get(s.obj_name)
+    if obj is None:
+        return None
+    from bpy_extras import view3d_utils
+    from mathutils import Vector
+    coord = Vector(s.cursor)
+    origin = view3d_utils.region_2d_to_origin_3d(region, rv3d, coord)
+    direction = view3d_utils.region_2d_to_vector_3d(region, rv3d, coord)
+    inv = obj.matrix_world.inverted_safe()
+    local_origin = inv @ origin
+    local_direction = (inv.to_3x3() @ direction).normalized()
+    hit, location, _normal, _index = obj.ray_cast(local_origin,
+                                                   local_direction)
+    if not hit:
+        return None
+    world = obj.matrix_world @ location
+    camera_right = (rv3d.view_matrix.inverted().to_3x3()
+                    @ Vector((1.0, 0.0, 0.0))).normalized()
+    p0 = view3d_utils.location_3d_to_region_2d(region, rv3d, world)
+    p1 = view3d_utils.location_3d_to_region_2d(
+        region, rv3d, world + camera_right)
+    if p0 is None or p1 is None:
+        return None
+    pixels_per_unit = (p1 - p0).length
+    corners = [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
+    if not corners:
+        return None
+    xs, ys, zs = zip(*corners)
+    bbox_diagonal = Vector((max(xs) - min(xs), max(ys) - min(ys),
+                            max(zs) - min(zs))).length
+    return world, pixels_per_unit, bbox_diagonal
+
+
+def _ensure_overlay_circle(s):
+    """One immutable unit-circle batch per session, not per draw frame."""
+    if s.overlay_circle_batch is None:
+        from gpu_extras.batch import batch_for_shader
+        points = [(math.cos(i * math.tau / 96),
+                   math.sin(i * math.tau / 96)) for i in range(96)]
+        s.overlay_color_shader = gpu.shader.from_builtin('UNIFORM_COLOR')
+        s.overlay_circle_batch = batch_for_shader(
+            s.overlay_color_shader, 'LINE_LOOP', {"pos": points})
+
+
+def _draw_sss_caliper(s, region, rv3d):
+    if (not s.settings.get("sss_caliper_enabled", False)
+            or material_inspect_active() or material_inspect_requested()):
+        return
+    surface = _sss_cursor_surface(s, region, rv3d)
+    if surface is None:  # Never imply a mesh-relative measurement off-mesh.
+        return
+    _world, pixels_per_unit, bbox_diagonal = surface
+    scale = float(s.settings.get("sss_caliper_scale", 0.0))
+    radius = tuple(s.settings.get("sss_caliper_radius", (1.0, 0.2, 0.1)))
+    effective, radii_px, percentages, multiplier = sss_caliper_layout(
+        scale, radius, pixels_per_unit, bbox_diagonal)
+    if max(radii_px, default=0.0) <= 0.0:
+        return
+    _ensure_overlay_circle(s)
+    colors = ((1.0, 0.16, 0.12, 0.9), (0.2, 1.0, 0.25, 0.9),
+              (0.2, 0.45, 1.0, 0.9))
+    prior_blend = gpu.state.blend_get()
+    try:
+        gpu.state.blend_set('ALPHA')
+        for radius_px, color in zip(radii_px, colors):
+            if radius_px < 0.5:
+                continue
+            with gpu.matrix.push_pop():
+                gpu.matrix.translate((s.cursor[0], s.cursor[1], 0.0))
+                gpu.matrix.scale((radius_px, radius_px, 1.0))
+                s.overlay_color_shader.bind()
+                s.overlay_color_shader.uniform_float("color", color)
+                s.overlay_circle_batch.draw(s.overlay_color_shader)
+    finally:
+        gpu.state.blend_set(prior_blend)
+
+    import blf
+    unit_scale = float(s.settings.get("scene_unit_scale", 1.0))
+    values = "/".join(_format_scene_length(v, unit_scale)
+                      for v in effective)
+    pct = "/".join("%.2g%%" % value for value in percentages)
+    suffix = "  display x%d" % int(multiplier) if multiplier > 1.0 else ""
+    line1 = "SSS Scale %s | RGB %s%s" % (
+        _format_scene_length(scale, unit_scale), values, suffix)
+    line2 = "RGB of mesh diagonal: %s" % pct
+    blf.size(0, 11)
+    for index, line in enumerate((line1, line2)):
+        blf.position(0, s.cursor[0] + 14, s.cursor[1] + 16 + index * 15, 0)
+        blf.color(0, 1.0, 1.0, 1.0, 0.95)
+        blf.draw(0, line)
 
 
 def _overlay_text_lines(s):

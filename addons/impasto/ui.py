@@ -276,6 +276,9 @@ class IMPASTO_PT_main(bpy.types.Panel):
                 subsurface.prop(layer, "paint_sss_radius", text="Radius RGB")
             if 'sss_scale' in keys:
                 subsurface.prop(layer, "paint_sss_scale", text="Scale")
+            subsurface.prop(layer, "show_sss_caliper",
+                            text="Show SSS Caliper", toggle=True,
+                            icon='DRIVER_DISTANCE')
             subsurface.label(text="Weight = amount; Scale = travel distance",
                              icon='INFO')
             subsurface.label(text="Radius sets relative RGB travel",
@@ -467,6 +470,9 @@ class IMPASTO_PT_main(bpy.types.Panel):
                                     text="Radius RGB")
                 if 'sss_scale' in gpu_keys:
                     subsurface.prop(layer, "paint_sss_scale", text="Scale")
+                subsurface.prop(layer, "show_sss_caliper",
+                                text="Show SSS Caliper", toggle=True,
+                                icon='DRIVER_DISTANCE')
                 subsurface.label(
                     text="Weight = amount; Scale = travel distance",
                     icon='INFO')
