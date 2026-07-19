@@ -25,8 +25,12 @@ try:
     impasto.register()
     check("package registration",
           hasattr(bpy.types.ShaderNodeTree, "impasto"))
-    check("metadata", impasto.bl_info["version"] == (0, 9, 15))
-    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.9.15")
+    check("metadata", impasto.bl_info["version"] == (0, 9, 16))
+    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.9.16")
+    layer_rna = impasto.props.ImpastoLayer.bl_rna.properties
+    check("brush-wide controls have explicit names",
+          layer_rna["brush_radius"].name == "Brush Radius"
+          and layer_rna["brush_hardness"].name == "Brush Hardness")
     replay_item = impasto.props.ImpastoLayer.bl_rna.properties[
         "paint_workflow"].enum_items["BLENDER"]
     check("brush replay is explicitly marked as a prototype",

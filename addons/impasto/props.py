@@ -211,10 +211,10 @@ class ImpastoLayer(bpy.types.PropertyGroup):
         default=0.05, min=0.0, soft_max=1.0,
         subtype='DISTANCE', unit='LENGTH')
     brush_radius: FloatProperty(
-        name="Radius", default=50.0, min=1.0, soft_max=500.0,
+        name="Brush Radius", default=50.0, min=1.0, soft_max=500.0,
         subtype='PIXEL')
     brush_hardness: FloatProperty(
-        name="Hardness", default=0.5, min=0.0, max=0.999,
+        name="Brush Hardness", default=0.5, min=0.0, max=0.999,
         subtype='FACTOR')
     brush_opacity: FloatProperty(
         name="Stroke Opacity",

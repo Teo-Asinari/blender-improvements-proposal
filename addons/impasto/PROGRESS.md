@@ -4,6 +4,13 @@ Current consolidated handoff: [`SESSION_2026-07-13.md`](SESSION_2026-07-13.md).
 It records the shipped GPU-resident architecture, validation, known limits,
 new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 
+## 0.9.16 — brush-wide controls first
+
+- Brush Radius, Brush Hardness, Brush Opacity, and pressure controls now
+  precede the material values they affect.
+- A `Painted Channel Values` heading separates brush-wide behavior from Base
+  Color, Roughness, Metallic, and other channel attributes.
+
 ## 0.9.15 — clearer channel and brush-control hierarchy
 
 - Layer bindings now live in a distinct `Layer Channels` box, separate from

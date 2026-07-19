@@ -228,6 +228,22 @@ class IMPASTO_PT_main(bpy.types.Panel):
             warning.label(text="Prototype demo — fundamentally slow",
                           icon='ERROR')
             warning.label(text="Not intended for serious painting")
+
+        if layer.paint_workflow == 'GPU':
+            brush = paint.column(align=True)
+            brush.label(text="Brush Shape & Input", icon='BRUSH_DATA')
+            brush.prop(layer, "brush_radius", text="Brush Radius")
+            brush.prop(layer, "brush_hardness", text="Brush Hardness",
+                       slider=True)
+            brush.prop(layer, "brush_opacity", text="Brush Opacity",
+                       slider=True)
+            row = brush.row(align=True)
+            row.label(text="Pressure")
+            row.prop(layer, "brush_pressure_opacity", toggle=True)
+            row.prop(layer, "brush_pressure_size", toggle=True)
+
+        paint.separator()
+        paint.label(text="Painted Channel Values", icon='MATERIAL')
         values = paint.column(align=True)
         if 'base_color' in keys:
             values.prop(layer, "paint_color", text="Base Color")
@@ -264,16 +280,6 @@ class IMPASTO_PT_main(bpy.types.Panel):
                              icon='INFO')
             subsurface.label(text="Radius sets relative RGB travel",
                              icon='INFO')
-
-        if layer.paint_workflow == 'GPU':
-            row = paint.row(align=True)
-            row.prop(layer, "brush_radius")
-            row.prop(layer, "brush_hardness", slider=True)
-            paint.prop(layer, "brush_opacity", slider=True)
-            row = paint.row(align=True)
-            row.label(text="Pressure")
-            row.prop(layer, "brush_pressure_opacity", toggle=True)
-            row.prop(layer, "brush_pressure_size", toggle=True)
 
         row = paint.row()
         row.scale_y = 1.35
