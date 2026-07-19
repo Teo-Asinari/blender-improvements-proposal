@@ -423,7 +423,10 @@ class IMPASTO_PT_main(bpy.types.Panel):
                 if 'sss_scale' in gpu_keys:
                     subsurface.prop(layer, "paint_sss_scale", text="Scale")
                 subsurface.label(
-                    text="Radius is Non-Color; Scale uses scene length",
+                    text="Weight = amount; Scale = travel distance",
+                    icon='INFO')
+                subsurface.label(
+                    text="Radius sets relative RGB travel",
                     icon='INFO')
             row = box.row()
             row.scale_y = 1.25

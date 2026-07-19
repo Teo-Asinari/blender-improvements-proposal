@@ -4,6 +4,12 @@ Current consolidated handoff: [`SESSION_2026-07-13.md`](SESSION_2026-07-13.md).
 It records the shipped GPU-resident architecture, validation, known limits,
 new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 
+## 0.9.10 — clearer subsurface controls
+
+- Added hover descriptions explaining Subsurface Weight, Radius, and Scale.
+- Added concise in-panel guidance: Weight controls amount, Scale controls
+  travel distance, and Radius controls relative RGB travel.
+
 ## 0.9.9 — expand existing stacks with paint channels
 
 - Added a grouped Add Material Channel menu beside Channels. One click safely

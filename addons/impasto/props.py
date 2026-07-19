@@ -194,15 +194,20 @@ class ImpastoLayer(bpy.types.PropertyGroup):
         description="HDR luminosity written independently of emission color",
         default=0.0, min=0.0, soft_max=20.0)
     paint_sss_weight: FloatProperty(
-        name="Subsurface Weight", default=0.0, min=0.0, max=1.0,
+        name="Subsurface Weight",
+        description="How much subsurface scattering contributes; 0 disables "
+                    "the effect and 1 gives its full contribution",
+        default=0.0, min=0.0, max=1.0,
         subtype='FACTOR')
     paint_sss_radius: FloatVectorProperty(
         name="Subsurface Radius",
-        description="Non-Color per-channel scattering-radius ratios",
+        description="Relative scattering distance for red, green, and blue; "
+                    "larger values let that color travel farther",
         size=3, min=0.0, soft_max=4.0, default=(1.0, 0.2, 0.1))
     paint_sss_scale: FloatProperty(
         name="Subsurface Scale",
-        description="Scattering-distance scale in scene units",
+        description="Overall distance light travels beneath the surface in "
+                    "scene units; unlike Weight, this controls depth",
         default=0.05, min=0.0, soft_max=1.0,
         subtype='DISTANCE', unit='LENGTH')
     brush_radius: FloatProperty(
