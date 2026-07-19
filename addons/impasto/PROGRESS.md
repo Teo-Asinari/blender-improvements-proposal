@@ -4,6 +4,14 @@ Current consolidated handoff: [`SESSION_2026-07-13.md`](SESSION_2026-07-13.md).
 It records the shipped GPU-resident architecture, validation, known limits,
 new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 
+## 0.9.15 — clearer channel and brush-control hierarchy
+
+- Layer bindings now live in a distinct `Layer Channels` box, separate from
+  the `Brush Controls` section.
+- The engine selector is explicitly labeled `Painting Engine`.
+- Blender Brush Replay is labeled and warned as a fundamentally
+  non-performant prototype demo not intended for serious painting.
+
 ## 0.9.14 — collapsible extended channel sections
 
 - The expanded layer Channels view keeps core channels visible while grouping

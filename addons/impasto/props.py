@@ -323,8 +323,9 @@ class ImpastoLayer(bpy.types.PropertyGroup):
         name="Paint Engine",
         items=(('GPU', "GPU Multi-Channel",
                 "Resident multi-channel painting with live preview"),
-               ('BLENDER', "Blender Brush Replay",
-                "Replay the active Blender brush into each channel")),
+               ('BLENDER', "Blender Brush Replay (Prototype)",
+                "Embryonic compatibility demo; fundamentally non-performant "
+                "and not intended for serious painting")),
         default='GPU')
     ui_show_channels: BoolProperty(name="Channels", default=True)
     ui_show_emission_channels: BoolProperty(name="Emission", default=False)

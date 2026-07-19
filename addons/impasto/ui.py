@@ -191,13 +191,14 @@ class IMPASTO_PT_main(bpy.types.Panel):
                 row = box.row(align=True)
                 row.prop(layer, "blend_mode", text="")
                 row.prop(layer, "opacity", text="Layer Opacity", slider=True)
-                row = box.row(align=True)
-                row.prop(layer, "ui_show_channels", text="Channels",
+                channels_box = box.box()
+                row = channels_box.row(align=True)
+                row.prop(layer, "ui_show_channels", text="Layer Channels",
                          icon='TRIA_DOWN' if layer.ui_show_channels
                          else 'TRIA_RIGHT', emboss=False)
                 row.menu("IMPASTO_MT_add_channel", text="", icon='ADD')
                 if layer.ui_show_channels:
-                    self._draw_bindings(box, state, layer)
+                    self._draw_bindings(channels_box, state, layer)
                 if layer.layer_type == 'PAINT':
                     self._draw_paint_tools(context, box, layer)
             else:
@@ -211,14 +212,22 @@ class IMPASTO_PT_main(bpy.types.Panel):
         keys = [key for key, _image in ops.gpu_paint_targets(layer)]
         paint = box.box()
         row = paint.row(align=True)
-        row.label(text="Paint", icon='BRUSH_DATA')
+        row.label(text="Brush Controls", icon='BRUSH_DATA')
         row.label(text="%d channel%s" %
                   (len(keys), "s" if len(keys) != 1 else ""))
         if not keys:
             paint.label(text="Enable a painted channel above", icon='INFO')
             return
 
-        paint.prop(layer, "paint_workflow", text="")
+        row = paint.row(align=True)
+        row.label(text="Painting Engine")
+        row.prop(layer, "paint_workflow", text="")
+        if layer.paint_workflow == 'BLENDER':
+            warning = paint.column(align=True)
+            warning.alert = True
+            warning.label(text="Prototype demo — fundamentally slow",
+                          icon='ERROR')
+            warning.label(text="Not intended for serious painting")
         values = paint.column(align=True)
         if 'base_color' in keys:
             values.prop(layer, "paint_color", text="Base Color")
