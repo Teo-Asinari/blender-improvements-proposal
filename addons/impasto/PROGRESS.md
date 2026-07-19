@@ -4,6 +4,11 @@ Current consolidated handoff: [`SESSION_2026-07-13.md`](SESSION_2026-07-13.md).
 It records the shipped GPU-resident architecture, validation, known limits,
 new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 
+## 0.9.12 — compact grouped layer badges
+
+- Layer rows now keep core initials compact and collapse extended channels
+  into counts, for example `BMRNH E(2) SS(3)`.
+
 ## 0.9.11 — clearer paint groups and channel badges
 
 - Emission and Subsurface values now occupy separate labeled groups in the

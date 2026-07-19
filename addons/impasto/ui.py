@@ -14,15 +14,30 @@ from . import ops
 
 _TYPE_ICONS = {'PAINT': 'BRUSH_DATA', 'FILL': 'SNAP_FACE',
                'GROUP': 'FILE_FOLDER'}
-_CHANNEL_BADGES = {
-    'base_color': 'BC', 'metallic': 'M', 'roughness': 'R',
+_CORE_CHANNEL_BADGES = {
+    'base_color': 'B', 'metallic': 'M', 'roughness': 'R',
     'normal': 'N', 'height': 'H', 'alpha': 'A',
-    'emission_color': 'EC', 'emission_strength': 'ES',
-    'sss_weight': 'SW', 'sss_radius': 'SR', 'sss_scale': 'SS',
-    'sss_ior': 'SI', 'sss_anisotropy': 'SA',
 }
 _VERSION_LABEL = "Impasto %s" % ".".join(
     str(part) for part in _BL_INFO["version"])
+
+
+def _layer_channel_summary(keys):
+    """Compact layer-list summary; expanded controls carry exact names."""
+    ordered = [key for key in sorted(
+        keys, key=lambda key: model.CHANNEL_ORDER.get(key, 99))
+        if key in model.CHANNEL_MAP]
+    parts = ["".join(_CORE_CHANNEL_BADGES[key] for key in ordered
+                     if key in _CORE_CHANNEL_BADGES)]
+    emission_count = sum(model.CHANNEL_MAP[key].panel_group == 'Emission'
+                         for key in ordered)
+    subsurface_count = sum(model.CHANNEL_MAP[key].panel_group == 'Subsurface'
+                           for key in ordered)
+    if emission_count:
+        parts.append("E(%d)" % emission_count)
+    if subsurface_count:
+        parts.append("SS(%d)" % subsurface_count)
+    return " ".join(part for part in parts if part)
 
 
 class IMPASTO_UL_layers(bpy.types.UIList):
@@ -37,12 +52,7 @@ class IMPASTO_UL_layers(bpy.types.UIList):
         sub.alignment = 'RIGHT'
         keys = [b.name for b in item.bindings if b.enabled]
         if keys:
-            chips = " ".join(_CHANNEL_BADGES.get(k, k[:2].upper())
-                             for k in sorted(
-                                 keys, key=lambda k:
-                                 model.CHANNEL_ORDER.get(k, 99))
-                             if k in model.CHANNEL_MAP)
-            sub.label(text=chips)
+            sub.label(text=_layer_channel_summary(keys))
 
 
 def _missing_channels(context, bind_active_layer):
