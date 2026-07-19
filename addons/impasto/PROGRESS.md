@@ -4,6 +4,11 @@ Current consolidated handoff: [`SESSION_2026-07-13.md`](SESSION_2026-07-13.md).
 It records the shipped GPU-resident architecture, validation, known limits,
 new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 
+## 0.9.13 — distinct layer-creation tooltips
+
+- Paint-layer buttons now explain that they create image canvases for brush
+  strokes; Fill-layer buttons explain that they apply uniform values.
+
 ## 0.9.12 — compact grouped layer badges
 
 - Layer rows now keep core initials compact and collapse extended channels

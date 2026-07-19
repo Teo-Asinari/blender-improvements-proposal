@@ -423,6 +423,17 @@ class IMPASTO_OT_layer_add(bpy.types.Operator):
                     "(later channel canvases inherit it)")
 
     @classmethod
+    def description(cls, context, properties):
+        layer_type = getattr(properties, "layer_type", 'PAINT')
+        if layer_type == 'FILL':
+            return ("Add a Fill layer whose channels use uniform color or "
+                    "numeric values across the material")
+        if layer_type == 'GROUP':
+            return "Add an organizational layer group"
+        return ("Add a Paint layer with image canvases that store brush "
+                "strokes for its enabled material channels")
+
+    @classmethod
     def poll(cls, context):
         return _context_stack(context)[1] is not None
 

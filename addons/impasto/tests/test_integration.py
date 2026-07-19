@@ -25,13 +25,20 @@ try:
     impasto.register()
     check("package registration",
           hasattr(bpy.types.ShaderNodeTree, "impasto"))
-    check("metadata", impasto.bl_info["version"] == (0, 9, 12))
-    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.9.12")
+    check("metadata", impasto.bl_info["version"] == (0, 9, 13))
+    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.9.13")
     check("layer channel summary groups extended channels",
           impasto.ui._layer_channel_summary((
               "base_color", "metallic", "roughness", "normal", "height",
               "emission_color", "emission_strength", "sss_weight",
               "sss_radius", "sss_scale")) == "BMRNH E(2) SS(3)")
+    paint_tip = impasto.ops.IMPASTO_OT_layer_add.description(
+        None, type("Props", (), {"layer_type": "PAINT"})())
+    fill_tip = impasto.ops.IMPASTO_OT_layer_add.description(
+        None, type("Props", (), {"layer_type": "FILL"})())
+    check("paint and fill tooltips are distinct",
+          paint_tip != fill_tip and "brush strokes" in paint_tip
+          and "uniform" in fill_tip)
 
     bpy.ops.mesh.primitive_cube_add()
     obj = bpy.context.object
