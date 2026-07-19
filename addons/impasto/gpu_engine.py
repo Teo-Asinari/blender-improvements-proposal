@@ -175,6 +175,24 @@ PREVIEW_MODES = (
 )
 PREVIEW_MODE_INDEX = {name: index for index, name in enumerate(PREVIEW_MODES)}
 
+STENCIL_PREVIEW_VERT_SRC = """
+void main()
+{
+    gl_Position = vec4(pos, 0.0, 1.0);
+    stencilUV = uv;
+}
+"""
+
+STENCIL_PREVIEW_FRAG_SRC = """
+void main()
+{
+    vec4 sample_value = texture(stencil_preview_tex, stencilUV);
+    vec3 display_rgb = mix(vec3(dot(sample_value.rgb,
+        vec3(0.2126, 0.7152, 0.0722))), sample_value.rgb, 0.35);
+    fragColor = vec4(display_rgb, stencil_preview_opacity);
+}
+"""
+
 # Conservative dirty-rect: texel padding added around the accumulated
 # UV bbox before the sub-rect read (guards float->texel rounding).
 DIRTY_RECT_PAD_PX = 2
@@ -1136,6 +1154,22 @@ def dab_shader_create_info(channels=1, additive=False, profile_slots=None,
     return info
 
 
+def stencil_preview_shader_create_info():
+    """POST_PIXEL image shader for both stencil projection previews."""
+    iface = gpu.types.GPUStageInterfaceInfo("impasto_stencil_preview_iface")
+    iface.smooth('VEC2', "stencilUV")
+    info = gpu.types.GPUShaderCreateInfo()
+    info.push_constant('FLOAT', "stencil_preview_opacity")
+    info.sampler(0, 'FLOAT_2D', "stencil_preview_tex")
+    info.vertex_in(0, 'VEC2', "pos")
+    info.vertex_in(1, 'VEC2', "uv")
+    info.vertex_out(iface)
+    info.fragment_out(0, 'VEC4', "fragColor")
+    info.vertex_source(STENCIL_PREVIEW_VERT_SRC)
+    info.fragment_source(STENCIL_PREVIEW_FRAG_SRC)
+    return info
+
+
 def dab_uniform_data(model_matrix, view_proj_matrix, view_depth_plane,
                      region_size, brush_center, radius, hardness,
                      depth_epsilon, depth_relative_epsilon, occlusion,
@@ -1442,6 +1476,18 @@ def premultiply_canvas(arr):
     return arr
 
 
+def prepare_canvas_upload(arr, opaque=False):
+    """Prepare straight Image pixels for a resident MIX attachment.
+
+    Imported authoritative canvases such as Kiln normals can carry
+    non-authoritative zero alpha. When used as the active canvas, establish
+    opaque coverage before premultiplication so their RGB survives upload.
+    """
+    if opaque:
+        arr.reshape(-1, 4)[:, 3] = 1.0
+    return premultiply_canvas(arr)
+
+
 def unpremultiply_readback(arr):
     """Premultiplied MIX-framebuffer pixels -> straight-alpha canvas
     pixels. Returns a new float32 copy (the session's CPU mirror must
@@ -1544,6 +1590,7 @@ class _Session:
         self.environment_tex = None
         self.stencil_tex = None
         self.stencil_image_name = ""
+        self.stencil_preview_shader = None
         self.stack_spec = self.settings.get("stack_spec")
         self.baseline_shader = None
         self.baseline_batch = None
@@ -1830,6 +1877,13 @@ def start_session(obj, images, region, channels=None, payloads=None,
                  images[0].size[0], region.as_pointer() if region else 0,
                  channels=channel_count, payloads=payloads,
                  settings=settings)
+    # Build the resident stack plan before the first draw. Previously this was
+    # deferred to material-inspection completion, so ordinary sessions reached
+    # _ensure_gpu() with stack_spec=None and never built lower/Kiln baselines.
+    if s.stack_spec is None and s.settings.get("stack_model") is not None:
+        s.stack_spec = resident_stack_runtime_spec(
+            s.settings["stack_model"],
+            s.settings.get("active_layer_uid", ""))
     s.settings["preview_mode"] = normalize_preview_mode(
         s.settings.get("preview_mode"))
     s.settings["input_paused"] = False
@@ -2153,6 +2207,7 @@ def _draw_pixel():
     if region is None or region.as_pointer() != s.region_ptr:
         return
     try:
+        _draw_stencil_preview(s, region)
         _draw_brush_reticle(s)
         _draw_stats_overlay(s)
     except Exception:
@@ -2305,7 +2360,11 @@ def _ensure_gpu(s):
                 if _channel_blend(s, i) != "ADD":
                     # MIX targets accumulate premultiplied (see
                     # premultiply_canvas); canvases store straight.
-                    premultiply_canvas(arr)
+                    key = (channel_keys[i]
+                           if i < len(channel_keys) else "")
+                    prepare_canvas_upload(
+                        arr, opaque=key in set(s.settings.get(
+                            "opaque_channel_keys", ())))
                 buf = gpu.types.Buffer('FLOAT', (size, size, 4),
                                        arr.reshape(size, size, 4))
                 tex = gpu.types.GPUTexture((size, size),
@@ -3324,6 +3383,83 @@ def _draw_composed_preview(s):
     else:
         s.preview_submit_avg_ms += (
             elapsed - s.preview_submit_avg_ms) / s.preview_submit_count
+
+
+def stencil_preview_quad(region_size, cursor, radius, settings):
+    """Return POST_PIXEL quad corners using the dab shader's transform.
+
+    Corners are ordered counter-clockwise from lower-left. ``None`` means
+    there is no visible preview (disabled/missing stencil or Brush Alpha has
+    no cursor yet). This pure seam keeps projection and preview testable in
+    background Blender.
+    """
+    if not settings.get("stencil_enabled", False) \
+            or not settings.get("stencil_image_name", ""):
+        return None
+    projection = settings.get("stencil_projection", 'VIEW_STENCIL')
+    scale = tuple(settings.get("stencil_scale", (0.35, 0.35)))
+    if projection == 'BRUSH_ALPHA':
+        if cursor is None:
+            return None
+        center = (float(cursor[0]), float(cursor[1]))
+        half_extent = (float(radius) * float(scale[0]),
+                       float(radius) * float(scale[1]))
+    else:
+        position = tuple(settings.get("stencil_position", (0.5, 0.5)))
+        center = (float(position[0]) * float(region_size[0]),
+                  float(position[1]) * float(region_size[1]))
+        half_extent = (0.5 * float(scale[0]) * float(region_size[0]),
+                       0.5 * float(scale[1]) * float(region_size[1]))
+    angle = float(settings.get("stencil_rotation", 0.0))
+    cs, sn = math.cos(angle), math.sin(angle)
+    points = []
+    for sx, sy in ((-1.0, -1.0), (1.0, -1.0),
+                   (1.0, 1.0), (-1.0, 1.0)):
+        lx, ly = sx * half_extent[0], sy * half_extent[1]
+        points.append((center[0] + cs * lx - sn * ly,
+                       center[1] + sn * lx + cs * ly))
+    return tuple(points)
+
+
+def _draw_stencil_preview(s, region):
+    """Draw the active GPU stencil and a crisp projection boundary."""
+    if material_inspect_active() or material_inspect_requested():
+        return
+    points = stencil_preview_quad(
+        (region.width, region.height), s.cursor,
+        max(1.0, float(s.settings.get("radius", 50.0))), s.settings)
+    if points is None:
+        return
+    stencil_tex = _ensure_stencil_texture(s)
+    if stencil_tex is None:
+        return
+    from gpu_extras.batch import batch_for_shader
+    if s.stencil_preview_shader is None:
+        s.stencil_preview_shader = gpu.shader.create_from_info(
+            stencil_preview_shader_create_info())
+    # Convert pixel coordinates to POST_PIXEL clip coordinates. The texture
+    # UV order exactly matches the shader's inverse rotation convention.
+    clip = [((point[0] / region.width) * 2.0 - 1.0,
+             (point[1] / region.height) * 2.0 - 1.0) for point in points]
+    uv = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
+    batch = batch_for_shader(s.stencil_preview_shader, 'TRI_FAN',
+                             {"pos": clip, "uv": uv})
+    outline_shader = gpu.shader.from_builtin('UNIFORM_COLOR')
+    outline = batch_for_shader(outline_shader, 'LINE_LOOP', {"pos": points})
+    prior_blend = gpu.state.blend_get()
+    try:
+        gpu.state.blend_set('ALPHA')
+        s.stencil_preview_shader.bind()
+        s.stencil_preview_shader.uniform_float(
+            "stencil_preview_opacity", 0.38)
+        s.stencil_preview_shader.uniform_sampler(
+            "stencil_preview_tex", stencil_tex)
+        batch.draw(s.stencil_preview_shader)
+        outline_shader.bind()
+        outline_shader.uniform_float("color", (1.0, 0.72, 0.18, 0.95))
+        outline.draw(outline_shader)
+    finally:
+        gpu.state.blend_set(prior_blend)
 
 
 def _draw_brush_reticle(s):

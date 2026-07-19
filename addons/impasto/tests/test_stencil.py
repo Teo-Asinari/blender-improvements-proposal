@@ -126,6 +126,28 @@ try:
     info = gpu_engine.dab_shader_create_info(4)
     check("shader create-info exposes stencil sampler and transform",
           info is not None)
+    preview_info = gpu_engine.stencil_preview_shader_create_info()
+    check("POST_PIXEL stencil preview has a resident texture contract",
+          preview_info is not None
+          and "texture(stencil_preview_tex" in
+          gpu_engine.STENCIL_PREVIEW_FRAG_SRC)
+    planar_quad = gpu_engine.stencil_preview_quad(
+        (800, 600), None, 40.0, {
+            "stencil_enabled": True, "stencil_image_name": mask.name,
+            "stencil_projection": 'VIEW_STENCIL',
+            "stencil_position": (0.5, 0.5), "stencil_scale": (0.5, 0.25),
+            "stencil_rotation": 0.0})
+    check("planar preview uses the exact normalized stencil footprint",
+          planar_quad == ((200.0, 225.0), (600.0, 225.0),
+                          (600.0, 375.0), (200.0, 375.0)))
+    brush_quad = gpu_engine.stencil_preview_quad(
+        (800, 600), (100.0, 120.0), 20.0, {
+            "stencil_enabled": True, "stencil_image_name": mask.name,
+            "stencil_projection": 'BRUSH_ALPHA',
+            "stencil_scale": (1.0, 0.5), "stencil_rotation": 0.0})
+    check("brush preview follows the cursor and exact dab-scaled footprint",
+          brush_quad == ((80.0, 110.0), (120.0, 110.0),
+                         (120.0, 130.0), (80.0, 130.0)))
     profile_source = gpu_engine.dab_frag_src(
         2, profile_slots=(False, True))
     check("normal-profile shader uses aspect-aware neighboring samples",

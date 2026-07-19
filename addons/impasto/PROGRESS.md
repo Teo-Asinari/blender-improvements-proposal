@@ -4,6 +4,18 @@ Current consolidated handoff: [`SESSION_2026-07-13.md`](SESSION_2026-07-13.md).
 It records the shipped GPU-resident architecture, validation, known limits,
 new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 
+## 0.9.5 — visible stencils, explicit pressure, and Kiln wiring
+
+- Added GPU-resident textured stencil previews: a camera-facing planar overlay
+  for Viewport Stencil and a cursor-following footprint for Brush Alpha, both
+  using the exact paint transform and a visible projection boundary.
+- Added persistent Pressure Opacity and Pressure Size controls which override
+  hidden Blender brush flags and update live without image synchronization.
+- Build the resident stack plan before the first preview allocation, restoring
+  lower/Kiln baseline textures during ordinary top-active painting sessions.
+- Preserve a selected Kiln normal canvas as opaque data during resident upload;
+  a real foreground GPU regression now checks both top- and lower-active cases.
+
 ## 0.9.4 — preserve opaque baseline image RGB
 
 - Opaque lower-channel images now upload from raw Blender pixels with forced

@@ -216,6 +216,14 @@ class ImpastoLayer(bpy.types.PropertyGroup):
         description="Additional opacity multiplier applied to every channel "
                     "of a GPU stroke",
         default=1.0, min=0.0, max=1.0, subtype='FACTOR')
+    brush_pressure_opacity: BoolProperty(
+        name="Opacity",
+        description="Use tablet pressure to control GPU stroke opacity",
+        default=True)
+    brush_pressure_size: BoolProperty(
+        name="Size",
+        description="Use tablet pressure to control GPU brush size",
+        default=True)
     brush_stencil_enabled: BoolProperty(
         name="Image Stencil", description="Modulate every enabled GPU paint "
         "channel with one shared image mask", default=False)

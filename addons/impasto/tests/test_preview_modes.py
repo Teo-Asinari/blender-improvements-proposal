@@ -49,6 +49,8 @@ try:
           layer.gpu_preview_mode == 'LIT_PBR')
     check("routine idle material synchronization defaults off",
           not layer.auto_material_preview)
+    check("GPU tablet pressure controls default on",
+          layer.brush_pressure_opacity and layer.brush_pressure_size)
     rna = layer.bl_rna.properties['gpu_preview_mode']
     check("preview property is persistent RNA state",
           not rna.is_skip_save
@@ -190,6 +192,8 @@ try:
     layer.brush_radius = 93.0
     layer.brush_hardness = 0.27
     layer.brush_opacity = 0.42
+    layer.brush_pressure_opacity = False
+    layer.brush_pressure_size = True
     ops.IMPASTO_OT_gpu_paint._refresh_stroke_settings(
         operator, bpy.context)
     payloads, settings = gpu_engine.stroke_settings_snapshot()
@@ -208,6 +212,10 @@ try:
           and gpu_engine.session_active())
     check("next stroke sees explicit GPU opacity",
           abs(settings['opacity'] - 0.42) < 1e-6)
+    check("next stroke sees explicit GPU pressure controls",
+          settings['brush_stamp'] is None
+          or (not settings['brush_stamp'].use_pressure_strength
+              and settings['brush_stamp'].use_pressure_size))
     check("between-stroke edits still queue no image sync",
           gpu_engine.take_pending_pixels() is None)
 

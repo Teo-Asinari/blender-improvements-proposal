@@ -170,6 +170,10 @@ class IMPASTO_PT_main(bpy.types.Panel):
             row.prop(layer, "brush_radius")
             row.prop(layer, "brush_hardness", slider=True)
             paint.prop(layer, "brush_opacity", slider=True)
+            row = paint.row(align=True)
+            row.label(text="Pressure")
+            row.prop(layer, "brush_pressure_opacity", toggle=True)
+            row.prop(layer, "brush_pressure_size", toggle=True)
 
         row = paint.row()
         row.scale_y = 1.35
@@ -357,6 +361,10 @@ class IMPASTO_PT_main(bpy.types.Panel):
             row.prop(layer, "brush_radius")
             row.prop(layer, "brush_hardness", slider=True)
             gpu_col.prop(layer, "brush_opacity", slider=True)
+            row = gpu_col.row(align=True)
+            row.label(text="Pressure")
+            row.prop(layer, "brush_pressure_opacity", toggle=True)
+            row.prop(layer, "brush_pressure_size", toggle=True)
             stencil_box = gpu_col.box()
             stencil_box.prop(layer, "brush_stencil_enabled")
             stencil_controls = stencil_box.column(align=True)

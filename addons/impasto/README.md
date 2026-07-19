@@ -138,14 +138,19 @@ back faces do not show through the overlay. Open the light-icon popover beside
 and fill strength without leaving the resident painting session. These are
 display-only controls; they do not alter the material or painted images.
 
-Lower tangent-normal images, including Kiln bakes whose alpha is zero or
-non-authoritative, are uploaded without losing their Non-Color RGB. This fixes
-the upload boundary but does **not** provide true layered-normal composition:
-an opaque upper normal canvas still replaces lower normal layers under the
-current encoded-RGB MIX semantics. RNM/UDN vector composition is required for
-Kiln and opaque painted/imported detail normals to combine correctly. **Raw
-Tangent Normal** remains the quickest diagnostic because it shows the resolved
-encoded texture before lighting.
+Enabled stencils now have a live GPU-resident placement preview. **Viewport
+Stencil** draws a translucent camera-facing image and boundary using its exact
+position, scale, and rotation; **Brush Alpha** previews the transformed image
+at the cursor footprint. No preview readback or image synchronization occurs.
+
+Lower tangent-normal images are planned before the first preview draw, and
+Kiln bakes whose alpha is zero or non-authoritative are uploaded without losing
+their Non-Color RGB whether Kiln is the baseline or selected canvas. This does
+**not** provide true layered-normal composition: an opaque upper normal canvas
+still replaces lower normal layers under encoded-RGB MIX semantics. RNM/UDN
+composition is required for two opaque normal maps to combine as detail.
+**Raw Tangent Normal** remains the quickest diagnostic because it shows the
+resolved encoded texture before lighting.
 
 Stacks with participating layers above the active layer, image masks, or mixed
 UV layouts explicitly fall back to the active-layer preview; the viewport text
@@ -179,7 +184,9 @@ targets. Separate Paint layers are intentionally separate strokes.
 
 Tablet pressure is sanitized and interpolated between generated dabs, while
 spacing follows the pressure-adjusted brush radius. This keeps quick pen
-strokes continuous instead of producing visibly separated stamps.
+strokes continuous instead of producing visibly separated stamps. The
+explicit **Pressure: Opacity** and **Pressure: Size** toggles are authoritative
+for the GPU brush and can be changed between strokes.
 
 The **Live Preview** selector can be changed while the GPU session remains
 active: **Lit PBR** shows the composed material approximation, **Raw Tangent
@@ -294,10 +301,9 @@ feeds Blender's Bump node. When Normal and Height are both present, the decoded
 tangent normal feeds the Bump node's Normal input, and the combined result drives
 Principled. Multiple Normal layers currently use an approximate MIX of encoded
 normal colors before decoding. An opaque upper canvas therefore replaces the
-lower normal rather than adding its detail; this is the confirmed reason
-lower/Kiln detail can appear absent in Lit PBR. Implementing RNM/UDN vector
-composition is an open correctness item, not a texture-resolution or lighting
-adjustment.
+lower normal rather than adding its detail. Implementing RNM/UDN vector
+composition is an open correctness item, separate from the fixed preview
+wiring and alpha-upload bugs.
 Native brush undo is Blender's normal paint undo and stack operators use normal
 operator undo.
 
@@ -354,6 +360,12 @@ rewiring generated nodes.
   image can act as a relief profile; local gradients generate tangent-space
   normal detail with adjustable strength and inversion. Optional linked Height
   deposition remains deferred because it needs separate additive semantics.
+- **Material and stencil library previews:** add Substance-style spherical
+  thumbnails for multi-channel material presets, larger stencil-image previews,
+  and a recent-material palette. Each swatch should persist its channel values
+  and show them in a tooltip alongside the rendered sphere. This requires a
+  preset/asset model and cached preview renderer, so it remains separate from
+  the lightweight live viewport stencil overlay.
 - **GPU brush and adjustable-alpha parity:** reimplement useful equivalents of
   Blender's painting brushes on the resident multi-channel GPU path, including
   brush alpha/texture control. Deliver this in compatibility tiers: stamp-based

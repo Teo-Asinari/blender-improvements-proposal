@@ -732,7 +732,8 @@ def gpu_stencil_settings(layer):
             layer, "brush_stencil_profile_invert", False))
 
 
-def _gpu_stamp(context, radius=None):
+def _gpu_stamp(context, radius=None, pressure_opacity=None,
+               pressure_size=None):
     settings = context.scene.tool_settings.image_paint
     brush = settings.brush
     if brush is None:
@@ -751,6 +752,14 @@ def _gpu_stamp(context, radius=None):
     # that visible control authoritative for GPU dab size.
     if radius is not None and stamp.supported:
         stamp = replace(stamp, radius_px=max(0.5, float(radius)))
+    if stamp.supported:
+        overrides = {}
+        if pressure_opacity is not None:
+            overrides["use_pressure_strength"] = bool(pressure_opacity)
+        if pressure_size is not None:
+            overrides["use_pressure_size"] = bool(pressure_size)
+        if overrides:
+            stamp = replace(stamp, **overrides)
     return stamp
 
 
@@ -1021,7 +1030,9 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         keys = [key for key, _img in targets]
         images = [img for _key, img in targets]
         payloads = gpu_engine.stroke_payloads(keys, _gpu_brush(layer))
-        stamp = _gpu_stamp(context, layer.brush_radius)
+        stamp = _gpu_stamp(
+            context, layer.brush_radius,
+            layer.brush_pressure_opacity, layer.brush_pressure_size)
         settings = {
             "radius": (stamp.radius_px if stamp is not None
                        and stamp.supported else layer.brush_radius),
@@ -1036,6 +1047,12 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             "stack_model": snapshot.snapshot(
                 tree, _context_material(context)),
             "active_layer_uid": layer.name,
+            # Kiln bake alpha predates Impasto's paint-coverage contract and
+            # is not authoritative. Preserve its RGB when Kiln is selected as
+            # the active canvas, as the lower-baseline uploader already does.
+            "opaque_channel_keys": (
+                ("normal",) if layer.label == "Kiln Baked Normal"
+                and "normal" in keys else ()),
         }
         settings.update(gpu_preview_lighting(layer))
         settings.update(gpu_stencil_settings(layer).as_gpu_settings())
@@ -1110,7 +1127,9 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             raise paint.PaintTargetError("The active paint layer disappeared")
         payloads = gpu_engine.stroke_payloads(
             self._channel_keys, _gpu_brush(layer))
-        stamp = _gpu_stamp(context, layer.brush_radius)
+        stamp = _gpu_stamp(
+            context, layer.brush_radius,
+            layer.brush_pressure_opacity, layer.brush_pressure_size)
         supported_stamp = (stamp if stamp is not None
                            and stamp.supported else None)
         self._radius = (supported_stamp.radius_px if supported_stamp

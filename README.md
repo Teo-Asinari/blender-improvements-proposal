@@ -43,7 +43,7 @@ default `0.1 m` voxel size from triggering a prohibitively expensive operation
 without review. A viewport guide draws grid slices and voxel-sized samples at
 all eight bounding-box corners so scale can be judged visually.
 
-### [Impasto](addons/impasto/) — v0.9.4 (active development)
+### [Impasto](addons/impasto/) — v0.9.5 (active development)
 
 A non-destructive Principled-PBR layer stack with Fill, Paint, and pass-through
 Group layers. One logical Paint layer can own separate Base Color, Metallic,
@@ -68,10 +68,10 @@ adjustable environment, key, and fill lighting. It uses Blender corner normals
 for smooth shading and makes roughness, metallic, tangent-normal, and Height
 changes visible without routine synchronization. A shared image stencil can
 act as a viewport stencil, per-dab alpha, or grayscale normal profile. In the
-common same-UV/topmost-active-layer case, lower Fill/Paint layers are composed
-as a resident baseline. Lower normal RGB now survives alpha-zero Kiln uploads,
-but opaque upper normal maps still replace lower normals because normal layers
-use ordinary encoded-RGB MIX rather than RNM/UDN vector composition. The
+common same-UV/topmost-active-layer case, lower Fill/Paint layers—including
+alpha-zero Kiln normals—are composed as a resident baseline from the first
+preview draw. Opaque upper normal maps still replace lower normals because
+normal layers use ordinary encoded-RGB MIX rather than RNM/UDN composition. The
 preview remains a perceptual approximation rather than Blender's exact
 Material Preview HDRI.
 Mixed UVs, image masks, participating upper layers, channel isolation,

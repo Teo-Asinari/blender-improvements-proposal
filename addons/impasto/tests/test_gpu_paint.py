@@ -202,6 +202,11 @@ try:
     check("readback conversion copies (mirrors stay in fb space)",
           rt is not pm and np.allclose(pm.reshape(-1, 4)[0, :3],
                                        [0.5, 0.25, 0.125]))
+    kiln_upload = gpu_engine.prepare_canvas_upload(
+        np.array([0.7, 0.3, 1.0, 0.0], dtype=np.float32), opaque=True)
+    check("authoritative zero-alpha normal survives active upload",
+          np.allclose(kiln_upload, [0.7, 0.3, 1.0, 1.0]),
+          repr(kiln_upload))
     # One source-over dab at coverage a onto a transparent canvas must
     # round-trip to (value, a) — NOT (value*a, a), which was the bug.
     dab_v, dab_a = 0.8, 0.5
@@ -301,6 +306,34 @@ try:
           gpu_engine.last_error() is None)
     gpu_engine.stop_session()
     check("session stops cleanly", not gpu_engine.session_active())
+
+    # The stack plan must exist before lazy GPU allocation; otherwise the
+    # first draw cannot build lower/Kiln baseline textures.
+    active_model = model.LayerModel(
+        uid="active", label="Detail", layer_type="PAINT", uv_map="UVMap",
+        bindings=(model.BindingModel(
+            key="normal", mode="SHARED", image_name=images[0].name),))
+    kiln_model = model.LayerModel(
+        uid="kiln", label="Kiln Baked Normal", layer_type="PAINT",
+        uv_map="UVMap", bindings=(model.BindingModel(
+            key="normal", mode="SHARED", image_name="Kiln Runtime Normal"),))
+    resident_model = model.StackModel(
+        root_tree_name="Runtime", channels=("normal",),
+        layers=(active_model, kiln_model))
+    check("resident stack session starts",
+          gpu_engine.start_session(
+              obj, [images[0]], None,
+              payloads=gpu_engine.stroke_payloads(("normal",), brush),
+              settings={"channel_keys": ("normal",),
+                        "stack_model": resident_model,
+                        "active_layer_uid": "active"}))
+    check("lower/Kiln stack plan exists before first GPU draw",
+          gpu_engine._session.stack_spec["enabled"]
+          and gpu_engine._session.stack_spec["channels"]["normal"]
+          ["lower_steps"][0]["source"]["image_name"]
+          == "Kiln Runtime Normal",
+          repr(gpu_engine._session.stack_spec))
+    gpu_engine.stop_session()
 
     # ---- operator surface ----------------------------------------------
     check("gpu paint operator registered",
