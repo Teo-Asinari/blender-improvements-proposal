@@ -14,6 +14,13 @@ from . import ops
 
 _TYPE_ICONS = {'PAINT': 'BRUSH_DATA', 'FILL': 'SNAP_FACE',
                'GROUP': 'FILE_FOLDER'}
+_CHANNEL_BADGES = {
+    'base_color': 'BC', 'metallic': 'M', 'roughness': 'R',
+    'normal': 'N', 'height': 'H', 'alpha': 'A',
+    'emission_color': 'EC', 'emission_strength': 'ES',
+    'sss_weight': 'SW', 'sss_radius': 'SR', 'sss_scale': 'SS',
+    'sss_ior': 'SI', 'sss_anisotropy': 'SA',
+}
 _VERSION_LABEL = "Impasto %s" % ".".join(
     str(part) for part in _BL_INFO["version"])
 
@@ -30,11 +37,11 @@ class IMPASTO_UL_layers(bpy.types.UIList):
         sub.alignment = 'RIGHT'
         keys = [b.name for b in item.bindings if b.enabled]
         if keys:
-            chips = "".join(model.CHANNEL_MAP[k].label[0]
-                            for k in sorted(
-                                keys, key=lambda k:
-                                model.CHANNEL_ORDER.get(k, 99))
-                            if k in model.CHANNEL_MAP)
+            chips = " ".join(_CHANNEL_BADGES.get(k, k[:2].upper())
+                             for k in sorted(
+                                 keys, key=lambda k:
+                                 model.CHANNEL_ORDER.get(k, 99))
+                             if k in model.CHANNEL_MAP)
             sub.label(text=chips)
 
 
@@ -215,16 +222,29 @@ class IMPASTO_PT_main(bpy.types.Panel):
             row = values.row(align=True)
             row.prop(layer, "paint_height_direction", expand=True)
             row.prop(layer, "paint_height_strength", text="Step")
-        if 'emission_color' in keys:
-            values.prop(layer, "paint_emission_color", text="Emission")
-        if 'emission_strength' in keys:
-            values.prop(layer, "paint_emission_strength", text="Strength")
-        if 'sss_weight' in keys:
-            values.prop(layer, "paint_sss_weight", text="SSS Weight", slider=True)
-        if 'sss_radius' in keys:
-            values.prop(layer, "paint_sss_radius", text="SSS Radius")
-        if 'sss_scale' in keys:
-            values.prop(layer, "paint_sss_scale", text="SSS Scale")
+        if 'emission_color' in keys or 'emission_strength' in keys:
+            emission = paint.box()
+            emission.label(text="Emission", icon='LIGHT')
+            if 'emission_color' in keys:
+                emission.prop(layer, "paint_emission_color", text="Color")
+            if 'emission_strength' in keys:
+                emission.prop(layer, "paint_emission_strength",
+                              text="Strength")
+        if any(k in keys for k in
+               ('sss_weight', 'sss_radius', 'sss_scale')):
+            subsurface = paint.box()
+            subsurface.label(text="Subsurface", icon='SHADING_RENDERED')
+            if 'sss_weight' in keys:
+                subsurface.prop(layer, "paint_sss_weight", text="Weight",
+                                slider=True)
+            if 'sss_radius' in keys:
+                subsurface.prop(layer, "paint_sss_radius", text="Radius RGB")
+            if 'sss_scale' in keys:
+                subsurface.prop(layer, "paint_sss_scale", text="Scale")
+            subsurface.label(text="Weight = amount; Scale = travel distance",
+                             icon='INFO')
+            subsurface.label(text="Radius sets relative RGB travel",
+                             icon='INFO')
 
         if layer.paint_workflow == 'GPU':
             row = paint.row(align=True)

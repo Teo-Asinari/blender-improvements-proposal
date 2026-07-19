@@ -4,6 +4,13 @@ Current consolidated handoff: [`SESSION_2026-07-13.md`](SESSION_2026-07-13.md).
 It records the shipped GPU-resident architecture, validation, known limits,
 new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 
+## 0.9.11 — clearer paint groups and channel badges
+
+- Emission and Subsurface values now occupy separate labeled groups in the
+  Paint section.
+- Layer-list channel badges use unique short codes (`EC`, `ES`, `SW`, `SR`,
+  `SS`, etc.) instead of ambiguous first letters.
+
 ## 0.9.10 — clearer subsurface controls
 
 - Added hover descriptions explaining Subsurface Weight, Radius, and Scale.

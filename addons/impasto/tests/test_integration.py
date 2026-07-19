@@ -25,8 +25,15 @@ try:
     impasto.register()
     check("package registration",
           hasattr(bpy.types.ShaderNodeTree, "impasto"))
-    check("metadata", impasto.bl_info["version"] == (0, 9, 10))
-    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.9.10")
+    check("metadata", impasto.bl_info["version"] == (0, 9, 11))
+    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.9.11")
+    badges = impasto.ui._CHANNEL_BADGES
+    check("channel badges are unique", len(set(badges.values())) == len(badges))
+    check("emission and subsurface badges are explicit",
+          tuple(badges[key] for key in
+                ("emission_color", "emission_strength", "sss_weight",
+                 "sss_radius", "sss_scale")) ==
+          ("EC", "ES", "SW", "SR", "SS"))
 
     bpy.ops.mesh.primitive_cube_add()
     obj = bpy.context.object
