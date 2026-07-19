@@ -872,6 +872,21 @@ def sanitize_pressure(value, fallback=1.0):
     return min(1.0, max(0.001, pressure))
 
 
+def overlap_compensated_opacity(target, spacing_ratio):
+    """Per-dab alpha whose repeated source-over result approaches target.
+
+    A stroke point is covered by roughly ``1 / spacing_ratio`` dab centers.
+    Applying pressure directly to every dab therefore makes even light strokes
+    nearly opaque. Inverting source-over accumulation keeps the completed
+    stroke response close to the requested pressure-controlled opacity.
+    """
+    target = min(1.0, max(0.0, float(target)))
+    if target >= 1.0:
+        return 1.0
+    spacing = min(1.0, max(1e-4, float(spacing_ratio)))
+    return 1.0 - (1.0 - target) ** spacing
+
+
 def build_mesh_soup(obj):
     """Return per-corner coordinates, UVs, and Blender shading normals."""
     import numpy as np
@@ -3082,10 +3097,14 @@ def _flush_dabs(s, region):
                     stamp.values_at_pressure(pressure)
                     if stamp is not None else (radius, pressure))
                 stroke_opacity = float(s.settings.get("opacity", 1.0))
+                effective_opacity = max(
+                    0.0, min(1.0, dab_opacity * stroke_opacity))
+                if stamp is not None and stamp.use_pressure_strength:
+                    effective_opacity = overlap_compensated_opacity(
+                        effective_opacity, stamp.spacing_ratio)
                 ubo_data[DAB_UBO_REGION_CENTER, 2:4] = (float(x), float(y))
                 ubo_data[DAB_UBO_BRUSH_DEPTH, 0] = dab_radius
-                ubo_data[DAB_UBO_PAINT_FLAGS, 1] = max(
-                    0.0, min(1.0, dab_opacity * stroke_opacity))
+                ubo_data[DAB_UBO_PAINT_FLAGS, 1] = effective_opacity
                 ubo.update(ubo_data)
                 draw_batch.draw(sh)
                 s.submit_times.append(time.perf_counter() - t0)

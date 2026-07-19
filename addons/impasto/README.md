@@ -186,7 +186,9 @@ Tablet pressure is sanitized and interpolated between generated dabs, while
 spacing follows the pressure-adjusted brush radius. This keeps quick pen
 strokes continuous instead of producing visibly separated stamps. The
 explicit **Pressure: Opacity** and **Pressure: Size** toggles are authoritative
-for the GPU brush and can be changed between strokes.
+for the GPU brush and can be changed between strokes. Pressure opacity is
+spacing-compensated so overlapping dabs retain a visibly graded stroke-level
+response instead of rapidly accumulating to full opacity.
 
 The **Live Preview** selector can be changed while the GPU session remains
 active: **Lit PBR** shows the composed material approximation, **Raw Tangent

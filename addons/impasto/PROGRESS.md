@@ -4,6 +4,12 @@ Current consolidated handoff: [`SESSION_2026-07-13.md`](SESSION_2026-07-13.md).
 It records the shipped GPU-resident architecture, validation, known limits,
 new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 
+## 0.9.6 — pressure-opacity calibration
+
+- Compensate pressure-controlled per-dab alpha for predictable source-over
+  overlap, so dense continuous strokes converge on the intended tablet
+  opacity instead of saturating nearly opaque at light pressure.
+
 ## 0.9.5 — visible stencils, explicit pressure, and Kiln wiring
 
 - Added GPU-resident textured stencil previews: a camera-facing planar overlay

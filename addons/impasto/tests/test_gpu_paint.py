@@ -29,6 +29,14 @@ def check(name, condition, detail=""):
     print("  ok  " + name)
 
 
+for target in (0.2, 0.8):
+    spacing = 0.1
+    per_dab = gpu_engine.overlap_compensated_opacity(target, spacing)
+    accumulated = 1.0 - (1.0 - per_dab) ** round(1.0 / spacing)
+    check("pressure opacity survives dense dab overlap at %.1f" % target,
+          abs(accumulated - target) < 1e-6, repr(accumulated))
+
+
 try:
     impasto.register()
 
