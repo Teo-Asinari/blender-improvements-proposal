@@ -138,10 +138,14 @@ back faces do not show through the overlay. Open the light-icon popover beside
 and fill strength without leaving the resident painting session. These are
 display-only controls; they do not alter the material or painted images.
 
-Lower tangent-normal layers, including Kiln bakes whose alpha is zero or
-non-authoritative, are uploaded as raw Non-Color RGB and composed into the
-resident baseline. **Raw Tangent Normal** remains the quickest diagnostic: it
-shows the resolved encoded normal texture before lighting.
+Lower tangent-normal images, including Kiln bakes whose alpha is zero or
+non-authoritative, are uploaded without losing their Non-Color RGB. This fixes
+the upload boundary but does **not** provide true layered-normal composition:
+an opaque upper normal canvas still replaces lower normal layers under the
+current encoded-RGB MIX semantics. RNM/UDN vector composition is required for
+Kiln and opaque painted/imported detail normals to combine correctly. **Raw
+Tangent Normal** remains the quickest diagnostic because it shows the resolved
+encoded texture before lighting.
 
 Stacks with participating layers above the active layer, image masks, or mixed
 UV layouts explicitly fall back to the active-layer preview; the viewport text
@@ -289,9 +293,11 @@ from spatial gradients and stroke falloff, not the absolute shade. The result
 feeds Blender's Bump node. When Normal and Height are both present, the decoded
 tangent normal feeds the Bump node's Normal input, and the combined result drives
 Principled. Multiple Normal layers currently use an approximate MIX of encoded
-normal colors before decoding. This is useful for masks and simple overlays but
-is not mathematically exact RNM normal blending; keep full-strength detail maps
-on separate layers conservative until RNM/UDN blending is implemented.
+normal colors before decoding. An opaque upper canvas therefore replaces the
+lower normal rather than adding its detail; this is the confirmed reason
+lower/Kiln detail can appear absent in Lit PBR. Implementing RNM/UDN vector
+composition is an open correctness item, not a texture-resolution or lighting
+adjustment.
 Native brush undo is Blender's normal paint undo and stack operators use normal
 operator undo.
 

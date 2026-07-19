@@ -68,8 +68,10 @@ adjustable environment, key, and fill lighting. It uses Blender corner normals
 for smooth shading and makes roughness, metallic, tangent-normal, and Height
 changes visible without routine synchronization. A shared image stencil can
 act as a viewport stencil, per-dab alpha, or grayscale normal profile. In the
-common same-UV/topmost-active-layer case, lower Fill/Paint layers—including
-alpha-zero Kiln tangent-normal bakes—are composed as a resident baseline. The
+common same-UV/topmost-active-layer case, lower Fill/Paint layers are composed
+as a resident baseline. Lower normal RGB now survives alpha-zero Kiln uploads,
+but opaque upper normal maps still replace lower normals because normal layers
+use ordinary encoded-RGB MIX rather than RNM/UDN vector composition. The
 preview remains a perceptual approximation rather than Blender's exact
 Material Preview HDRI.
 Mixed UVs, image masks, participating upper layers, channel isolation,

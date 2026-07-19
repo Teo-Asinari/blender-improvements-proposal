@@ -197,6 +197,9 @@ One 4K RGBA16F texture is 128 MiB; five such textures are 640 MiB.
 
 1. Fill below active affects live Base Color/Metallic/Roughness immediately.
 2. Kiln bottom normal remains visible while painting a higher normal layer.
+   This currently fails when the upper normal canvas is opaque: encoded-RGB
+   MIX replaces the lower vector. Treat RNM/UDN normal composition as a
+   prerequisite for satisfying this acceptance item.
 3. Fill/Paint above active retains ordering; active paint never jumps to top.
 4. Paint alpha, layer/binding/group opacity, masks, inversion, and visibility
    match the compiled material after flush within numerical/color tolerances.
