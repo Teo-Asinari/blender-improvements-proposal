@@ -327,6 +327,8 @@ class ImpastoLayer(bpy.types.PropertyGroup):
                 "Replay the active Blender brush into each channel")),
         default='GPU')
     ui_show_channels: BoolProperty(name="Channels", default=True)
+    ui_show_emission_channels: BoolProperty(name="Emission", default=False)
+    ui_show_subsurface_channels: BoolProperty(name="Subsurface", default=False)
     ui_show_advanced: BoolProperty(name="Advanced", default=False)
 
 

@@ -562,11 +562,12 @@ class IMPASTO_PT_main(bpy.types.Panel):
     def _draw_bindings(self, box, state, layer):
         col = box.column(align=True)
         col.label(text="Channel Images / Layer Influence")
-        for c in state.channels:
+
+        def draw_channel(parent, c):
             ch = model.CHANNEL_MAP.get(c.name)
             if ch is None or not c.enabled:
-                continue
-            row = col.row(align=True)
+                return
+            row = parent.row(align=True)
             binding = None
             for b in layer.bindings:
                 if b.name == c.name:
@@ -577,7 +578,7 @@ class IMPASTO_PT_main(bpy.types.Panel):
                                   text=ch.label, icon='ADD',
                                   emboss=False)
                 op.channel_key = c.name
-                continue
+                return
             row.prop(binding, "enabled", text=ch.label)
             sub = row.row(align=True)
             sub.enabled = binding.enabled
@@ -599,11 +600,39 @@ class IMPASTO_PT_main(bpy.types.Panel):
             if layer.layer_type == 'PAINT':
                 image = bpy.data.images.get(binding.image_name
                                             or layer.image_name)
-                detail = col.row()
+                detail = parent.row()
                 detail.enabled = False
                 detail.label(text=("Image: %s" % image.name if image else
                                    "Image: missing"),
                              icon='IMAGE_DATA' if image else 'ERROR')
+
+        grouped = {'Core': [], 'Emission': [], 'Subsurface': []}
+        for c in state.channels:
+            ch = model.CHANNEL_MAP.get(c.name)
+            if ch is not None and c.enabled:
+                grouped.setdefault(ch.panel_group, []).append(c)
+
+        for c in grouped.get('Core', []):
+            draw_channel(col, c)
+
+        sections = (
+            ('Emission', 'ui_show_emission_channels', 'LIGHT'),
+            ('Subsurface', 'ui_show_subsurface_channels', 'SHADING_RENDERED'),
+        )
+        for group_name, prop_name, group_icon in sections:
+            channels = grouped.get(group_name, [])
+            if not channels:
+                continue
+            section = col.box()
+            expanded = getattr(layer, prop_name)
+            row = section.row(align=True)
+            row.prop(layer, prop_name, text=group_name,
+                     icon='TRIA_DOWN' if expanded else 'TRIA_RIGHT',
+                     emboss=False)
+            row.label(text="%d" % len(channels), icon=group_icon)
+            if expanded:
+                for c in channels:
+                    draw_channel(section, c)
 
 
 class IMPASTO_PT_preview_lighting(bpy.types.Panel):

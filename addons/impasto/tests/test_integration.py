@@ -25,8 +25,8 @@ try:
     impasto.register()
     check("package registration",
           hasattr(bpy.types.ShaderNodeTree, "impasto"))
-    check("metadata", impasto.bl_info["version"] == (0, 9, 13))
-    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.9.13")
+    check("metadata", impasto.bl_info["version"] == (0, 9, 14))
+    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.9.14")
     check("layer channel summary groups extended channels",
           impasto.ui._layer_channel_summary((
               "base_color", "metallic", "roughness", "normal", "height",

@@ -4,6 +4,11 @@ Current consolidated handoff: [`SESSION_2026-07-13.md`](SESSION_2026-07-13.md).
 It records the shipped GPU-resident architecture, validation, known limits,
 new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 
+## 0.9.14 — collapsible extended channel sections
+
+- The expanded layer Channels view keeps core channels visible while grouping
+  Emission and Subsurface bindings into separate collapsed sections.
+
 ## 0.9.13 — distinct layer-creation tooltips
 
 - Paint-layer buttons now explain that they create image canvases for brush
