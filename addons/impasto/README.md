@@ -253,10 +253,11 @@ blank) so an untouched Paint layer has no material effect.
 ### Cross-channel image stencil, brush alpha, and normal profiles
 
 Enable **Image Stencil** in the GPU Brush section and choose a Blender Image.
-**Viewport Stencil** fixes a numerically positioned/scaled/rotated image in the
-viewport; **Brush Alpha** maps it onto every dab. Alpha or grayscale luminance
-drives one mask shared by every enabled channel, preserving GPU-resident
-feedback and atomic undo. With **Normal Profile**, grayscale intensity is
+**Planar Viewport** fixes a numerically positioned/scaled/rotated image in the
+viewport; **Brush Footprint** maps it onto every dab. **Alpha Channel** or
+**Grayscale** chooses which image data is read. **Paint Coverage** applies it
+as one mask shared by every enabled channel, preserving GPU-resident feedback
+and atomic undo. With **Normal Relief**, grayscale intensity is
 treated as relief: local gradients generate tangent-space normal detail, with
 adjustable strength and inversion. This affects the Normal target only; linked
 Height deposition is not yet implemented. [STENCIL_WORKFLOW.md](STENCIL_WORKFLOW.md)

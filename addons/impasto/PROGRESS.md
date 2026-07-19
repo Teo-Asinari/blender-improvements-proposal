@@ -4,6 +4,15 @@ Current consolidated handoff: [`SESSION_2026-07-13.md`](SESSION_2026-07-13.md).
 It records the shipped GPU-resident architecture, validation, known limits,
 new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 
+## 0.9.8 — categorized stencil controls
+
+- Reorganized stencil settings into explicit Placement, Read Image From, and
+  Apply As groups, with mode-specific descriptions and transforms.
+- Renamed ambiguous display labels: Brush Footprint describes placement,
+  Alpha Channel/Grayscale describe the sampled data, and Paint Coverage/Normal
+  Relief describe the effect. Stored identifiers and saved files remain
+  compatible.
+
 ## 0.9.7 — preview-only Base Normal Map
 
 - Added an explicit Base Normal Map fallback in the Preview Lighting popover

@@ -8,11 +8,11 @@ modulates the coverage of every channel enabled on that Paint layer.
 
 Two projection modes are available:
 
-- **Viewport Stencil** fixes the image in the active viewport. Position is a
+- **Planar Viewport** fixes the image in the active viewport. Position is a
   normalized viewport center: `(0.5, 0.5)` is the center. Scale is the image's
   normalized viewport width and height: `(0.5, 0.25)` spans half the viewport
   width and one quarter of its height. Rotation is counter-clockwise.
-- **Brush Alpha** centers the image on every GPU dab. Position is irrelevant;
+- **Brush Footprint** centers the image on every GPU dab. Position is irrelevant;
   its independent Brush Scale multiplies the brush diameter on X and Y. Its
   `(1, 1)` default maps the image exactly across the round dab footprint on
   first use. Switching modes never reuses or overwrites Viewport Scale.

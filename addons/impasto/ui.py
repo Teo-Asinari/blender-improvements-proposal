@@ -205,25 +205,48 @@ class IMPASTO_PT_main(bpy.types.Panel):
         stencil_box.prop(layer, "brush_stencil_enabled")
         controls = stencil_box.column(align=True)
         controls.enabled = layer.brush_stencil_enabled
-        controls.template_ID(layer, "brush_stencil_image", open="image.open")
-        controls.prop(layer, "brush_stencil_projection", expand=True)
-        controls.prop(layer, "brush_stencil_interpretation", expand=True)
-        controls.prop(layer, "brush_stencil_usage", expand=True)
-        controls.prop(layer, "brush_stencil_opacity", slider=True)
-        if layer.brush_stencil_projection == 'VIEW_STENCIL':
-            controls.prop(layer, "brush_stencil_position")
-            controls.prop(layer, "brush_stencil_scale")
-        else:
-            controls.prop(layer, "brush_stencil_brush_scale")
-        controls.prop(layer, "brush_stencil_rotation")
-        if layer.brush_stencil_usage == 'NORMAL_PROFILE':
-            controls.prop(layer, "brush_stencil_profile_strength", slider=True)
-            controls.prop(layer, "brush_stencil_profile_invert")
+        self._draw_stencil_controls(controls, layer)
         row = col.row(align=True)
         row.prop(layer, "auto_material_preview", text="Idle Sync")
         delay = row.row(align=True)
         delay.enabled = layer.auto_material_preview
         delay.prop(layer, "auto_material_preview_delay", text="Delay")
+
+    def _draw_stencil_controls(self, col, layer):
+        """Present projection, source data, and effect as distinct choices."""
+        col.template_ID(layer, "brush_stencil_image", open="image.open")
+
+        col.separator()
+        col.label(text="Placement", icon='VIEW_CAMERA')
+        col.prop(layer, "brush_stencil_projection", expand=True)
+        if layer.brush_stencil_projection == 'VIEW_STENCIL':
+            col.label(text="Fixed camera-facing image", icon='INFO')
+            col.prop(layer, "brush_stencil_position", text="Position")
+            col.prop(layer, "brush_stencil_scale", text="Viewport Scale")
+        else:
+            col.label(text="Image follows every brush dab", icon='INFO')
+            col.prop(layer, "brush_stencil_brush_scale", text="Brush Scale")
+        col.prop(layer, "brush_stencil_rotation", text="Rotation")
+
+        col.separator()
+        col.label(text="Read Image From", icon='IMAGE_DATA')
+        col.prop(layer, "brush_stencil_interpretation", expand=True)
+
+        col.separator()
+        col.label(text="Apply As", icon='MODIFIER')
+        col.prop(layer, "brush_stencil_usage", expand=True)
+        col.prop(layer, "brush_stencil_opacity", text="Stamp Opacity",
+                 slider=True)
+        if layer.brush_stencil_usage == 'NORMAL_PROFILE':
+            col.prop(layer, "brush_stencil_profile_strength",
+                     text="Relief Strength", slider=True)
+            col.prop(layer, "brush_stencil_profile_invert",
+                     text="Invert Relief")
+            col.label(text="Grayscale gradients write Normal only",
+                      icon='NORMALS_FACE')
+        else:
+            col.label(text="Modulates every enabled paint channel",
+                      icon='INFO')
 
     def _draw_gpu_session(self, box):
         if gpu_engine.material_inspect_requested():
@@ -369,31 +392,7 @@ class IMPASTO_PT_main(bpy.types.Panel):
             stencil_box.prop(layer, "brush_stencil_enabled")
             stencil_controls = stencil_box.column(align=True)
             stencil_controls.enabled = layer.brush_stencil_enabled
-            stencil_controls.template_ID(layer, "brush_stencil_image",
-                                         open="image.open")
-            stencil_controls.prop(layer, "brush_stencil_projection",
-                                  expand=True)
-            stencil_controls.prop(layer, "brush_stencil_interpretation",
-                                  expand=True)
-            stencil_controls.prop(layer, "brush_stencil_usage", expand=True)
-            stencil_controls.prop(layer, "brush_stencil_opacity", slider=True)
-            if layer.brush_stencil_projection == 'VIEW_STENCIL':
-                stencil_controls.prop(layer, "brush_stencil_position")
-                stencil_controls.prop(layer, "brush_stencil_scale")
-            else:
-                stencil_controls.prop(layer, "brush_stencil_brush_scale")
-            stencil_controls.prop(layer, "brush_stencil_rotation")
-            if layer.brush_stencil_usage == 'NORMAL_PROFILE':
-                stencil_controls.prop(
-                    layer, "brush_stencil_profile_strength", slider=True)
-                stencil_controls.prop(layer, "brush_stencil_profile_invert")
-                stencil_controls.label(
-                    text="Writes Normal only; linked Height is deferred",
-                    icon='NORMALS_FACE')
-            else:
-                stencil_controls.label(
-                    text="One mask modulates every channel identically",
-                    icon='INFO')
+            self._draw_stencil_controls(stencil_controls, layer)
             row = gpu_col.row(align=True)
             row.prop(layer, "auto_material_preview", text="Idle Material Sync")
             sub = row.row(align=True)

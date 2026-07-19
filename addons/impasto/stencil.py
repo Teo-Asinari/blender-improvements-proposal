@@ -10,25 +10,25 @@ import math
 
 
 PROJECTION_ITEMS = (
-    ('VIEW_STENCIL', "Viewport Stencil",
+    ('VIEW_STENCIL', "Planar Viewport",
      "Fix the image in viewport space; brush strokes reveal it wherever "
      "they cross the stencil"),
-    ('BRUSH_ALPHA', "Brush Alpha",
+    ('BRUSH_ALPHA', "Brush Footprint",
      "Center the image on every dab as a textured brush tip"),
 )
 PROJECTION_IDS = frozenset(item[0] for item in PROJECTION_ITEMS)
 
 INTERPRETATION_ITEMS = (
-    ('ALPHA', "Alpha", "Use the image alpha channel as the mask"),
-    ('LUMINANCE', "Luminance",
+    ('ALPHA', "Alpha Channel", "Use the image alpha channel as the mask"),
+    ('LUMINANCE', "Grayscale",
      "Use linear RGB luminance as the mask; useful for grayscale images"),
 )
 INTERPRETATION_IDS = frozenset(item[0] for item in INTERPRETATION_ITEMS)
 
 USAGE_ITEMS = (
-    ('COVERAGE', "Coverage Mask",
+    ('COVERAGE', "Paint Coverage",
      "Multiply the shared opacity of every painted channel"),
-    ('NORMAL_PROFILE', "Normal Profile",
+    ('NORMAL_PROFILE', "Normal Relief",
      "Treat image intensity as height and derive tangent-normal detail "
      "from its gradients; only the Normal channel is painted"),
 )
