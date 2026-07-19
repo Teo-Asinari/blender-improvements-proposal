@@ -4,6 +4,19 @@ Current consolidated handoff: [`SESSION_2026-07-13.md`](SESSION_2026-07-13.md).
 It records the shipped GPU-resident architecture, validation, known limits,
 new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 
+## 0.9.7 — preview-only Base Normal Map
+
+- Added an explicit Base Normal Map fallback in the Preview Lighting popover
+  with Blender image/file selection, independent UV map, strength, and
+  green-channel inversion.
+- Base and painted normals use their own derivative tangent frames and combine
+  in world space for Lit, Raw, and Neutral resident previews.
+- Image and UV changes rebuild only preview resources in the owning draw
+  context; source images, material nodes, stack state, renders, and exports are
+  untouched.
+- Added real foreground GPU coverage for authoritative RGB upload, independent
+  UVs, live settings, missing resources, and preview shader compilation.
+
 ## 0.9.6 — pressure-opacity calibration
 
 - Compensate pressure-controlled per-dab alpha for predictable source-over
@@ -91,6 +104,14 @@ new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
   Image update complete; RMB/Esc still flushes before normal session exit.
 
 ## Newly requested roadmap TODOs
+
+- Qualify the preview-only Base Normal Map fallback across production meshes
+  and backend/driver combinations. It explicitly samples one chosen image/UV
+  with strength and green inversion in resident previews only; it intentionally
+  does not alter the material graph, layer stack, images, renders, or exports.
+- Longer term, replace that display-only bridge with arbitrary-UV resident
+  normal-stack composition and defined RNM/UDN semantics for opaque detail
+  maps.
 
 - Validate Emission and Subsurface resident preview against production renders
   across a wider range of HDRIs and object scales (painting is implemented).

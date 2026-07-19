@@ -707,6 +707,17 @@ def gpu_preview_lighting(layer):
     }
 
 
+def gpu_preview_base_normal(layer):
+    """Persistent display-only base-normal settings for the live preview."""
+    image = getattr(layer, "preview_base_normal_image", None)
+    return {
+        "base_normal_image_name": getattr(image, "name", "") if image else "",
+        "base_normal_uv_map": layer.preview_base_normal_uv_map,
+        "base_normal_strength": layer.preview_base_normal_strength,
+        "base_normal_invert_green": layer.preview_base_normal_invert_green,
+    }
+
+
 def gpu_stencil_settings(layer):
     """Persistent layer stencil state as an immutable runtime contract."""
     image = getattr(layer, "brush_stencil_image", None)
@@ -1055,6 +1066,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
                 and "normal" in keys else ()),
         }
         settings.update(gpu_preview_lighting(layer))
+        settings.update(gpu_preview_base_normal(layer))
         settings.update(gpu_stencil_settings(layer).as_gpu_settings())
         if not gpu_engine.start_session(obj, images, region,
                                         payloads=payloads,
@@ -1164,6 +1176,19 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         if layer is None:
             return False
         changed = gpu_engine.set_preview_lighting(gpu_preview_lighting(layer))
+        if changed:
+            self._region.tag_redraw()
+        return changed
+
+    def _refresh_preview_base_normal(self):
+        """Apply base-normal preview edits without restart or image readback."""
+        tree = bpy.data.node_groups.get(self._tree_name)
+        layer = (tree.impasto.layers.get(self._layer_uid)
+                 if tree is not None else None)
+        if layer is None:
+            return False
+        changed = gpu_engine.set_preview_base_normal(
+            gpu_preview_base_normal(layer))
         if changed:
             self._region.tag_redraw()
         return changed
@@ -1347,6 +1372,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         elif etype == 'TIMER':
             self._refresh_preview_mode()
             self._refresh_preview_lighting()
+            self._refresh_preview_base_normal()
             if (self._auto_inspect_deadline is not None
                     and time.monotonic() >= self._auto_inspect_deadline
                     and not gpu_engine.busy()

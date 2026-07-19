@@ -143,6 +143,22 @@ Stencil** draws a translucent camera-facing image and boundary using its exact
 position, scale, and rotation; **Brush Alpha** previews the transformed image
 at the cursor footprint. No preview readback or image synchronization occurs.
 
+#### Preview-only Base Normal Map fallback
+
+When an existing material normal cannot be represented by the restricted
+resident stack, choose an explicit **Base Normal Map** for GPU preview. The
+fallback samples the selected image with its selected UV map, applies an
+adjustable normal strength, and can invert the green channel for opposite-Y
+normal-map conventions. Strength zero is flat; strength one preserves the
+decoded map direction.
+
+This is deliberately **preview-only**. It affects Lit PBR, Raw Tangent Normal,
+and Neutral Normal Lighting while the resident GPU session is active. It does
+not modify Blender nodes, the Impasto layer stack, source images, saved paint,
+Kiln bakes, or export/render output. A missing image or invalid UV safely falls
+back to a flat normal. Use **Inspect Blender Material** for authoritative
+material evaluation.
+
 Lower tangent-normal images are planned before the first preview draw, and
 Kiln bakes whose alpha is zero or non-authoritative are uploaded without losing
 their Non-Color RGB whether Kiln is the baseline or selected canvas. This does
@@ -368,6 +384,11 @@ rewiring generated nodes.
   and show them in a tooltip alongside the rendered sphere. This requires a
   preset/asset model and cached preview renderer, so it remains separate from
   the lightweight live viewport stencil overlay.
+- **Implemented, preview-only — Base Normal Map fallback:** explicitly bind an
+  existing tangent-normal image and UV to resident Lit/diagnostic preview, with
+  strength and green-channel inversion. This is a display aid, not stack
+  composition or material/export wiring; full arbitrary-UV normal-stack
+  composition remains future work.
 - **GPU brush and adjustable-alpha parity:** reimplement useful equivalents of
   Blender's painting brushes on the resident multi-channel GPU path, including
   brush alpha/texture control. Deliver this in compatibility tiers: stamp-based

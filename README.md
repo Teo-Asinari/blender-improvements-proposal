@@ -43,7 +43,7 @@ default `0.1 m` voxel size from triggering a prohibitively expensive operation
 without review. A viewport guide draws grid slices and voxel-sized samples at
 all eight bounding-box corners so scale can be judged visually.
 
-### [Impasto](addons/impasto/) — v0.9.6 (active development)
+### [Impasto](addons/impasto/) — v0.9.7 (active development)
 
 A non-destructive Principled-PBR layer stack with Fill, Paint, and pass-through
 Group layers. One logical Paint layer can own separate Base Color, Metallic,
@@ -74,6 +74,14 @@ preview draw. Opaque upper normal maps still replace lower normals because
 normal layers use ordinary encoded-RGB MIX rather than RNM/UDN composition. The
 preview remains a perceptual approximation rather than Blender's exact
 Material Preview HDRI.
+
+For materials whose existing normal map cannot enter Impasto's restricted
+resident stack, GPU painting also offers an explicit **Base Normal Map**
+fallback. It supplies that image, UV map, strength, and optional green-channel
+inversion to Lit PBR and the normal diagnostic previews only. It does not edit
+the material node graph, painted images, bake/export output, or Blender's
+authoritative Material Preview; inspect the Blender material to verify the
+final result.
 Mixed UVs, image masks, participating upper layers, channel isolation,
 bake-down/export, arbitrary Blender brush textures, and specialized brush tools
 remain future work. Ctrl-S safely flushes before saving; menu-driven

@@ -537,6 +537,20 @@ class IMPASTO_PT_preview_lighting(bpy.types.Panel):
         col.prop(layer, "preview_key_strength", text="Key")
         col.prop(layer, "preview_key_rotation", text="Key Rotation")
         col.prop(layer, "preview_fill_strength", text="Fill")
+        col.separator()
+        col.label(text="Base Normal Map", icon='NORMALS_FACE')
+        col.template_ID(layer, "preview_base_normal_image", open="image.open")
+        if obj is not None and getattr(obj, "data", None) is not None:
+            col.prop_search(layer, "preview_base_normal_uv_map",
+                            obj.data, "uv_layers", text="UV Map")
+        else:
+            col.prop(layer, "preview_base_normal_uv_map", text="UV Map")
+        row = col.row(align=True)
+        row.enabled = layer.preview_base_normal_image is not None
+        row.prop(layer, "preview_base_normal_strength", text="Strength")
+        row.prop(layer, "preview_base_normal_invert_green", text="Invert Green",
+                 toggle=True)
+        col.label(text="Clear the image field to disable", icon='INFO')
         col.label(text="Preview only — paint data is unchanged", icon='INFO')
 
 

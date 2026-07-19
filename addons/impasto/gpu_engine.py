@@ -415,12 +415,20 @@ void main()
      * z-fighting against the mesh surface it sits on. */
     gl_Position.z -= %r * gl_Position.w;
     uvInterp = uv;
+    baseNormalUV = base_uv;
     worldPos = world.xyz;
     surfaceNormal = normalize(mat3(transpose(inverse(model_matrix))) * normal);
 }
 """ % CLIP_DEPTH_BIAS
 
 PREVIEW_FRAG_SRC = """
+vec3 impasto_decode_normal(vec3 encoded, float invert_green)
+{
+    vec3 n = encoded * 2.0 - 1.0;
+    if (invert_green > 0.5) n.y = -n.y;
+    return normalize(n);
+}
+
 vec3 srgb_to_linear(vec3 c)
 {
     vec3 lo = c / 12.92;
@@ -603,11 +611,6 @@ void main()
         sss_scale_tex, baseline_sss_scale_tex, baseline_sss_scale_value,
         baseline_sss_scale_is_texture, active_sss_scale,
         active_sss_scale_factor, active_sss_scale_blend, 0.0);
-    if (preview_mode == 1) {
-        vec3 encoded = normal_sample.rgb;
-        fragColor = vec4(encoded, 1.0);
-        return;
-    }
     if (preview_mode == 3) {
         float h = height_sample.r;
         fragColor = vec4(vec3(h), 1.0);
@@ -618,6 +621,7 @@ void main()
 
     vec3 dpdx = dFdx(worldPos), dpdy = dFdy(worldPos);
     vec2 dudx = dFdx(uvInterp), dudy = dFdy(uvInterp);
+    vec2 base_dudx = dFdx(baseNormalUV), base_dudy = dFdy(baseNormalUV);
     vec3 geometric_n = normalize(surfaceNormal);
     if (!gl_FrontFacing) geometric_n = -geometric_n;
     float uv_det = dudx.x * dudy.y - dudx.y * dudy.x;
@@ -638,8 +642,41 @@ void main()
     vec3 n = geometric_n;
     if (has_normal > 0.5) {
         vec3 encoded_n = normal_sample.rgb;
-        vec3 tangent_n = normalize(encoded_n * 2.0 - 1.0);
-        n = normalize(mat3(tangent, bitangent, geometric_n) * tangent_n);
+        vec3 detail_tangent_n = normalize(encoded_n * 2.0 - 1.0);
+        n = normalize(mat3(tangent, bitangent, geometric_n)
+                      * detail_tangent_n);
+    }
+    if (base_normal_enabled > 0.5) {
+        float base_uv_det = base_dudx.x * base_dudy.y
+                          - base_dudx.y * base_dudy.x;
+        vec3 base_tangent = tangent;
+        vec3 base_bitangent = bitangent;
+        if (abs(base_uv_det) > 1e-8) {
+            float base_orientation = sign(base_uv_det);
+            base_tangent = normalize(
+                (dpdx * base_dudy.y - dpdy * base_dudx.y)
+                * base_orientation);
+            base_bitangent = normalize(
+                (-dpdx * base_dudy.x + dpdy * base_dudx.x)
+                * base_orientation);
+        }
+        vec3 base_tangent_n = impasto_decode_normal(
+            texture(base_normal_tex, baseNormalUV).rgb,
+            base_normal_options.y);
+        base_tangent_n = normalize(vec3(
+            base_tangent_n.xy * base_normal_options.x,
+            max(base_tangent_n.z, 1e-5)));
+        vec3 base_world_n = normalize(mat3(
+            base_tangent, base_bitangent, geometric_n) * base_tangent_n);
+        /* Detail is already in the active UV's world-space TBN. Apply its
+         * deviation from the geometric normal over the independent base TBN. */
+        n = normalize(base_world_n + (n - geometric_n));
+    }
+    if (preview_mode == 1) {
+        vec3 active_tangent_n = transpose(
+            mat3(tangent, bitangent, geometric_n)) * n;
+        fragColor = vec4(active_tangent_n * 0.5 + 0.5, 1.0);
+        return;
     }
     if (has_height > 0.5) {
         /* Screen derivatives avoid four extra texture taps and keep the
@@ -933,6 +970,25 @@ def build_mesh_soup(obj):
             np.repeat(face[:, None, :], 3, axis=1).reshape(-1, 3),
             dtype=np.float32)
     return coords, uvs, normals
+
+
+def build_uv_soup(obj, uv_map_name=""):
+    """Return triangle-corner UVs for a named map without changing active UV."""
+    import numpy as np
+    me = obj.data
+    uv_layer = (me.uv_layers.get(uv_map_name) if uv_map_name
+                else me.uv_layers.active)
+    if uv_layer is None or len(me.loops) == 0:
+        return None
+    if hasattr(me, "calc_loop_triangles"):
+        me.calc_loop_triangles()
+    if len(me.loop_triangles) == 0:
+        return None
+    uv = np.empty(len(me.loops) * 2, dtype=np.float32)
+    uv_layer.data.foreach_get("uv", uv)
+    loops = np.empty(len(me.loop_triangles) * 3, dtype=np.int32)
+    me.loop_triangles.foreach_get("loops", loops)
+    return np.ascontiguousarray(uv.reshape(-1, 2)[loops], dtype=np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -1251,6 +1307,7 @@ def prepass_shader_create_info():
 def preview_shader_create_info():
     iface = gpu.types.GPUStageInterfaceInfo("gpu_paint_spike_preview_iface")
     iface.smooth('VEC2', "uvInterp")
+    iface.smooth('VEC2', "baseNormalUV")
     iface.smooth('VEC3', "worldPos")
     iface.smooth('VEC3', "surfaceNormal")
     info = gpu.types.GPUShaderCreateInfo()
@@ -1267,6 +1324,8 @@ def preview_shader_create_info():
     info.push_constant('VEC2', "preview_region_size")
     info.push_constant('FLOAT', "preview_depth_epsilon")
     info.push_constant('FLOAT', "preview_depth_relative_epsilon")
+    info.push_constant('FLOAT', "base_normal_enabled")
+    info.push_constant('VEC2', "base_normal_options")
     for name in GPU_PAINT_CHANNEL_KEYS:
         info.push_constant('FLOAT', "has_" + name)
         info.push_constant('FLOAT', "active_" + name)
@@ -1292,9 +1351,11 @@ def preview_shader_create_info():
                                  16):
         info.sampler(index, 'FLOAT_2D', "baseline_" + name + "_tex")
     info.sampler(21, 'FLOAT_2D', "preview_depth_tex")
+    info.sampler(22, 'FLOAT_2D', "base_normal_tex")
     info.vertex_in(0, 'VEC3', "pos")
     info.vertex_in(1, 'VEC2', "uv")
     info.vertex_in(2, 'VEC3', "normal")
+    info.vertex_in(3, 'VEC2', "base_uv")
     info.vertex_out(iface)
     info.fragment_out(0, 'VEC4', "fragColor")
     info.vertex_source(PREVIEW_VERT_SRC)
@@ -1603,6 +1664,10 @@ class _Session:
         self.copy_batch = None
         self.single_fbs = None
         self.environment_tex = None
+        self.base_normal_tex = None
+        self.base_normal_gpu_ref = None
+        self.base_normal_uvs = None
+        self.base_normal_resources_dirty = False
         self.stencil_tex = None
         self.stencil_image_name = ""
         self.stencil_preview_shader = None
@@ -1757,6 +1822,27 @@ def normalize_preview_mode(mode):
     return mode if mode in PREVIEW_MODE_INDEX else "LIT_PBR"
 
 
+def compose_preview_normals(base_rgb, detail_rgb=(0.5, 0.5, 1.0),
+                            strength=1.0, invert_green=False):
+    """Pure same-basis mirror of preview base-plus-detail composition."""
+    def unit(values):
+        length = math.sqrt(sum(value * value for value in values))
+        if length < 1e-12:
+            return (0.0, 0.0, 1.0)
+        return tuple(value / length for value in values)
+
+    base = [float(value) * 2.0 - 1.0 for value in base_rgb[:3]]
+    if invert_green:
+        base[1] = -base[1]
+    base = unit((base[0] * max(0.0, float(strength)),
+                 base[1] * max(0.0, float(strength)), max(base[2], 1e-5)))
+    detail = unit(tuple(float(value) * 2.0 - 1.0
+                        for value in detail_rgb[:3]))
+    combined = unit((base[0] + detail[0], base[1] + detail[1],
+                     base[2] + detail[2] - 1.0))
+    return tuple(value * 0.5 + 0.5 for value in combined)
+
+
 def preview_mode_index(mode):
     """Integer shader branch for a stable public preview identifier."""
     return PREVIEW_MODE_INDEX[normalize_preview_mode(mode)]
@@ -1782,6 +1868,34 @@ def set_preview_lighting(values):
         if s.settings.get(key) != value:
             s.settings[key] = value
             changed = True
+    return changed
+
+
+def set_preview_base_normal(values):
+    """Update preview-only base-normal inputs for the resident session."""
+    s = _session
+    if s is None:
+        return False
+    normalized = {
+        "base_normal_image_name": str(
+            values.get("base_normal_image_name", "") or ""),
+        "base_normal_uv_map": str(
+            values.get("base_normal_uv_map", "") or ""),
+        "base_normal_strength": max(
+            0.0, float(values.get("base_normal_strength", 1.0))),
+        "base_normal_invert_green": bool(
+            values.get("base_normal_invert_green", False)),
+    }
+    changed = False
+    resources_changed = False
+    for key, value in normalized.items():
+        if s.settings.get(key) != value:
+            s.settings[key] = value
+            changed = True
+            if key in {"base_normal_image_name", "base_normal_uv_map"}:
+                resources_changed = True
+    if resources_changed:
+        s.base_normal_resources_dirty = True
     return changed
 
 
@@ -1906,6 +2020,14 @@ def start_session(obj, images, region, channels=None, payloads=None,
     s.settings["material_inspect_requested"] = False
     s.coords = coords
     s.uvs = uvs
+    requested_base_uv = s.settings.get("base_normal_uv_map", "")
+    s.base_normal_uvs = build_uv_soup(obj, requested_base_uv)
+    if s.base_normal_uvs is None:
+        # A missing named map disables the fallback instead of silently
+        # sampling a different UV domain.
+        if requested_base_uv:
+            s.settings["base_normal_image_name"] = ""
+        s.base_normal_uvs = uvs
     s.normals = normals
     s.tri_uv_bboxes = triangle_uv_bboxes(uvs)
     _session = s
@@ -2414,7 +2536,8 @@ def _ensure_gpu(s):
         s.prepass_shader, 'TRIS', {"pos": s.coords})
     s.batch_preview = batch_for_shader(
         s.preview_shader, 'TRIS', {"pos": s.coords, "uv": s.uvs,
-                                  "normal": s.normals})
+                                  "normal": s.normals,
+                                  "base_uv": s.base_normal_uvs})
     s.copy_batch = batch_for_shader(
         s.copy_shader, 'TRI_FAN', {
             "pos": [(-1.0, -1.0, 0.0), (1.0, -1.0, 0.0),
@@ -2428,6 +2551,7 @@ def _ensure_gpu(s):
             "uv": [(0.0, 0.0), (1.0, 0.0),
                    (1.0, 1.0), (0.0, 1.0)]})
     _build_stack_baselines(s)
+    _ensure_base_normal_texture(s)
     s.history_backend = _GPUTileBackend(s)
     s.gpu_ready = True
 
@@ -2531,6 +2655,57 @@ def _build_stack_baselines(s):
         spec["enabled"] = False
         spec["status"] = "fallback: lower baseline build failed: %s" % exc
         traceback.print_exc()
+
+
+def _ensure_base_normal_texture(s):
+    """Upload an optional preview-only normal image with authoritative RGB."""
+    s.base_normal_tex = None
+    s.base_normal_gpu_ref = None
+    name = str(s.settings.get("base_normal_image_name", "") or "")
+    if not name:
+        return None
+    image = bpy.data.images.get(name)
+    if image is None or image.size[0] < 1 or image.size[1] < 1:
+        return None
+    try:
+        import numpy as np
+        width, height = int(image.size[0]), int(image.size[1])
+        values = np.empty(width * height * 4, dtype=np.float32)
+        image.pixels.foreach_get(values)
+        values.reshape(-1, 4)[:, 3] = 1.0
+        buffer = gpu.types.Buffer(
+            'FLOAT', (height, width, 4), values.reshape(height, width, 4))
+        s.base_normal_tex = gpu.types.GPUTexture(
+            (width, height), format='RGBA16F', data=buffer)
+        s.base_normal_gpu_ref = s.base_normal_tex
+    except Exception:
+        traceback.print_exc()
+        s.base_normal_tex = None
+        s.base_normal_gpu_ref = None
+    return s.base_normal_tex
+
+
+def _refresh_base_normal_resources(s):
+    """Rebuild preview-only image/UV GPU state in the owning draw context."""
+    if not s.base_normal_resources_dirty:
+        return
+    s.base_normal_resources_dirty = False
+    obj = bpy.data.objects.get(s.obj_name)
+    if obj is None or obj.type != 'MESH':
+        s.base_normal_tex = None
+        return
+    base_uvs = build_uv_soup(
+        obj, str(s.settings.get("base_normal_uv_map", "") or ""))
+    if base_uvs is None:
+        s.base_normal_tex = None
+        return
+    s.base_normal_uvs = base_uvs
+    _ensure_base_normal_texture(s)
+    from gpu_extras.batch import batch_for_shader
+    s.batch_preview = batch_for_shader(
+        s.preview_shader, 'TRIS', {"pos": s.coords, "uv": s.uvs,
+                                  "normal": s.normals,
+                                  "base_uv": s.base_normal_uvs})
 
 
 def _characterize_readback(s):
@@ -3324,6 +3499,8 @@ def _flush_session_gpu(s):
 
 def _draw_composed_preview(s):
     """Draw a low-cost PBR approximation from all resident textures."""
+    if s is not None and s.gpu_ready:
+        _refresh_base_normal_resources(s)
     if (not s.gpu_ready or s.preview_shader is None
             or s.batch_preview is None or s.view_proj is None
             or not s.paint_texs or s.depth_color_tex is None
@@ -3362,6 +3539,12 @@ def _draw_composed_preview(s):
     shader.uniform_float("preview_depth_epsilon", DEPTH_EPSILON)
     shader.uniform_float("preview_depth_relative_epsilon",
                          visibility.DEFAULT_POLICY.relative_epsilon)
+    base_normal_enabled = s.base_normal_tex is not None
+    shader.uniform_float("base_normal_enabled",
+                         1.0 if base_normal_enabled else 0.0)
+    shader.uniform_float("base_normal_options", (
+        max(0.0, float(s.settings.get("base_normal_strength", 1.0))),
+        1.0 if s.settings.get("base_normal_invert_green", False) else 0.0))
     for key in GPU_PAINT_CHANNEL_KEYS:
         channel_spec = (s.stack_spec.get("channels", {}).get(key, {})
                         if resolved else {})
@@ -3372,8 +3555,9 @@ def _draw_composed_preview(s):
                               "seed", model.seed_native(
                                   model.CHANNEL_MAP[key]))))
         baseline_tex = s.baseline_texs.get(key)
-        shader.uniform_float("has_" + key,
-                             1.0 if resolved or active else 0.0)
+        shader.uniform_float("has_" + key, 1.0 if (
+            resolved or active or (key == "normal" and base_normal_enabled))
+            else 0.0)
         shader.uniform_float("active_" + key, 1.0 if active else 0.0)
         shader.uniform_float("active_" + key + "_factor",
                              float(active_spec.get("factor", 1.0)))
@@ -3389,6 +3573,7 @@ def _draw_composed_preview(s):
                            (s.environment_tex
                             if s.environment_tex is not None else fallback))
     shader.uniform_sampler("preview_depth_tex", s.depth_color_tex)
+    shader.uniform_sampler("base_normal_tex", s.base_normal_tex or fallback)
     gpu.state.blend_set('ALPHA')
     gpu.state.depth_test_set('LESS_EQUAL')
     gpu.state.depth_mask_set(False)

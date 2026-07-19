@@ -341,6 +341,13 @@ try:
           ["lower_steps"][0]["source"]["image_name"]
           == "Kiln Runtime Normal",
           repr(gpu_engine._session.stack_spec))
+    check("live base-normal image/UV edits mark preview resources dirty",
+          gpu_engine.set_preview_base_normal({
+              "base_normal_image_name": images[1].name,
+              "base_normal_uv_map": "UVMap",
+              "base_normal_strength": 0.75,
+              "base_normal_invert_green": True})
+          and gpu_engine._session.base_normal_resources_dirty)
     gpu_engine.stop_session()
 
     # ---- operator surface ----------------------------------------------

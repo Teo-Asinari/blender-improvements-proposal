@@ -57,13 +57,13 @@ detail_at = main.index("vec3 dpdx")
 neutral_at = main.index("if (preview_mode == 2)")
 pbr_at = main.index("vec3 v = normalize(camera_position - worldPos)")
 
-check("raw diagnostics return before detail and PBR work",
-      raw_normal_at < detail_at and raw_height_at < detail_at)
+check("diagnostics return before PBR work; Raw follows TBN composition",
+      raw_height_at < detail_at < raw_normal_at < neutral_at)
 check("neutral detail mode returns before microfacet lighting",
       detail_at < neutral_at < pbr_at)
 check("all diagnostic channels use resolved lower-plus-active samples",
       "resolve_stack_channel" in main
-      and "vec3 encoded = normal_sample.rgb" in main
+      and "active_tangent_n * 0.5 + 0.5" in main
       and "float h = height_sample.r" in main)
 check("base/scalar PBR channels reuse the resolved samples",
       "? base.rgb : vec3(0.5)" in main
@@ -91,6 +91,28 @@ check("resident alpha gates the active layer exactly once",
       "active_factor * source.a" in src)
 check("normal is decoded only after encoded-domain stack composition",
       "vec3 encoded_n = normal_sample.rgb" in src)
+check("preview-only base normal composes beneath resolved paint in all modes",
+      "texture(base_normal_tex, baseNormalUV)" in main
+      and "base_world_n + (n - geometric_n)" in main
+      and main.index("base_world_n + (n - geometric_n)") < raw_normal_at
+      and 'sampler(22, \'FLOAT_2D\', "base_normal_tex")' in
+      inspect.getsource(gpu_engine.preview_shader_create_info))
+check("base normal path has independent UV, strength and green inversion",
+      "baseNormalUV = base_uv" in gpu_engine.PREVIEW_VERT_SRC
+      and "base_normal_options.x" in main
+      and "base_normal_options.y" in main
+      and "base_normal_image_name" in
+      inspect.getsource(gpu_engine._ensure_base_normal_texture)
+      and "base_uv_det" in main and "base_tangent" in main)
+check("live image and UV changes rebuild only preview GPU resources",
+      "base_normal_resources_dirty" in
+      inspect.getsource(gpu_engine.set_preview_base_normal)
+      and "build_uv_soup" in
+      inspect.getsource(gpu_engine._refresh_base_normal_resources)
+      and "batch_preview" in
+      inspect.getsource(gpu_engine._refresh_base_normal_resources)
+      and "request_flush" not in
+      inspect.getsource(gpu_engine.set_preview_base_normal))
 check("emission color and HDR strength remain independently resolved",
       "active_emission_color_blend, 1.0" in src
       and "active_emission_strength_blend, 0.0" in src
@@ -124,6 +146,19 @@ check("zero-alpha encoded normal is exactly flat",
 check("partial normal alpha produces intermediate tilt",
       0.0 < quarter[0] < full[0] and full[2] < quarter[2] < 1.0,
       "quarter=%r full=%r" % (quarter, full))
+
+base = (0.7, 0.3, 1.0)
+neutral_detail = gpu_engine.compose_preview_normals(base)
+zero_strength = gpu_engine.compose_preview_normals(base, strength=0.0)
+inverted = gpu_engine.compose_preview_normals(base, invert_green=True)
+check("neutral painted normal preserves preview base normal",
+      neutral_detail[0] > 0.5 and neutral_detail[1] < 0.5)
+check("zero base strength is flat",
+      all(abs(a - b) < 1e-7 for a, b in
+          zip(zero_strength, (0.5, 0.5, 1.0))), repr(zero_strength))
+check("green inversion flips only base normal Y polarity",
+      abs(inverted[0] - neutral_detail[0]) < 1e-7
+      and inverted[1] > 0.5 > neutral_detail[1])
 
 # Height directions should be symmetric, with 0.5/constant height neutral.
 height_flat = height_normal(0.0, 0.0)

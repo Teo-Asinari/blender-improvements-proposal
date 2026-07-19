@@ -300,6 +300,20 @@ class ImpastoLayer(bpy.types.PropertyGroup):
         name="Fill Strength",
         description="Brightness of the broad light revealing recessed areas",
         default=1.0, min=0.0, soft_max=8.0)
+    preview_base_normal_image: PointerProperty(
+        name="Base Normal Map", type=bpy.types.Image,
+        description="Optional normal map used only by Impasto's live preview")
+    preview_base_normal_uv_map: StringProperty(
+        name="UV Map",
+        description="Mesh UV map used by the preview-only base normal")
+    preview_base_normal_strength: FloatProperty(
+        name="Strength",
+        description="Strength of the preview-only base normal map",
+        default=1.0, min=0.0, soft_max=4.0)
+    preview_base_normal_invert_green: BoolProperty(
+        name="Invert Green",
+        description="Invert the normal map's green channel (DirectX/OpenGL convention)",
+        default=False)
     paint_workflow: EnumProperty(
         name="Paint Engine",
         items=(('GPU', "GPU Multi-Channel",

@@ -145,7 +145,8 @@ check("active Base decodes once while baseline stays scene-linear",
       and "texture(baseline_tex, uvInterp)" in preview_src)
 draw_src = __import__("inspect").getsource(gpu_engine._draw_composed_preview)
 check("resolved channels remain enabled without active paint targets",
-      '1.0 if resolved or active else 0.0' in draw_src)
+      'resolved or active or (key == "normal" and base_normal_enabled)'
+      in draw_src)
 baseline_build_src = __import__("inspect").getsource(
     gpu_engine._build_stack_baselines)
 check("opaque lower images preserve raw RGB despite bake alpha",
@@ -240,10 +241,10 @@ decode_at = preview_src.index("if (has_normal > 0.5)")
 neutral_at = preview_src.index("if (preview_mode == 2)")
 pbr_at = preview_src.index("vec3 v = normalize(camera_position - worldPos)")
 check("Raw, Neutral, and Lit all consume the same resolved normal stack",
-      normal_resolve_at < raw_at < decode_at < neutral_at < pbr_at
-      and "vec3 encoded = normal_sample.rgb" in preview_src[raw_at:decode_at]
+      normal_resolve_at < decode_at < raw_at < neutral_at < pbr_at
       and "vec3 encoded_n = normal_sample.rgb" in
-          preview_src[decode_at:neutral_at])
+          preview_src[decode_at:raw_at]
+      and "active_tangent_n" in preview_src[raw_at:neutral_at])
 
 # Inverted mask and use_masks=False follow compiler factor semantics.
 inverted = model.MaskModel(uid="inv", image_name="Inv", opacity=0.5,

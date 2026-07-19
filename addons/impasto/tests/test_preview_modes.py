@@ -110,6 +110,8 @@ try:
         ops.IMPASTO_OT_gpu_paint._refresh_preview_mode(operator)
     operator._refresh_preview_lighting = lambda: \
         ops.IMPASTO_OT_gpu_paint._refresh_preview_lighting(operator)
+    operator._refresh_preview_base_normal = lambda: \
+        ops.IMPASTO_OT_gpu_paint._refresh_preview_base_normal(operator)
     operator._refresh_stroke_settings = lambda context: \
         ops.IMPASTO_OT_gpu_paint._refresh_stroke_settings(operator, context)
     operator._request_save_boundary = lambda save_as=False: \
@@ -132,6 +134,34 @@ try:
           and gpu_engine.session_active())
     check("lighting edits queue no CPU image synchronization",
           gpu_engine.take_pending_pixels() is None)
+
+    base_normal = bpy.data.images.new("Impasto Preview Base Normal", 8, 8)
+    layer.preview_base_normal_image = base_normal
+    layer.preview_base_normal_uv_map = "UVMap"
+    layer.preview_base_normal_strength = 1.75
+    layer.preview_base_normal_invert_green = True
+    base_settings = ops.gpu_preview_base_normal(layer)
+    check("preview base normal properties persist as runtime settings",
+          base_settings == {
+              "base_normal_image_name": base_normal.name,
+              "base_normal_uv_map": "UVMap",
+              "base_normal_strength": 1.75,
+              "base_normal_invert_green": True,
+          })
+    check("live base normal edits apply without restarting session",
+          operator._refresh_preview_base_normal()
+          and gpu_engine.session_active())
+    _payloads, live_settings = gpu_engine.stroke_settings_snapshot()
+    check("resident session receives preview base normal settings",
+          all(live_settings[key] == value
+              for key, value in base_settings.items()))
+    check("base normal edits queue no CPU image synchronization",
+          gpu_engine.take_pending_pixels() is None)
+    layer.preview_base_normal_image = None
+    check("clearing base normal disables it live",
+          operator._refresh_preview_base_normal()
+          and gpu_engine.stroke_settings_snapshot()[1]
+              ["base_normal_image_name"] == "")
 
     timer_event = NS(type='TIMER', value='NOTHING', mouse_x=0, mouse_y=0,
                      pressure=0.0, ctrl=False, shift=False)
