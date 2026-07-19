@@ -1313,6 +1313,19 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             self._region.tag_redraw()
         return changed
 
+    def _refresh_sss_caliper(self, context):
+        """Apply SSS caliper toggles/values without restarting painting."""
+        tree = bpy.data.node_groups.get(self._tree_name)
+        layer = (tree.impasto.layers.get(self._layer_uid)
+                 if tree is not None else None)
+        if layer is None:
+            return False
+        changed = gpu_engine.set_sss_caliper(
+            gpu_sss_caliper(layer, context.scene))
+        if changed:
+            self._region.tag_redraw()
+        return changed
+
     def _apply_pending_sync(self):
         """Write an explicitly flushed readback into the channel Image
         datablocks — always here, never in a draw callback."""
@@ -1493,6 +1506,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             self._refresh_preview_mode()
             self._refresh_preview_lighting()
             self._refresh_preview_base_normal()
+            self._refresh_sss_caliper(context)
             if (self._auto_inspect_deadline is not None
                     and time.monotonic() >= self._auto_inspect_deadline
                     and not gpu_engine.busy()

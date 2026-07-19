@@ -1,5 +1,15 @@
 # Impasto — multi-channel painting milestone progress
 
+## 0.9.18 — live and self-identifying SSS caliper
+
+- The Show SSS Caliper toggle now updates during an active GPU paint session.
+- Each colored circumference is labeled R, G, or B; overlay text explicitly
+  distinguishes the screen-sized white brush circle from the SSS rings.
+- Caliper magnification is mesh-relative, preventing zoom thresholds from
+  making the colored rings jump discontinuously.
+- The hover tooltip explains the colors, equation, white circle, and current
+  GPU-session scope.
+
 ## 0.9.17 — subsurface caliper
 
 - Optional cursor-centred RGB rings visualize effective Subsurface distances

@@ -1901,6 +1901,19 @@ def set_preview_base_normal(values):
     return changed
 
 
+def set_sss_caliper(values):
+    """Refresh the cursor caliper immediately during a live session."""
+    s = _session
+    if s is None:
+        return False
+    changed = False
+    for key, value in values.items():
+        if s.settings.get(key) != value:
+            s.settings[key] = value
+            changed = True
+    return changed
+
+
 def current_preview_mode():
     if _session is None:
         return "LIT_PBR"
@@ -3697,18 +3710,19 @@ def _draw_brush_reticle(s):
 
 
 def sss_caliper_layout(scale, radius_rgb, pixels_per_unit, bbox_diagonal,
-                       minimum_pixels=18.0):
+                       minimum_mesh_fraction=0.05):
     """Pure caliper math shared by the viewport overlay and tests.
 
-    Distances remain in Blender scene units.  A decade multiplier is used
-    only for display when the largest effective radius would otherwise be
-    too small to read; the label always reports the unscaled measurement.
+    Distances remain in Blender scene units. Magnification is derived from
+    mesh size, never screen pixels, so zoom cannot trigger decade-size jumps.
+    The label always reports the unscaled measurement.
     """
     scale = max(0.0, float(scale))
     effective = tuple(scale * max(0.0, float(v)) for v in radius_rgb[:3])
-    largest_px = max(effective, default=0.0) * max(0.0, pixels_per_unit)
+    largest = max(effective, default=0.0)
+    target = max(0.0, bbox_diagonal) * max(0.0, minimum_mesh_fraction)
     multiplier = 1.0
-    while (largest_px > 0.0 and largest_px * multiplier < minimum_pixels
+    while (largest > 0.0 and largest * multiplier < target
            and multiplier < 1e6):
         multiplier *= 10.0
     pixels = tuple(v * max(0.0, pixels_per_unit) * multiplier
@@ -3816,18 +3830,32 @@ def _draw_sss_caliper(s, region, rv3d):
 
     import blf
     unit_scale = float(s.settings.get("scene_unit_scale", 1.0))
-    values = "/".join(_format_scene_length(v, unit_scale)
-                      for v in effective)
-    pct = "/".join("%.2g%%" % value for value in percentages)
-    suffix = "  display x%d" % int(multiplier) if multiplier > 1.0 else ""
-    line1 = "SSS Scale %s | RGB %s%s" % (
-        _format_scene_length(scale, unit_scale), values, suffix)
-    line2 = "RGB of mesh diagonal: %s" % pct
+    labels = "  ".join("%s %s (%.2g%% mesh)" % (
+        name, _format_scene_length(distance, unit_scale), percentage)
+        for name, distance, percentage in zip(
+            ("R", "G", "B"), effective, percentages))
+    lines = [
+        "SSS CALIPER — colored rings = Scale x Radius RGB",
+        labels,
+        "Colored rings zoom with mesh; white brush ring stays screen-sized",
+    ]
+    if multiplier > 1.0:
+        lines.append("Visual magnification x%d; labels are actual distances"
+                     % int(multiplier))
     blf.size(0, 11)
-    for index, line in enumerate((line1, line2)):
+    for index, line in enumerate(lines):
         blf.position(0, s.cursor[0] + 14, s.cursor[1] + 16 + index * 15, 0)
         blf.color(0, 1.0, 1.0, 1.0, 0.95)
         blf.draw(0, line)
+    for name, radius_px, color, angle in zip(
+            ("R", "G", "B"), radii_px, colors,
+            (0.0, math.tau / 3.0, 2.0 * math.tau / 3.0)):
+        if radius_px < 0.5:
+            continue
+        blf.position(0, s.cursor[0] + math.cos(angle) * radius_px + 3,
+                     s.cursor[1] + math.sin(angle) * radius_px + 3, 0)
+        blf.color(0, *color)
+        blf.draw(0, name)
 
 
 def _overlay_text_lines(s):

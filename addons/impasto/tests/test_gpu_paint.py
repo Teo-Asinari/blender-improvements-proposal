@@ -41,13 +41,19 @@ effective, ring_px, percentages, multiplier = gpu_engine.sss_caliper_layout(
 check("SSS caliper uses Scale times RGB Radius",
       effective == (0.01, 0.005, 0.0025))
 check("SSS caliper auto-magnifies tiny distances by labelled decades",
-      ring_px == (100.0, 50.0, 25.0) and multiplier == 100.0)
+      ring_px == (10.0, 5.0, 2.5) and multiplier == 10.0)
 check("SSS caliper reports mesh-relative effective distances",
       percentages == (0.5, 0.25, 0.125))
 effective, ring_px, _percentages, multiplier = gpu_engine.sss_caliper_layout(
     0.5, (1.0, 0.2, 0.1), 100.0, 10.0)
 check("legible SSS calipers are not magnified",
       ring_px == (50.0, 10.0, 5.0) and multiplier == 1.0)
+_effective, zoomed_px, _percentages, zoomed_multiplier = \
+    gpu_engine.sss_caliper_layout(
+        0.01, (1.0, 0.5, 0.25), 25.0, 2.0)
+check("zoom changes ring pixels continuously without changing magnification",
+      zoomed_px == (2.5, 1.25, 0.625)
+      and zoomed_multiplier == 10.0)
 
 
 try:
@@ -295,6 +301,11 @@ try:
     gpu_engine.set_cursor(21, 37)
     check("GPU reticle tracks viewport mouse coordinates",
           gpu_engine.cursor_position() == (21.0, 37.0))
+    check("SSS caliper toggles update without restarting the session",
+          gpu_engine.set_sss_caliper({"sss_caliper_enabled": True})
+          and gpu_engine._session.settings["sss_caliper_enabled"] is True
+          and gpu_engine.set_sss_caliper({"sss_caliper_enabled": False})
+          and gpu_engine._session.settings["sss_caliper_enabled"] is False)
     refreshed_brush = dict(brush)
     refreshed_brush["color"] = (0.2, 0.4, 0.6)
     refreshed_brush["height_strength"] = 0.125
