@@ -81,7 +81,8 @@ fallback. It supplies that image, UV map, strength, and optional green-channel
 inversion to Lit PBR and the normal diagnostic previews only. It does not edit
 the material node graph, painted images, bake/export output, or Blender's
 authoritative Material Preview; inspect the Blender material to verify the
-final result.
+final result. Planned follow-up will discover Kiln's bake target automatically
+while retaining the explicit image picker as the authoritative manual override.
 Mixed UVs, image masks, participating upper layers, channel isolation,
 bake-down/export, arbitrary Blender brush textures, and specialized brush tools
 remain future work. Ctrl-S safely flushes before saving; menu-driven

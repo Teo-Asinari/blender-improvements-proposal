@@ -389,6 +389,10 @@ rewiring generated nodes.
   strength and green-channel inversion. This is a display aid, not stack
   composition or material/export wiring; full arbitrary-UV normal-stack
   composition remains future work.
+- **Automatic Kiln preview-normal discovery:** when no manual Base Normal Map
+  override is selected, discover the material's Kiln bake target and recorded
+  UV automatically. Preserve the explicit picker as the authoritative override
+  and show whether the resolved source is Automatic or Manual.
 - **GPU brush and adjustable-alpha parity:** reimplement useful equivalents of
   Blender's painting brushes on the resident multi-channel GPU path, including
   brush alpha/texture control. Deliver this in compatibility tiers: stamp-based

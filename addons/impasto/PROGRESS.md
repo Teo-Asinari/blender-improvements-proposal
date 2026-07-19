@@ -112,6 +112,9 @@ new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 - Longer term, replace that display-only bridge with arbitrary-UV resident
   normal-stack composition and defined RNM/UDN semantics for opaque detail
   maps.
+- Auto-populate the preview-only Base Normal Map from the current material's
+  Kiln bake target and recorded UV when no manual image is selected. Keep the
+  manual picker authoritative and display the resolved source explicitly.
 
 - Validate Emission and Subsurface resident preview against production renders
   across a wider range of HDRIs and object scales (painting is implemented).
