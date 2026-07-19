@@ -12,7 +12,7 @@ if ADDONS not in sys.path:
     sys.path.insert(0, ADDONS)
 
 import impasto
-from impasto import compat, engine, model
+from impasto import compat, engine, model, ui
 
 
 def check(name, condition, detail=""):
@@ -41,6 +41,34 @@ try:
     mat = obj.active_material
     root = engine.find_stack_for_material(mat)
     layer = root.impasto.active_layer()
+    paint_menu_keys = {
+        channel.key for channel in ui._missing_channels(bpy.context, True)}
+    register_menu_keys = {
+        channel.key for channel in ui._missing_channels(bpy.context, False)}
+    check("Paint-layer Add Channel menu exposes only paintable channels",
+          paint_menu_keys <= set(ui.gpu_engine.GPU_PAINT_CHANNEL_KEYS)
+          and "sss_ior" not in paint_menu_keys
+          and "sss_anisotropy" not in paint_menu_keys)
+    check("registration-only menu retains non-paintable Principled channels",
+          {"sss_ior", "sss_anisotropy"} <= register_menu_keys)
+    check("add-channel operator is registered",
+          getattr(bpy.types, "IMPASTO_OT_channel_add", None) is not None)
+    check("one-click channel action registers and binds active layer",
+          bpy.ops.impasto.channel_add(
+              channel_key="emission_strength",
+              bind_active_layer=True) == {"FINISHED"}
+          and root.impasto.channels.get("emission_strength") is not None
+          and layer.bindings.get("emission_strength") is not None)
+    emission_binding = layer.bindings.get("emission_strength")
+    check("one-click paint binding owns a correctly seeded canvas",
+          emission_binding.mode == "SHARED"
+          and bpy.data.images.get(emission_binding.image_name) is not None)
+    check("register-only action leaves selected layer unbound",
+          bpy.ops.impasto.channel_add(
+              channel_key="sss_ior",
+              bind_active_layer=False) == {"FINISHED"}
+          and root.impasto.channels.get("sss_ior") is not None
+          and layer.bindings.get("sss_ior") is None)
     image = bpy.data.images[layer.image_name]
     with engine.stack_edit_session(root):
         layer.bindings.clear()

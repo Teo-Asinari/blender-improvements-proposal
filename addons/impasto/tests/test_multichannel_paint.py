@@ -58,6 +58,44 @@ try:
           colorspace_is(base_img, "sRGB")
           and tuple(base_img.size) == (ops.DEFAULT_IMAGE_SIZE,) * 2)
 
+    # Channels omitted by the creation template can be registered later and
+    # bound without rebuilding existing layer/image state.
+    late_keys = ("emission_color", "emission_strength", "sss_weight",
+                 "sss_radius", "sss_scale")
+    active_before = (state.active_layer_uid, state.active_index)
+    base_before = (base.image_name, base_img.as_pointer())
+    for key in late_keys:
+        check("late-register and bind %s" % key,
+              bpy.ops.impasto.channel_add(
+                  channel_key=key, bind_active_layer=True) == {"FINISHED"})
+    check("late channels retain registry order",
+          [channel.name for channel in state.channels]
+          == sorted((channel.name for channel in state.channels),
+                    key=lambda key: model.CHANNEL_ORDER[key]))
+    layer = state.active_layer()
+    base = layer.bindings.get("base_color")
+    base_img = bpy.data.images.get(base.image_name) if base else None
+    check("late registration preserves active layer and existing canvas",
+          (state.active_layer_uid, state.active_index) == active_before
+          and base_img is not None
+          and (base.image_name, base_img.as_pointer()) == base_before)
+    for key in late_keys:
+        binding = layer.bindings.get(key)
+        image = bpy.data.images.get(binding.image_name) if binding else None
+        check("late %s binding owns correct canvas" % key,
+              binding is not None and image is not None
+              and colorspace_is(image, model.CHANNEL_MAP[key].colorspace))
+    image_count = len(bpy.data.images)
+    binding_names = tuple(binding.name for binding in layer.bindings)
+    check("late channel registration is idempotent",
+          bpy.ops.impasto.channel_add(
+              channel_key="emission_color", bind_active_layer=True)
+          == {"FINISHED"}
+          and len(bpy.data.images) == image_count
+          and tuple(binding.name for binding in layer.bindings) == binding_names)
+    check("late channel graph reconciles to zero deltas",
+          engine.reconcile_stack(tree).total() == 0)
+
     # One logical layer, one image per channel.
     for key in ("roughness", "metallic", "height"):
         check("bind %s" % key, bpy.ops.impasto.binding_add(
@@ -121,9 +159,10 @@ try:
 
     # GPU target planning follows registry order with per-binding images.
     targets = ops.gpu_paint_targets(layer)
+    expected_target_keys = ["base_color", "metallic", "roughness", "height"] \
+        + list(late_keys)
     check("gpu targets in registry order",
-          [key for key, _img in targets]
-          == ["base_color", "metallic", "roughness", "height"],
+          [key for key, _img in targets] == expected_target_keys,
           str([key for key, _img in targets]))
     check("gpu targets carry the per-binding canvases",
           all(img is images[key] for key, img in targets))

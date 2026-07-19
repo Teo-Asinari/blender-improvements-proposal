@@ -9,7 +9,7 @@ import time
 from dataclasses import replace
 
 import bpy
-from bpy.props import EnumProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, StringProperty
 
 from . import compat
 from . import brush_adapter
@@ -100,6 +100,85 @@ def _layer_canvas_size(layer):
     return DEFAULT_IMAGE_SIZE
 
 
+def ensure_stack_channel(state, channel_key):
+    """Idempotently register one model channel, preserving registry order."""
+    channel = model.CHANNEL_MAP.get(channel_key)
+    if channel is None:
+        raise ValueError("unknown Impasto channel %r" % channel_key)
+    existing = state.channels.get(channel_key)
+    if existing is not None:
+        return existing, False
+    item = state.channels.add()
+    item.name = channel_key
+    source_index = len(state.channels) - 1
+    target_index = sum(
+        1 for other in state.channels
+        if other.name != channel_key
+        and model.CHANNEL_ORDER.get(other.name, 10 ** 6)
+        < model.CHANNEL_ORDER[channel_key])
+    if source_index != target_index:
+        state.channels.move(source_index, target_index)
+    return state.channels.get(channel_key), True
+
+
+def ensure_layer_binding(layer, channel_key):
+    """Idempotently bind a registered channel to one non-group layer."""
+    channel = model.CHANNEL_MAP.get(channel_key)
+    if channel is None:
+        raise ValueError("unknown Impasto channel %r" % channel_key)
+    if layer is None or layer.layer_type == 'GROUP':
+        raise ValueError("a non-group layer must be selected")
+    binding = layer.bindings.get(channel_key)
+    if binding is not None:
+        binding.enabled = True
+        return binding, False
+    binding = layer.bindings.add()
+    binding.name = channel_key
+    if layer.layer_type == 'PAINT':
+        binding.mode = 'SHARED'
+        image = new_layer_image(
+            "Impasto %s %s %s" % (layer.label, channel.label, layer.name),
+            channel.colorspace, size=_layer_canvas_size(layer),
+            generated_color=_channel_canvas_seed(channel))
+        binding.image_name = image.name
+    elif channel.kind == 'COLOR':
+        binding.mode = 'COLOR'
+        binding.color = model.seed_rgba(channel)
+    else:
+        binding.mode = 'VALUE'
+        binding.value = float(channel.default_value[0])
+    return binding, True
+
+
+def _remember_displaced_channel_link(mat, channel_key):
+    """Preserve a pre-stack Principled link for Remove Stack restoration."""
+    if mat is None or mat.node_tree is None:
+        return
+    channel = model.CHANNEL_MAP[channel_key]
+    socket_name = "Normal" if channel_key == "height" else channel.socket
+    if not socket_name:
+        return
+    principled = compat.find_principled(mat.node_tree)
+    socket = (compat.find_socket(principled.inputs, socket_name)
+              if principled is not None else None)
+    if socket is None:
+        return
+    try:
+        displaced = json.loads(mat.impasto_mat.displaced_links or "[]")
+    except Exception:
+        displaced = []
+    if any(entry.get("to_socket") == socket_name for entry in displaced):
+        return
+    generated = mat.node_tree.nodes.get(model.n_material_stack())
+    for link in tuple(socket.links):
+        if generated is not None and link.from_node == generated:
+            continue
+        displaced.append({"from_node": link.from_node.name,
+                          "from_socket": link.from_socket.identifier,
+                          "to_socket": socket_name})
+    mat.impasto_mat.displaced_links = json.dumps(displaced)
+
+
 def import_normal_baseline(mat, image, uv_map="", fallback_node_name=""):
     """Insert or update an external tangent normal image at stack bottom.
 
@@ -123,9 +202,7 @@ def import_normal_baseline(mat, image, uv_map="", fallback_node_name=""):
     active_uid = state.active_layer_uid
     imported = None
     with engine.stack_edit_session(tree):
-        if not any(c.name == "normal" for c in state.channels):
-            channel = state.channels.add()
-            channel.name = "normal"
+        ensure_stack_channel(state, "normal")
         for layer in state.layers:
             for binding in layer.bindings:
                 if (binding.name == "normal"
@@ -350,7 +427,7 @@ class IMPASTO_OT_layer_add(bpy.types.Operator):
         return _context_stack(context)[1] is not None
 
     def execute(self, context):
-        _, tree = _context_stack(context)
+        mat, tree = _context_stack(context)
         state = tree.impasto
         uid = _unique_uid(state)
         count = sum(1 for ly in state.layers
@@ -448,6 +525,46 @@ class IMPASTO_OT_layer_move(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class IMPASTO_OT_channel_add(bpy.types.Operator):
+    """Register a missing stack channel and optionally bind the active layer."""
+    bl_idname = "impasto.channel_add"
+    bl_label = "Impasto: Add Material Channel"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    channel_key: StringProperty()
+    bind_active_layer: BoolProperty(
+        name="Bind Active Layer", default=True,
+        description="Also create this channel on the selected Paint/Fill layer")
+
+    @classmethod
+    def poll(cls, context):
+        return _context_stack(context)[1] is not None
+
+    def execute(self, context):
+        mat, tree = _context_stack(context)
+        state = tree.impasto
+        ch = model.CHANNEL_MAP.get(self.channel_key)
+        if ch is None:
+            return {'CANCELLED'}
+        layer = state.active_layer()
+        can_bind = layer is not None and layer.layer_type != 'GROUP'
+        registered = state.channels.get(ch.key) is not None
+        bound = can_bind and layer.bindings.get(ch.key) is not None
+        if registered and (not self.bind_active_layer or bound or not can_bind):
+            self.report({'INFO'}, "%s is already available" % ch.label)
+            return {'FINISHED'}
+        _remember_displaced_channel_link(mat, ch.key)
+        with engine.stack_edit_session(tree):
+            ensure_stack_channel(state, ch.key)
+            if self.bind_active_layer and can_bind:
+                ensure_layer_binding(layer, ch.key)
+        message = "%s added to stack" % ch.label
+        if self.bind_active_layer and can_bind:
+            message += " and selected layer"
+        self.report({'INFO'}, message)
+        return {'FINISHED'}
+
+
 class IMPASTO_OT_binding_add(bpy.types.Operator):
     """Bind the active layer to a channel (paint layers get a dedicated
     per-channel canvas; fill layers deposit the channel's default
@@ -460,41 +577,21 @@ class IMPASTO_OT_binding_add(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        _, tree = _context_stack(context)
+        mat, tree = _context_stack(context)
         ly = tree.impasto.active_layer() if tree else None
         return ly is not None and ly.layer_type != 'GROUP'
 
     def execute(self, context):
-        _, tree = _context_stack(context)
+        mat, tree = _context_stack(context)
         state = tree.impasto
         ly = state.active_layer()
         ch = model.CHANNEL_MAP.get(self.channel_key)
         if ly is None or ch is None:
             return {'CANCELLED'}
+        _remember_displaced_channel_link(mat, ch.key)
         with engine.stack_edit_session(tree):
-            b = ly.bindings.get(self.channel_key)
-            if b is None:
-                b = ly.bindings.add()
-                b.name = self.channel_key
-                if ly.layer_type == 'PAINT':
-                    # One logical layer, separate per-channel canvases:
-                    # every SHARED binding owns an image sized to match
-                    # the layer's existing canvases (one GPU stroke can
-                    # then deposit into all of them at once).
-                    b.mode = 'SHARED'
-                    img = new_layer_image(
-                        "Impasto %s %s %s" % (ly.label, ch.label, ly.name),
-                        ch.colorspace,
-                        size=_layer_canvas_size(ly),
-                        generated_color=_channel_canvas_seed(ch))
-                    b.image_name = img.name
-                elif ch.kind == 'COLOR':
-                    b.mode = 'COLOR'
-                    b.color = model.seed_rgba(ch)
-                else:
-                    b.mode = 'VALUE'
-                    b.value = float(ch.default_value[0])
-            b.enabled = True
+            ensure_stack_channel(state, ch.key)
+            ensure_layer_binding(ly, ch.key)
         return {'FINISHED'}
 
 
@@ -1450,6 +1547,7 @@ _classes = (
     IMPASTO_OT_layer_add,
     IMPASTO_OT_layer_remove,
     IMPASTO_OT_layer_move,
+    IMPASTO_OT_channel_add,
     IMPASTO_OT_binding_add,
     IMPASTO_OT_binding_remove,
     IMPASTO_OT_stack_rebuild,

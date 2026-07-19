@@ -35,6 +35,7 @@ run_one "$TESTS_DIR/test_native_paint.py" "IMPASTO_NATIVE_PAINT_PASSED" || statu
 run_one "$TESTS_DIR/test_multichannel_paint.py" "IMPASTO_MULTICHANNEL_PASSED" || status=1
 run_one "$TESTS_DIR/test_gpu_paint.py" "IMPASTO_GPU_PAINT_PASSED" || status=1
 run_one "$TESTS_DIR/test_channel_paint.py" "IMPASTO_CHANNEL_PAINT_PASSED" || status=1
+run_one "$TESTS_DIR/test_channel_expansion.py" "IMPASTO_CHANNEL_EXPANSION_PASSED" || status=1
 run_one "$TESTS_DIR/test_stencil.py" "IMPASTO_STENCIL_PASSED" || status=1
 run_one "$TESTS_DIR/test_preview_modes.py" "IMPASTO_PREVIEW_MODES_PASSED" || status=1
 run_one "$TESTS_DIR/test_gpu_preview_contract.py" "IMPASTO_GPU_PREVIEW_CONTRACT_PASSED" || status=1

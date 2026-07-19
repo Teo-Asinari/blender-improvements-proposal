@@ -4,6 +4,19 @@ Current consolidated handoff: [`SESSION_2026-07-13.md`](SESSION_2026-07-13.md).
 It records the shipped GPU-resident architecture, validation, known limits,
 new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 
+## 0.9.9 — expand existing stacks with paint channels
+
+- Added a grouped Add Material Channel menu beside Channels. One click safely
+  registers a missing channel and binds it to the selected Paint/Fill layer;
+  a register-only submenu remains available for stack-level channels.
+- Standard stacks can now gain Emission Color/Strength and paintable
+  Subsurface Weight/Radius/Scale without recreation or existing-data loss.
+- New Paint canvases inherit layer resolution and channel colorspace/domain;
+  registry order, displaced Principled links, duplicate safety, undo, compiler
+  wiring, and save/reopen persistence are covered by Blender regressions.
+- SSS IOR and Anisotropy remain register-only for Paint layers because the GPU
+  brush intentionally exposes the ten defined paintable channels.
+
 ## 0.9.8 — categorized stencil controls
 
 - Reorganized stencil settings into explicit Placement, Read Image From, and
@@ -113,6 +126,12 @@ new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
   Image update complete; RMB/Esc still flushes before normal session exit.
 
 ## Newly requested roadmap TODOs
+
+- Post-creation channel registration and optional selected-layer binding are
+  implemented. Emission Color/Strength and paintable Subsurface
+  Weight/Radius/Scale create correctly typed canvases without replacing
+  existing layer data; IOR and Anisotropy remain register-only. Consider
+  one-click bundle presets after the explicit grouped menu is user-qualified.
 
 - Qualify the preview-only Base Normal Map fallback across production meshes
   and backend/driver combinations. It explicitly samples one chosen image/UV

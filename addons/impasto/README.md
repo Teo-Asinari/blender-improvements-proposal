@@ -100,6 +100,16 @@ canvas the native paint target, and **Start Painting** picks the
 layer's first painted channel. One native stroke lands in one channel —
 that is the deliberate single-channel editing path.
 
+The initial template is not permanent. Use **Add Material Channel** to expand
+an existing Standard stack, either registering a channel globally or also
+binding it to the selected Paint/Fill layer. Adding Emission Color/Strength or
+Subsurface Weight/Radius/Scale to a Paint layer creates only the missing
+dedicated canvases, at the layer's existing resolution and with the correct
+sRGB/Non-Color storage. Repeating an add is safe and creates no duplicate image
+or binding. Existing canvas identity and pixels are preserved. Subsurface IOR
+and Anisotropy may be registered for material control, but are intentionally
+not paint-canvas channels.
+
 **Blender Brush → N Channels** is the native multi-channel path. Impasto
 records region position, pressure, size, tilt, and timing, then invokes
 Blender's own `paint.image_paint` stroke once for each enabled channel at
@@ -390,6 +400,11 @@ rewiring generated nodes.
   strength and green-channel inversion. This is a display aid, not stack
   composition or material/export wiring; full arbitrary-UV normal-stack
   composition remains future work.
+- **Implemented — post-creation channel expansion:** Standard stacks can add
+  missing Emission and paintable Subsurface channels without rebuilding the
+  stack from a larger template or replacing existing layer data. Future work
+  may add one-click bundle presets; the current grouped menu keeps each added
+  channel explicit.
 - **Automatic Kiln preview-normal discovery:** when no manual Base Normal Map
   override is selected, discover the material's Kiln bake target and recorded
   UV automatically. Preserve the explicit picker as the authoritative override

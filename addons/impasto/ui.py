@@ -38,6 +38,66 @@ class IMPASTO_UL_layers(bpy.types.UIList):
             sub.label(text=chips)
 
 
+def _missing_channels(context, bind_active_layer):
+    obj = context.object
+    mat = obj.active_material if obj is not None else None
+    tree = engine.find_stack_for_material(mat)
+    if tree is None:
+        return None
+    registered = {channel.name for channel in tree.impasto.channels}
+    missing = [channel for channel in model.CHANNELS
+               if channel.key not in registered]
+    active_layer = tree.impasto.active_layer()
+    if (bind_active_layer and active_layer is not None
+            and active_layer.layer_type == 'PAINT'):
+        paintable = set(gpu_engine.GPU_PAINT_CHANNEL_KEYS)
+        missing = [channel for channel in missing
+                   if channel.key in paintable]
+    return missing
+
+
+def _draw_missing_channels(layout, context, bind_active_layer):
+    missing = _missing_channels(context, bind_active_layer)
+    if missing is None:
+        layout.label(text="No Impasto stack", icon='INFO')
+        return
+    if not missing:
+        layout.label(text="All supported channels are registered", icon='CHECKMARK')
+        return
+    previous_group = None
+    for channel in missing:
+        if channel.panel_group != previous_group:
+            if previous_group is not None:
+                layout.separator()
+            layout.label(text=channel.panel_group)
+            previous_group = channel.panel_group
+        op = layout.operator(ops.IMPASTO_OT_channel_add.bl_idname,
+                             text=channel.label, icon='ADD')
+        op.channel_key = channel.key
+        op.bind_active_layer = bind_active_layer
+
+
+class IMPASTO_MT_add_channel_register(bpy.types.Menu):
+    bl_idname = "IMPASTO_MT_add_channel_register"
+    bl_label = "Register Without Layer Binding"
+
+    def draw(self, context):
+        _draw_missing_channels(self.layout, context, False)
+
+
+class IMPASTO_MT_add_channel(bpy.types.Menu):
+    bl_idname = "IMPASTO_MT_add_channel"
+    bl_label = "Add Material Channel"
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="Add to stack + selected layer", icon='LAYER_ACTIVE')
+        _draw_missing_channels(layout, context, True)
+        layout.separator()
+        layout.menu(IMPASTO_MT_add_channel_register.bl_idname,
+                    text="Register Without Layer Binding", icon='NODETREE')
+
+
 class IMPASTO_PT_main(bpy.types.Panel):
     """Sidebar home for the layer stack (always visible in the Impasto
     tab so the feature is discoverable)"""
@@ -118,6 +178,7 @@ class IMPASTO_PT_main(bpy.types.Panel):
                 row.prop(layer, "ui_show_channels", text="Channels",
                          icon='TRIA_DOWN' if layer.ui_show_channels
                          else 'TRIA_RIGHT', emboss=False)
+                row.menu("IMPASTO_MT_add_channel", text="", icon='ADD')
                 if layer.ui_show_channels:
                     self._draw_bindings(box, state, layer)
                 if layer.layer_type == 'PAINT':
@@ -585,6 +646,8 @@ _MENUS = ("VIEW3D_MT_object",)
 
 _classes = (
     IMPASTO_UL_layers,
+    IMPASTO_MT_add_channel_register,
+    IMPASTO_MT_add_channel,
     IMPASTO_PT_main,
     IMPASTO_PT_preview_lighting,
     IMPASTO_MT_main,

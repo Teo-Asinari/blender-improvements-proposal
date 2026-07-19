@@ -43,7 +43,7 @@ default `0.1 m` voxel size from triggering a prohibitively expensive operation
 without review. A viewport guide draws grid slices and voxel-sized samples at
 all eight bounding-box corners so scale can be judged visually.
 
-### [Impasto](addons/impasto/) — v0.9.8 (active development)
+### [Impasto](addons/impasto/) — v0.9.9 (active development)
 
 A non-destructive Principled-PBR layer stack with Fill, Paint, and pass-through
 Group layers. One logical Paint layer can own separate Base Color, Metallic,
@@ -51,6 +51,13 @@ Roughness, Tangent Normal, Height, Emission, and Subsurface images, with
 generated node graphs that keep those channels composited independently. Kiln
 normal bakes can become the stack's baseline normal layer without damaging the
 active painting setup.
+
+A Standard stack can be expanded later from **Add Material Channel** without
+recreating it. Emission Color/Strength and the paintable Subsurface
+Weight/Radius/Scale channels can be registered and bound to the selected Paint
+layer in place; new canvases inherit that layer's resolution and existing
+bindings/images remain untouched. Subsurface IOR and Anisotropy are supported
+as register-only material channels rather than paint canvases.
 
 Impasto currently offers three painting paths:
 
