@@ -107,6 +107,15 @@ from . import ibl
 from . import model
 from . import preview_stack
 from . import channel_paint
+from .gpu.brush_math import (
+    brush_falloff,
+    dab_spacing as _dab_spacing,
+    interpolate_dabs as _interpolate_dabs,
+    overlap_compensated_opacity,
+    sanitize_pressure,
+)
+from .gpu.caliper import sss_caliper_layout
+from .gpu import overlays as gpu_overlays
 
 # ---------------------------------------------------------------------------
 # Tunables
@@ -855,73 +864,18 @@ void main()
 # ---------------------------------------------------------------------------
 
 
-def brush_falloff(t, hardness):
-    """Brush alpha at normalized distance ``t`` (0 center .. 1 rim) for a
-    given hardness (0..1). 1.0 inside the hardness core, smoothstep to
-    0.0 at the rim. Python mirror of the GLSL in DAB_FRAG_SRC."""
-    h = min(max(hardness, 0.0), 0.999)
-    if t <= h:
-        return 1.0
-    if t >= 1.0:
-        return 0.0
-    u = (t - h) / (1.0 - h)
-    return 1.0 - (u * u * (3.0 - 2.0 * u))
-
-
 def interpolate_dabs(x0, y0, x1, y1, spacing, leftover=0.0):
     """Dab positions along the segment (x0,y0)->(x1,y1) at ``spacing``
     px, carrying ``leftover`` distance from the previous segment so a
     fast stroke keeps even spacing across events. Returns
     ``(positions, new_leftover)`` where positions is a list of
     ``(x, y, t)`` with t in (0, 1]."""
-    dx = x1 - x0
-    dy = y1 - y0
-    dist = math.hypot(dx, dy)
-    if dist <= 0.0 or spacing <= 0.0:
-        return [], leftover
-    out = []
-    s = spacing - leftover
-    while s <= dist and len(out) < MAX_DABS_PER_EVENT:
-        t = s / dist
-        out.append((x0 + dx * t, y0 + dy * t, t))
-        s += spacing
-    new_leftover = dist - (s - spacing)
-    return out, new_leftover
+    return _interpolate_dabs(
+        x0, y0, x1, y1, spacing, leftover, MAX_DABS_PER_EVENT)
 
 
 def dab_spacing(radius_px):
-    return max(MIN_DAB_SPACING_PX, radius_px * DAB_SPACING_FACTOR)
-
-
-def sanitize_pressure(value, fallback=1.0):
-    """Clamp tablet pressure and replace transient zero/invalid samples.
-
-    Some Windows tablet drivers emit a zero-pressure motion event immediately
-    after pen-down. Treating it literally creates an invisible zero-radius dab
-    and an apparent gap in an otherwise continuous stroke.
-    """
-    try:
-        pressure = float(value)
-    except (TypeError, ValueError):
-        pressure = float(fallback)
-    if not math.isfinite(pressure) or pressure <= 0.0:
-        pressure = float(fallback)
-    return min(1.0, max(0.001, pressure))
-
-
-def overlap_compensated_opacity(target, spacing_ratio):
-    """Per-dab alpha whose repeated source-over result approaches target.
-
-    A stroke point is covered by roughly ``1 / spacing_ratio`` dab centers.
-    Applying pressure directly to every dab therefore makes even light strokes
-    nearly opaque. Inverting source-over accumulation keeps the completed
-    stroke response close to the requested pressure-controlled opacity.
-    """
-    target = min(1.0, max(0.0, float(target)))
-    if target >= 1.0:
-        return 1.0
-    spacing = min(1.0, max(1e-4, float(spacing_ratio)))
-    return 1.0 - (1.0 - target) ** spacing
+    return _dab_spacing(radius_px, DAB_SPACING_FACTOR, MIN_DAB_SPACING_PX)
 
 
 def build_mesh_soup(obj):
@@ -3616,128 +3570,28 @@ def stencil_preview_quad(region_size, cursor, radius, settings):
     no cursor yet). This pure seam keeps projection and preview testable in
     background Blender.
     """
-    if not settings.get("stencil_enabled", False) \
-            or not settings.get("stencil_image_name", ""):
-        return None
-    projection = settings.get("stencil_projection", 'VIEW_STENCIL')
-    scale = tuple(settings.get("stencil_scale", (0.35, 0.35)))
-    if projection == 'BRUSH_ALPHA':
-        if cursor is None:
-            return None
-        center = (float(cursor[0]), float(cursor[1]))
-        half_extent = (float(radius) * float(scale[0]),
-                       float(radius) * float(scale[1]))
-    else:
-        position = tuple(settings.get("stencil_position", (0.5, 0.5)))
-        center = (float(position[0]) * float(region_size[0]),
-                  float(position[1]) * float(region_size[1]))
-        half_extent = (0.5 * float(scale[0]) * float(region_size[0]),
-                       0.5 * float(scale[1]) * float(region_size[1]))
-    angle = float(settings.get("stencil_rotation", 0.0))
-    cs, sn = math.cos(angle), math.sin(angle)
-    points = []
-    for sx, sy in ((-1.0, -1.0), (1.0, -1.0),
-                   (1.0, 1.0), (-1.0, 1.0)):
-        lx, ly = sx * half_extent[0], sy * half_extent[1]
-        points.append((center[0] + cs * lx - sn * ly,
-                       center[1] + sn * lx + cs * ly))
-    return tuple(points)
+    return gpu_overlays.stencil_preview_quad(
+        region_size, cursor, radius, settings)
 
 
 def _draw_stencil_preview(s, region):
     """Draw the active GPU stencil and a crisp projection boundary."""
-    if material_inspect_active() or material_inspect_requested():
-        return
-    points = stencil_preview_quad(
-        (region.width, region.height), s.cursor,
-        max(1.0, float(s.settings.get("radius", 50.0))), s.settings)
-    if points is None:
-        return
-    stencil_tex = _ensure_stencil_texture(s)
-    if stencil_tex is None:
-        return
-    from gpu_extras.batch import batch_for_shader
-    if s.stencil_preview_shader is None:
-        s.stencil_preview_shader = gpu.shader.create_from_info(
-            stencil_preview_shader_create_info())
-    # Convert pixel coordinates to POST_PIXEL clip coordinates. The texture
-    # UV order exactly matches the shader's inverse rotation convention.
-    clip = [((point[0] / region.width) * 2.0 - 1.0,
-             (point[1] / region.height) * 2.0 - 1.0) for point in points]
-    uv = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
-    batch = batch_for_shader(s.stencil_preview_shader, 'TRI_FAN',
-                             {"pos": clip, "uv": uv})
-    outline_shader = gpu.shader.from_builtin('UNIFORM_COLOR')
-    outline = batch_for_shader(outline_shader, 'LINE_LOOP', {"pos": points})
-    prior_blend = gpu.state.blend_get()
-    try:
-        gpu.state.blend_set('ALPHA')
-        s.stencil_preview_shader.bind()
-        s.stencil_preview_shader.uniform_float(
-            "stencil_preview_opacity", 0.38)
-        s.stencil_preview_shader.uniform_sampler(
-            "stencil_preview_tex", stencil_tex)
-        batch.draw(s.stencil_preview_shader)
-        outline_shader.bind()
-        outline_shader.uniform_float("color", (1.0, 0.72, 0.18, 0.95))
-        outline.draw(outline_shader)
-    finally:
-        gpu.state.blend_set(prior_blend)
+    gpu_overlays.draw_stencil_preview(
+        s, region,
+        lambda: material_inspect_active() or material_inspect_requested(),
+        _ensure_stencil_texture, stencil_preview_shader_create_info)
 
 
 def _draw_brush_reticle(s):
     """Draw a screen-space circle using the exact GPU dab radius."""
-    if (s.cursor is None or material_inspect_active()
-            or material_inspect_requested()):
-        return
-    from gpu_extras.batch import batch_for_shader
-    x, y = s.cursor
-    radius = max(1.0, float(s.settings.get("radius", 50.0)))
-    segments = max(32, min(128, int(radius * 0.8)))
-    points = [(x + math.cos(i * math.tau / segments) * radius,
-               y + math.sin(i * math.tau / segments) * radius)
-              for i in range(segments)]
-    shader = gpu.shader.from_builtin('UNIFORM_COLOR')
-    batch = batch_for_shader(shader, 'LINE_LOOP', {"pos": points})
-    prior_blend = gpu.state.blend_get()
-    try:
-        gpu.state.blend_set('ALPHA')
-        shader.bind()
-        shader.uniform_float("color", (1.0, 1.0, 1.0, 0.9))
-        batch.draw(shader)
-    finally:
-        gpu.state.blend_set(prior_blend)
-
-
-def sss_caliper_layout(scale, radius_rgb, pixels_per_unit, bbox_diagonal,
-                       warning_mesh_fraction=0.001):
-    """Pure caliper math shared by the viewport overlay and tests.
-
-    Distances and projected pixels are always literal. ``too_small`` only
-    requests a warning; it never changes the displayed geometry.
-    """
-    scale = max(0.0, float(scale))
-    effective = tuple(scale * max(0.0, float(v)) for v in radius_rgb[:3])
-    largest = max(effective, default=0.0)
-    pixels = tuple(v * max(0.0, pixels_per_unit) for v in effective)
-    pct = tuple((100.0 * v / bbox_diagonal) if bbox_diagonal > 0.0 else 0.0
-                for v in effective)
-    too_small = bool(largest > 0.0 and bbox_diagonal > 0.0
-                     and largest / bbox_diagonal
-                     < max(0.0, warning_mesh_fraction))
-    return effective, pixels, pct, too_small
+    gpu_overlays.draw_brush_reticle(
+        s, lambda: material_inspect_active()
+        or material_inspect_requested())
 
 
 def _format_scene_length(value, scene_unit_scale=1.0):
     """Compact metric label for a Blender-unit distance."""
-    metres = abs(float(value)) * max(float(scene_unit_scale), 1e-12)
-    if metres >= 1.0:
-        return "%.3g m" % metres
-    if metres >= 1e-3:
-        return "%.3g mm" % (metres * 1e3)
-    if metres >= 1e-6:
-        return "%.3g um" % (metres * 1e6)
-    return "%.3g nm" % (metres * 1e9)
+    return gpu_overlays.format_scene_length(value, scene_unit_scale)
 
 
 def _sss_cursor_surface(s, region, rv3d):
@@ -3746,111 +3600,18 @@ def _sss_cursor_surface(s, region, rv3d):
     The ray hit is deliberate: a screen radius calculated at the object
     origin is misleading on meshes with meaningful depth variation.
     """
-    if s.cursor is None or rv3d is None:
-        return None
-    obj = bpy.data.objects.get(s.obj_name)
-    if obj is None:
-        return None
-    from bpy_extras import view3d_utils
-    from mathutils import Vector
-    coord = Vector(s.cursor)
-    origin = view3d_utils.region_2d_to_origin_3d(region, rv3d, coord)
-    direction = view3d_utils.region_2d_to_vector_3d(region, rv3d, coord)
-    inv = obj.matrix_world.inverted_safe()
-    local_origin = inv @ origin
-    local_direction = (inv.to_3x3() @ direction).normalized()
-    hit, location, _normal, _index = obj.ray_cast(local_origin,
-                                                   local_direction)
-    if not hit:
-        return None
-    world = obj.matrix_world @ location
-    camera_right = (rv3d.view_matrix.inverted().to_3x3()
-                    @ Vector((1.0, 0.0, 0.0))).normalized()
-    p0 = view3d_utils.location_3d_to_region_2d(region, rv3d, world)
-    p1 = view3d_utils.location_3d_to_region_2d(
-        region, rv3d, world + camera_right)
-    if p0 is None or p1 is None:
-        return None
-    pixels_per_unit = (p1 - p0).length
-    corners = [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
-    if not corners:
-        return None
-    xs, ys, zs = zip(*corners)
-    bbox_diagonal = Vector((max(xs) - min(xs), max(ys) - min(ys),
-                            max(zs) - min(zs))).length
-    return world, pixels_per_unit, bbox_diagonal
+    return gpu_overlays._sss_cursor_surface(s, region, rv3d)
 
 
 def _ensure_overlay_circle(s):
     """One immutable unit-circle batch per session, not per draw frame."""
-    if s.overlay_circle_batch is None:
-        from gpu_extras.batch import batch_for_shader
-        points = [(math.cos(i * math.tau / 96),
-                   math.sin(i * math.tau / 96)) for i in range(96)]
-        s.overlay_color_shader = gpu.shader.from_builtin('UNIFORM_COLOR')
-        s.overlay_circle_batch = batch_for_shader(
-            s.overlay_color_shader, 'LINE_LOOP', {"pos": points})
+    gpu_overlays._ensure_overlay_circle(s)
 
 
 def _draw_sss_caliper(s, region, rv3d):
-    if (not s.settings.get("sss_caliper_enabled", False)
-            or material_inspect_active() or material_inspect_requested()):
-        return
-    surface = _sss_cursor_surface(s, region, rv3d)
-    if surface is None:  # Never imply a mesh-relative measurement off-mesh.
-        return
-    _world, pixels_per_unit, bbox_diagonal = surface
-    scale = float(s.settings.get("sss_caliper_scale", 0.0))
-    radius = tuple(s.settings.get("sss_caliper_radius", (1.0, 0.2, 0.1)))
-    effective, radii_px, percentages, too_small = sss_caliper_layout(
-        scale, radius, pixels_per_unit, bbox_diagonal)
-    if max(radii_px, default=0.0) <= 0.0:
-        return
-    _ensure_overlay_circle(s)
-    colors = ((1.0, 0.16, 0.12, 0.9), (0.2, 1.0, 0.25, 0.9),
-              (0.2, 0.45, 1.0, 0.9))
-    prior_blend = gpu.state.blend_get()
-    try:
-        gpu.state.blend_set('ALPHA')
-        for radius_px, color in zip(radii_px, colors):
-            if radius_px < 0.5:
-                continue
-            with gpu.matrix.push_pop():
-                gpu.matrix.translate((s.cursor[0], s.cursor[1], 0.0))
-                gpu.matrix.scale((radius_px, radius_px, 1.0))
-                s.overlay_color_shader.bind()
-                s.overlay_color_shader.uniform_float("color", color)
-                s.overlay_circle_batch.draw(s.overlay_color_shader)
-    finally:
-        gpu.state.blend_set(prior_blend)
-
-    import blf
-    unit_scale = float(s.settings.get("scene_unit_scale", 1.0))
-    labels = "  ".join("%s %s (%.2g%% mesh)" % (
-        name, _format_scene_length(distance, unit_scale), percentage)
-        for name, distance, percentage in zip(
-            ("R", "G", "B"), effective, percentages))
-    lines = [
-        "SSS CALIPER — colored rings = Scale x Radius RGB",
-        labels,
-        "Colored rings zoom with mesh; white brush ring stays screen-sized",
-    ]
-    if too_small:
-        lines.append("WARNING: SSS rings are very small relative to this mesh")
-    blf.size(0, 11)
-    for index, line in enumerate(lines):
-        blf.position(0, s.cursor[0] + 14, s.cursor[1] + 16 + index * 15, 0)
-        blf.color(0, 1.0, 1.0, 1.0, 0.95)
-        blf.draw(0, line)
-    for name, radius_px, color, angle in zip(
-            ("R", "G", "B"), radii_px, colors,
-            (0.0, math.tau / 3.0, 2.0 * math.tau / 3.0)):
-        if radius_px < 0.5:
-            continue
-        blf.position(0, s.cursor[0] + math.cos(angle) * radius_px + 3,
-                     s.cursor[1] + math.sin(angle) * radius_px + 3, 0)
-        blf.color(0, *color)
-        blf.draw(0, name)
+    gpu_overlays.draw_sss_caliper(
+        s, region, rv3d,
+        lambda: material_inspect_active() or material_inspect_requested())
 
 
 def _overlay_text_lines(s):
@@ -3892,11 +3653,4 @@ def _overlay_text_lines(s):
 
 
 def _draw_stats_overlay(s):
-    import blf
-    font_id = 0
-    x, y = 20, 60
-    blf.size(font_id, 12)
-    blf.color(font_id, 1.0, 1.0, 1.0, 1.0)
-    for i, line in enumerate(reversed(_overlay_text_lines(s))):
-        blf.position(font_id, x, y + i * 18, 0)
-        blf.draw(font_id, line)
+    gpu_overlays.draw_text_lines(_overlay_text_lines(s))

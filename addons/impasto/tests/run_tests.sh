@@ -29,6 +29,8 @@ run_one() {
 }
 
 status=0
+bash "$TESTS_DIR/test_source_hygiene.sh" || status=1
+run_one "$TESTS_DIR/test_package_contract.py" "IMPASTO_PACKAGE_CONTRACT_PASSED" || status=1
 run_one "$TESTS_DIR/test_model.py" "MODEL_TESTS_PASSED" || status=1
 run_one "$TESTS_DIR/test_integration.py" "IMPASTO_INTEGRATION_PASSED" || status=1
 run_one "$TESTS_DIR/test_native_paint.py" "IMPASTO_NATIVE_PAINT_PASSED" || status=1

@@ -21,12 +21,38 @@ if ADDONS not in sys.path:
 
 import impasto
 from impasto import gpu_engine, model, ops
+from impasto.gpu import brush_math, caliper, overlays
 
 
 def check(name, condition, detail=""):
     if not condition:
         raise AssertionError(name + (": " + detail if detail else ""))
     print("  ok  " + name)
+
+
+check("GPU brush math has a focused implementation module",
+      gpu_engine.brush_falloff is brush_math.brush_falloff
+      and gpu_engine.sanitize_pressure is brush_math.sanitize_pressure
+      and gpu_engine.overlap_compensated_opacity is
+      brush_math.overlap_compensated_opacity)
+check("GPU caliper keeps its legacy public engine import",
+      gpu_engine.sss_caliper_layout is caliper.sss_caliper_layout)
+stencil_settings = {
+    "stencil_enabled": True, "stencil_image_name": "test",
+    "stencil_projection": "BRUSH_ALPHA", "stencil_scale": (1.0, 0.5),
+}
+check("GPU stencil layout is delegated to the overlay module",
+      gpu_engine.stencil_preview_quad(
+          (640, 480), (20, 30), 10, stencil_settings)
+      == overlays.stencil_preview_quad(
+          (640, 480), (20, 30), 10, stencil_settings))
+check("GPU overlay scene length formatting remains compatible",
+      gpu_engine._format_scene_length(0.002) == "2 mm"
+      and overlays.format_scene_length(0.002) == "2 mm")
+positions, remainder = brush_math.interpolate_dabs(
+    0.0, 0.0, 100.0, 0.0, 10.0, max_dabs=3)
+check("extracted dab interpolation retains its safety cap",
+      len(positions) == 3 and remainder == 70.0)
 
 
 for target in (0.2, 0.8):

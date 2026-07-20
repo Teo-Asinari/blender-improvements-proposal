@@ -1,6 +1,6 @@
 # Impasto
 
-Impasto 0.9.19 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
+Impasto 0.10.0 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
 painting. It stores material work as ordered Paint and Fill layers, compiles
 the stack into a Principled BSDF material, and provides a GPU-resident painting
 session with immediate material feedback.
@@ -120,7 +120,7 @@ An Image Stencil has three independent choices:
 
 Normal Relief derives tangent-space normal direction from grayscale gradients;
 it does not interpret grayscale directly as normal-map RGB. See
-[STENCIL_WORKFLOW.md](STENCIL_WORKFLOW.md) for the detailed transform and
+[STENCIL_WORKFLOW.md](docs/STENCIL_WORKFLOW.md) for the detailed transform and
 sampling contract.
 
 ## Emission and subsurface painting
@@ -168,6 +168,13 @@ were recorded.
   128 MB before preview, depth, and undo resources.
 
 ## Tests and development notes
+
+Runtime code is separated by responsibility: focused GPU helpers live under
+`gpu/`, paint-panel rendering lives in `ui_paint.py`, channel menus in
+`ui_channels.py`, and reusable operator mechanics in `operator_support.py`.
+Historical design notes live under `docs/`. The original `gpu_engine`, `ops`,
+and `ui` module paths remain compatibility facades while further safe
+decomposition continues.
 
 Run the Blender regression suite with:
 

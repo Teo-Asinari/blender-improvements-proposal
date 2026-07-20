@@ -112,6 +112,8 @@ try:
         ops.IMPASTO_OT_gpu_paint._refresh_preview_lighting(operator)
     operator._refresh_preview_base_normal = lambda: \
         ops.IMPASTO_OT_gpu_paint._refresh_preview_base_normal(operator)
+    operator._refresh_sss_caliper = lambda context: \
+        ops.IMPASTO_OT_gpu_paint._refresh_sss_caliper(operator, context)
     operator._refresh_stroke_settings = lambda context: \
         ops.IMPASTO_OT_gpu_paint._refresh_stroke_settings(operator, context)
     operator._request_save_boundary = lambda save_as=False: \

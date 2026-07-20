@@ -4,7 +4,7 @@
 bl_info = {
     "name": "Impasto",
     "author": "Teo Asinari",
-    "version": (0, 9, 19),
+    "version": (0, 10, 0),
     "blender": (5, 1, 0),
     "location": "3D Viewport > Sidebar (N) > Impasto tab",
     "description": "Non-destructive PBR material layer stacks",
@@ -45,13 +45,33 @@ if "model" in locals():
         stencil = importlib.reload(stencil)
     else:
         from . import stencil
+    if "gpu_brush_math" in locals():
+        gpu_brush_math = importlib.reload(gpu_brush_math)
+        gpu_caliper = importlib.reload(gpu_caliper)
+        gpu_overlays = importlib.reload(gpu_overlays)
+    else:
+        from .gpu import brush_math as gpu_brush_math
+        from .gpu import caliper as gpu_caliper
+        from .gpu import overlays as gpu_overlays
     gpu_engine = importlib.reload(gpu_engine)
     props = importlib.reload(props)
     if "paint" in locals():
         paint = importlib.reload(paint)
     else:
         from . import paint
+    if "operator_support" in locals():
+        operator_support = importlib.reload(operator_support)
+    else:
+        from . import operator_support
     ops = importlib.reload(ops)
+    if "ui_channels" in locals():
+        ui_channels = importlib.reload(ui_channels)
+    else:
+        from . import ui_channels
+    if "ui_paint" in locals():
+        ui_paint = importlib.reload(ui_paint)
+    else:
+        from . import ui_paint
     ui = importlib.reload(ui)
 else:
     from . import model
@@ -67,10 +87,16 @@ else:
     from . import ibl
     from . import preview_stack
     from . import stencil
+    from .gpu import brush_math as gpu_brush_math
+    from .gpu import caliper as gpu_caliper
+    from .gpu import overlays as gpu_overlays
     from . import gpu_engine
     from . import props
     from . import paint
+    from . import operator_support
     from . import ops
+    from . import ui_channels
+    from . import ui_paint
     from . import ui
 
 

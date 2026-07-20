@@ -17,12 +17,26 @@ from . import channel_paint
 from . import engine
 from . import gpu_engine
 from . import model
+from . import operator_support
 from . import paint
 from . import props
 from . import snapshot
 from . import stencil
 
-DEFAULT_IMAGE_SIZE = 2048
+DEFAULT_IMAGE_SIZE = operator_support.DEFAULT_IMAGE_SIZE
+
+# Compatibility aliases: these helpers historically lived in ``ops`` and are
+# intentionally kept importable there for integrations and tests.
+_context_material = operator_support.context_material
+_context_stack = operator_support.context_stack
+_unique_uid = operator_support.unique_uid
+_active_uv_map = operator_support.active_uv_map
+new_layer_image = operator_support.new_layer_image
+_channel_canvas_seed = operator_support.channel_canvas_seed
+_layer_canvas_size = operator_support.layer_canvas_size
+ensure_stack_channel = operator_support.ensure_stack_channel
+ensure_layer_binding = operator_support.ensure_layer_binding
+_remember_displaced_channel_link = operator_support.remember_displaced_channel_link
 
 TEMPLATE_IDS = {
     'PRINCIPLED_STANDARD': "Principled — Standard",
@@ -34,149 +48,6 @@ TEMPLATE_ITEMS = tuple(
     (tid, label, "Channels: " + ", ".join(
         model.CHANNEL_MAP[k].label for k in model.TEMPLATES[label]))
     for tid, label in TEMPLATE_IDS.items())
-
-
-def _context_material(context):
-    obj = context.object
-    if obj is None:
-        return None
-    return obj.active_material
-
-
-def _context_stack(context):
-    """(material, root stack tree) for the active object, or Nones."""
-    mat = _context_material(context)
-    if mat is None:
-        return None, None
-    return mat, engine.find_stack_for_material(mat)
-
-
-def _unique_uid(state):
-    existing = ({ly.name for ly in state.layers}
-                | {m.name for ly in state.layers for m in ly.masks})
-    return model.new_uid(existing)
-
-
-def _active_uv_map(context):
-    obj = context.object
-    if obj is not None and obj.type == 'MESH':
-        uvs = obj.data.uv_layers
-        if uvs and uvs.active:
-            return uvs.active.name
-    return ""
-
-
-def new_layer_image(name, colorspace, size=DEFAULT_IMAGE_SIZE,
-                    generated_color=(0.0, 0.0, 0.0, 0.0)):
-    """Registry-driven image creation (design §5.3): colorspace comes
-    from the channel table, the caller chooses the channel-neutral canvas,
-    and a fake user protects paint data while a layer is hidden/pruned."""
-    img = bpy.data.images.new(name, size, size, alpha=True)
-    img.generated_color = generated_color
-    img.use_fake_user = True
-    compat.set_image_colorspace(img, colorspace)
-    return img
-
-
-def _channel_canvas_seed(ch):
-    """Fresh-canvas fill: Height accumulates around opaque neutral
-    mid-gray; every other channel starts transparent so unpainted
-    texels contribute nothing (alpha gates the root chain factor)."""
-    return ((0.5, 0.5, 0.5, 1.0) if ch.key == "height"
-            else (0.0, 0.0, 0.0, 0.0))
-
-
-def _layer_canvas_size(layer):
-    """Resolution of the layer's existing canvases, so every channel
-    image of one logical layer matches (a GPU MRT session requires
-    equal sizes). Falls back to the stack default."""
-    for b in layer.bindings:
-        img = bpy.data.images.get(b.image_name or layer.image_name)
-        if img is not None and img.size[0] > 0:
-            return img.size[0]
-    img = bpy.data.images.get(layer.image_name)
-    if img is not None and img.size[0] > 0:
-        return img.size[0]
-    return DEFAULT_IMAGE_SIZE
-
-
-def ensure_stack_channel(state, channel_key):
-    """Idempotently register one model channel, preserving registry order."""
-    channel = model.CHANNEL_MAP.get(channel_key)
-    if channel is None:
-        raise ValueError("unknown Impasto channel %r" % channel_key)
-    existing = state.channels.get(channel_key)
-    if existing is not None:
-        return existing, False
-    item = state.channels.add()
-    item.name = channel_key
-    source_index = len(state.channels) - 1
-    target_index = sum(
-        1 for other in state.channels
-        if other.name != channel_key
-        and model.CHANNEL_ORDER.get(other.name, 10 ** 6)
-        < model.CHANNEL_ORDER[channel_key])
-    if source_index != target_index:
-        state.channels.move(source_index, target_index)
-    return state.channels.get(channel_key), True
-
-
-def ensure_layer_binding(layer, channel_key):
-    """Idempotently bind a registered channel to one non-group layer."""
-    channel = model.CHANNEL_MAP.get(channel_key)
-    if channel is None:
-        raise ValueError("unknown Impasto channel %r" % channel_key)
-    if layer is None or layer.layer_type == 'GROUP':
-        raise ValueError("a non-group layer must be selected")
-    binding = layer.bindings.get(channel_key)
-    if binding is not None:
-        binding.enabled = True
-        return binding, False
-    binding = layer.bindings.add()
-    binding.name = channel_key
-    if layer.layer_type == 'PAINT':
-        binding.mode = 'SHARED'
-        image = new_layer_image(
-            "Impasto %s %s %s" % (layer.label, channel.label, layer.name),
-            channel.colorspace, size=_layer_canvas_size(layer),
-            generated_color=_channel_canvas_seed(channel))
-        binding.image_name = image.name
-    elif channel.kind == 'COLOR':
-        binding.mode = 'COLOR'
-        binding.color = model.seed_rgba(channel)
-    else:
-        binding.mode = 'VALUE'
-        binding.value = float(channel.default_value[0])
-    return binding, True
-
-
-def _remember_displaced_channel_link(mat, channel_key):
-    """Preserve a pre-stack Principled link for Remove Stack restoration."""
-    if mat is None or mat.node_tree is None:
-        return
-    channel = model.CHANNEL_MAP[channel_key]
-    socket_name = "Normal" if channel_key == "height" else channel.socket
-    if not socket_name:
-        return
-    principled = compat.find_principled(mat.node_tree)
-    socket = (compat.find_socket(principled.inputs, socket_name)
-              if principled is not None else None)
-    if socket is None:
-        return
-    try:
-        displaced = json.loads(mat.impasto_mat.displaced_links or "[]")
-    except Exception:
-        displaced = []
-    if any(entry.get("to_socket") == socket_name for entry in displaced):
-        return
-    generated = mat.node_tree.nodes.get(model.n_material_stack())
-    for link in tuple(socket.links):
-        if generated is not None and link.from_node == generated:
-            continue
-        displaced.append({"from_node": link.from_node.name,
-                          "from_socket": link.from_socket.identifier,
-                          "to_socket": socket_name})
-    mat.impasto_mat.displaced_links = json.dumps(displaced)
 
 
 def import_normal_baseline(mat, image, uv_map="", fallback_node_name=""):

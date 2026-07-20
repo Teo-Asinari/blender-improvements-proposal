@@ -1,5 +1,16 @@
 # Impasto — multi-channel painting milestone progress
 
+## 0.10.0 — package decomposition
+
+- Extracted pure brush math, SSS caliper math, and viewport overlays into the
+  `gpu/` package while preserving the `gpu_engine` API.
+- Extracted reusable operator mechanics, channel menus, and paint-panel
+  rendering from the former `ops.py` / `ui.py` kitchen sinks.
+- Added public-import, operator-ID, saved-property, registration lifecycle,
+  source hygiene, and package-layout regression guards.
+- Moved historical design notes into `docs/`; README and PROGRESS remain at
+  the add-on root.
+
 ## 0.9.19 — literal SSS caliper scale
 
 - Removed all automatic visual magnification from the SSS rings.
@@ -28,7 +39,7 @@
   too small to see directly.
 - Immutable ring geometry and its shader are cached for the paint session.
 
-Current consolidated handoff: [`SESSION_2026-07-13.md`](SESSION_2026-07-13.md).
+Current consolidated handoff: [`SESSION_2026-07-13.md`](docs/SESSION_2026-07-13.md).
 It records the shipped GPU-resident architecture, validation, known limits,
 new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 
