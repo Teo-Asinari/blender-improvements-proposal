@@ -1,5 +1,26 @@
 # Impasto — multi-channel painting milestone progress
 
+## Active roadmap
+
+- Diagnose and fix top-layer Lit PBR preview regressions: intermittent white
+  surface stripes/holes and unexpected flat-looking shading. The likely seams
+  are front-surface depth rejection and the corner-normal fallback, but both
+  require reproduction before changing tolerances or normal policy.
+- Implement real layer masks with painting, visibility/invert controls, and
+  predictable per-channel/layer application.
+- Add an eraser workflow that removes resident stroke coverage atomically
+  across the selected channels rather than painting replacement values.
+- Add flatten/export: composite the layer stack into one authoritative image
+  per material channel, with explicit resolution, colorspace, normal/height,
+  and alpha rules.
+- Add spherical material previews, stencil thumbnails, and a recent-material
+  palette with channel-value tooltips.
+- Add a pinned SSS Caliper inspection mode outside active GPU painting.
+- Implement RNM/UDN composition for multiple tangent-normal layers and expand
+  resident preview support beyond the common same-UV stack.
+- Continue decomposing the compatibility-facade internals of `gpu_engine.py`
+  and `ops.py` behind regression-guarded packages.
+
 ## 0.10.0 — package decomposition
 
 - Extracted pure brush math, SSS caliper math, and viewport overlays into the
@@ -228,10 +249,10 @@ new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
 
 - Validate Emission and Subsurface resident preview against production renders
   across a wider range of HDRIs and object scales (painting is implemented).
-- Extend the implemented image-stencil system from synchronized coverage masks
-  to deliberate color/value texture application. Additional projection,
-  transform, masking, and per-channel semantics await the user's detailed
-  workflow description.
+- **Paint Coverage is already implemented:** it uses stencil alpha/grayscale
+  as the mask for the configured brush values. A distinct possible feature is
+  sampling stencil pixels as the deposited color/scalar values themselves;
+  that is not required for the existing coverage-mask workflow.
 - Implement resident-GPU equivalents of Blender's useful brush families plus
   adjustable alpha/brush textures, staged from Draw-style stamps through
   destination-sampling and source/state-heavy tools.
