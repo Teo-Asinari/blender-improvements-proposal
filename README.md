@@ -43,7 +43,7 @@ default `0.1 m` voxel size from triggering a prohibitively expensive operation
 without review. A viewport guide draws grid slices and voxel-sized samples at
 all eight bounding-box corners so scale can be judged visually.
 
-### [Impasto](addons/impasto/) — v0.10.0 (active development)
+### [Impasto](addons/impasto/) — v0.10.1 (active development)
 
 A non-destructive Principled-PBR layer stack with Fill, Paint, and pass-through
 Group layers. One logical Paint layer can own separate Base Color, Metallic,

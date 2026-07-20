@@ -65,6 +65,17 @@ try:
     check("normal-profile invert reverses relief without changing magnitude",
           abs((profile[0] - 0.5) + (inverse[0] - 0.5)) < 1e-9
           and abs(profile[2] - inverse[2]) < 1e-9)
+    low_res = stencil.profile_tangent_normal(
+        0.25, 0.75, 0.4, 0.6, image_size=(4, 10))
+    high_res = stencil.profile_tangent_normal(
+        0.375, 0.625, 0.45, 0.55, image_size=(8, 20))
+    check("normal-profile strength is independent of stencil resolution",
+          all(abs(a - b) < 1e-9 for a, b in zip(low_res, high_res)),
+          repr((low_res, high_res)))
+    wide = stencil.profile_tangent_normal(
+        0.375, 0.625, 0.25, 0.75, image_size=(8, 4))
+    check("normal-profile derivatives scale independently per image axis",
+          abs(wide[0] - wide[1]) < 1e-9, repr(wide))
     invalid = stencil.normalized(True, "", 'UNKNOWN', 'UNKNOWN', 4.0,
                                  scale=(0.0, -2.0))
     check("invalid settings normalize safely and missing image disables",
@@ -150,10 +161,11 @@ try:
                          (120.0, 130.0), (80.0, 130.0)))
     profile_source = gpu_engine.dab_frag_src(
         2, profile_slots=(False, True))
-    check("normal-profile shader uses aspect-aware neighboring samples",
+    check("normal-profile shader uses resolution-independent derivatives",
           "textureSize(stencil_tex, 0)" in profile_source
           and "profile_texel" in profile_source
-          and "profile_aspect" in profile_source)
+          and "profile_size * dab_params.profile_flags.y" in profile_source
+          and "profile_aspect" not in profile_source)
     check("normal-profile output composes with configured normal",
           "compose_profile_normal" in profile_source
           and "profile_normal" in profile_source)

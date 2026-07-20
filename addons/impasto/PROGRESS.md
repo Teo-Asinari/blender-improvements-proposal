@@ -1,5 +1,13 @@
 # Impasto — multi-channel painting milestone progress
 
+## 0.10.1 — usable stencil Normal Relief
+
+- Normal-profile central differences are converted from per-texel change to
+  normalized-image derivatives, keeping relief strength stable across source
+  resolutions and non-square images.
+- Alpha mode now warns that opaque grayscale images must use Grayscale to
+  provide meaningful relief gradients.
+
 ## Active roadmap
 
 - Diagnose and fix top-layer Lit PBR preview regressions: intermittent white
@@ -253,6 +261,9 @@ new brush/channel/stencil roadmap, and add-on-versus-core conclusions.
   as the mask for the configured brush values. A distinct possible feature is
   sampling stencil pixels as the deposited color/scalar values themselves;
   that is not required for the existing coverage-mask workflow.
+- Normal Relief now warns that Alpha Channel requires varying transparency;
+  opaque grayscale height images must use Grayscale. The same distinction is
+  stated in selector tooltips and the README.
 - Implement resident-GPU equivalents of Blender's useful brush families plus
   adjustable alpha/brush textures, staged from Draw-style stamps through
   destination-sampling and source/state-heavy tools.

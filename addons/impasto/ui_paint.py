@@ -156,6 +156,11 @@ class PaintPanelMixin:
                      text="Relief Strength", slider=True)
             col.prop(layer, "brush_stencil_profile_invert",
                      text="Invert Relief")
+            if layer.brush_stencil_interpretation == 'ALPHA':
+                warning = col.box().column(align=True)
+                warning.label(text="Alpha requires varying transparency",
+                              icon='ERROR')
+                warning.label(text="Opaque grayscale image? Choose Grayscale")
             col.label(text="Grayscale gradients write Normal only",
                       icon='NORMALS_FACE')
         else:
@@ -459,5 +464,4 @@ class PaintPanelMixin:
             if expanded:
                 for c in channels:
                     draw_channel(section, c)
-
 

@@ -1,6 +1,6 @@
 # Impasto
 
-Impasto 0.10.0 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
+Impasto 0.10.1 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
 painting. It stores material work as ordered Paint and Fill layers, compiles
 the stack into a Principled BSDF material, and provides a GPU-resident painting
 session with immediate material feedback.
@@ -121,7 +121,9 @@ An Image Stencil has three independent choices:
 Normal Relief derives tangent-space normal direction from grayscale gradients;
 it does not interpret grayscale directly as normal-map RGB. See
 [STENCIL_WORKFLOW.md](docs/STENCIL_WORKFLOW.md) for the detailed transform and
-sampling contract.
+sampling contract. **Alpha Channel** only produces relief when the image has
+varying transparency. For an opaque grayscale height image, select
+**Grayscale** so relief is derived from its visible brightness.
 
 ## Emission and subsurface painting
 

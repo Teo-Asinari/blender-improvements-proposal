@@ -327,8 +327,6 @@ void main()
             if (profile_mode) {
                 vec2 profile_size = vec2(textureSize(stencil_tex, 0));
                 vec2 profile_texel = 1.0 / max(profile_size, vec2(1.0));
-                vec2 profile_aspect = profile_size /
-                    max(min(profile_size.x, profile_size.y), 1.0);
                 float left = impasto_stencil_intensity(
                     stencil_uv - vec2(profile_texel.x, 0.0));
                 float right = impasto_stencil_intensity(
@@ -340,7 +338,7 @@ void main()
                 float direction = (dab_params.profile_flags.z > 0.5)
                     ? -1.0 : 1.0;
                 vec2 gradient = 0.5 * vec2(right - left, up - down) *
-                    profile_aspect * dab_params.profile_flags.y * direction;
+                    profile_size * dab_params.profile_flags.y * direction;
                 vec3 detail_n = normalize(vec3(-gradient, 1.0));
                 profile_normal = detail_n * 0.5 + 0.5;
                 stencil_factor = clamp(dab_params.stencil_flags.y,

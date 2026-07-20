@@ -19,9 +19,11 @@ PROJECTION_ITEMS = (
 PROJECTION_IDS = frozenset(item[0] for item in PROJECTION_ITEMS)
 
 INTERPRETATION_ITEMS = (
-    ('ALPHA', "Alpha Channel", "Use the image alpha channel as the mask"),
+    ('ALPHA', "Alpha Channel",
+     "Use variation in the image alpha channel; a fully opaque image is "
+     "flat, even when its visible RGB pixels are grayscale"),
     ('LUMINANCE', "Grayscale",
-     "Use linear RGB luminance as the mask; useful for grayscale images"),
+     "Use visible RGB brightness; choose this for an opaque grayscale image"),
 )
 INTERPRETATION_IDS = frozenset(item[0] for item in INTERPRETATION_ITEMS)
 
@@ -30,7 +32,8 @@ USAGE_ITEMS = (
      "Multiply the shared opacity of every painted channel"),
     ('NORMAL_PROFILE', "Normal Relief",
      "Treat image intensity as height and derive tangent-normal detail "
-     "from its gradients; only the Normal channel is painted"),
+     "from its gradients; Alpha Channel requires varying transparency, while "
+     "opaque grayscale images require Grayscale; only Normal is painted"),
 )
 USAGE_IDS = frozenset(item[0] for item in USAGE_ITEMS)
 
@@ -154,15 +157,22 @@ def interpreted_mask(rgba, interpretation='ALPHA', opacity=1.0):
 
 
 def profile_tangent_normal(left, right, down, up, strength=1.0,
-                           invert=False):
+                           invert=False, image_size=(1.0, 1.0)):
     """Encoded tangent normal derived from a sampled height profile.
 
     This mirrors the GPU shader's central-difference polarity and
     normalization for 3DCoat-style normal-detail alphas.
     """
     sign = -1.0 if invert else 1.0
-    dx = (float(right) - float(left)) * 0.5 * float(strength) * sign
-    dy = (float(up) - float(down)) * 0.5 * float(strength) * sign
+    size = _pair(image_size, (1.0, 1.0))
+    # The samples are one source texel apart on either side. Multiplying the
+    # central difference by each axis' texel count converts it from height per
+    # texel to height per normalized image UV. This keeps a resampled stencil's
+    # relief strength stable and treats non-square images correctly.
+    dx = ((float(right) - float(left)) * 0.5 * max(1.0, size[0])
+          * float(strength) * sign)
+    dy = ((float(up) - float(down)) * 0.5 * max(1.0, size[1])
+          * float(strength) * sign)
     x, y, z = -dx, -dy, 1.0
     length = math.sqrt(x * x + y * y + z * z)
     return (x / length * 0.5 + 0.5,
