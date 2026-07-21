@@ -14,13 +14,17 @@ from .ui_channels import format_image_dimensions, paint_layer_image_sizes
 
 
 def draw_brush_mode(layout, layer):
-    """Draw a visually distinct, icon-only GPU brush-mode selector."""
+    """Draw a compact, explicit GPU brush-mode selector."""
     box = layout.box()
     box.label(text="Brush Mode")
     row = box.row(align=True)
-    row.prop_enum(layer, "brush_mode", 'PAINT', text="", icon='BRUSH_DATA')
-    row.prop_enum(layer, "brush_mode", 'SOFTEN', text="", icon='SMOOTHCURVE')
-    row.prop_enum(layer, "brush_mode", 'ERASE', text="", icon='X')
+    row.scale_y = 1.2
+    row.prop_enum(layer, "brush_mode", 'PAINT', text="Paint",
+                  icon='BRUSH_DATA')
+    row.prop_enum(layer, "brush_mode", 'SOFTEN', text="Soften",
+                  icon='MOD_SMOOTH')
+    row.prop_enum(layer, "brush_mode", 'ERASE', text="Erase",
+                  icon='EVENT_TABLET_ERASER')
 
 
 class PaintPanelMixin:

@@ -1,5 +1,11 @@
 # Impasto — multi-channel painting milestone progress
 
+## 0.11.3 — legible brush-mode selector
+
+- Replaced the sparse icon-only mode controls with a compact segmented row
+  labeled Paint, Soften, and Erase.
+- Soften and Erase now use Blender's actual smoothing and tablet-eraser icons.
+
 ## 0.11.2 — clearer brush-mode controls
 
 - Paint, Soften, and Erase are separate icon buttons in a boxed Brush Mode

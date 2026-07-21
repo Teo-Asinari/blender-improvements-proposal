@@ -26,12 +26,13 @@ try:
     impasto.register()
     check("package registration",
           hasattr(bpy.types.ShaderNodeTree, "impasto"))
-    check("metadata", impasto.bl_info["version"] == (0, 11, 2))
-    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.11.2")
+    check("metadata", impasto.bl_info["version"] == (0, 11, 3))
+    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.11.3")
     check("brush modes use distinct icon buttons",
           all(token in inspect.getsource(impasto.ui_paint.draw_brush_mode)
               for token in ("'PAINT'", "'SOFTEN'", "'ERASE'",
-                            "'BRUSH_DATA'", "'SMOOTHCURVE'", "'X'")))
+                            "'BRUSH_DATA'", "'MOD_SMOOTH'",
+                            "'EVENT_TABLET_ERASER'")))
     layer_rna = impasto.props.ImpastoLayer.bl_rna.properties
     check("brush-wide controls have explicit names",
           layer_rna["brush_radius"].name == "Brush Radius"
