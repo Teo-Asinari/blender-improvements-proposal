@@ -14,6 +14,33 @@ CORE_CHANNEL_BADGES = {
 }
 
 
+def image_dimensions(image):
+    """Return a Blender image datablock's usable pixel dimensions."""
+    if image is None or len(image.size) < 2:
+        return None
+    width, height = int(image.size[0]), int(image.size[1])
+    return (width, height) if width > 0 and height > 0 else None
+
+
+def format_image_dimensions(image):
+    """Compact actual-size readout for imported and generated images alike."""
+    size = image_dimensions(image)
+    return "%d × %d" % size if size else "size unavailable"
+
+
+def paint_layer_image_sizes(layer):
+    """Collect real dimensions for the images currently bound to a layer."""
+    sizes = {}
+    for binding in layer.bindings:
+        if not binding.enabled:
+            continue
+        image = bpy.data.images.get(binding.image_name or layer.image_name)
+        size = image_dimensions(image)
+        if size is not None:
+            sizes[binding.name] = size
+    return sizes
+
+
 def layer_channel_summary(keys):
     """Return the compact summary shown in each layer-list row."""
     ordered = [key for key in sorted(

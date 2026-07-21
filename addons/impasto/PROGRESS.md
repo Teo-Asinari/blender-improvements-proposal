@@ -1,11 +1,11 @@
 # Impasto — multi-channel painting milestone progress
 
-## Next — resident Soften brush
+## 0.11.1 — channel image dimension readout
 
-- Added a first GPU blend brush: Soften applies a small Gaussian blur to every
-  enabled active-layer channel, with brush falloff and pressure-scaled strength.
-- Source and destination textures remain separate and GPU-resident; pen-up
-  retains the existing deferred synchronization and atomic channel undo model.
+- The expanded Layer Channels view now shows the real Blender image datablock
+  dimensions for each paint channel and warns when bound channel sizes differ.
+- Missing images and unavailable dimensions remain explicit without confusing
+  the readout with the layer's creation-resolution setting.
 
 ## 0.11.0 — combined stencils, erase, and soften
 

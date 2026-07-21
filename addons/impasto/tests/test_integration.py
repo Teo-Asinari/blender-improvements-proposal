@@ -25,8 +25,8 @@ try:
     impasto.register()
     check("package registration",
           hasattr(bpy.types.ShaderNodeTree, "impasto"))
-    check("metadata", impasto.bl_info["version"] == (0, 11, 0))
-    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.11.0")
+    check("metadata", impasto.bl_info["version"] == (0, 11, 1))
+    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.11.1")
     layer_rna = impasto.props.ImpastoLayer.bl_rna.properties
     check("brush-wide controls have explicit names",
           layer_rna["brush_radius"].name == "Brush Radius"
@@ -49,6 +49,29 @@ try:
               "base_color", "metallic", "roughness", "normal", "height",
               "emission_color", "emission_strength", "sss_weight",
               "sss_radius", "sss_scale")) == "BMRNH E(2) SS(3)")
+    size_a = bpy.data.images.new("Impasto Size A", 1024, 512)
+    size_b = bpy.data.images.new("Impasto Size B", 2048, 2048)
+    check("channel UI reads actual image datablock dimensions",
+          impasto.ui_channels.image_dimensions(size_a) == (1024, 512)
+          and impasto.ui_channels.format_image_dimensions(size_a)
+          == "1024 × 512")
+    fake_layer = type("Layer", (), {
+        "image_name": "",
+        "bindings": (
+            type("Binding", (), {"enabled": True, "name": "base_color",
+                                  "image_name": size_a.name})(),
+            type("Binding", (), {"enabled": True, "name": "roughness",
+                                  "image_name": size_b.name})(),
+            type("Binding", (), {"enabled": True, "name": "normal",
+                                  "image_name": "Missing Image"})(),
+        ),
+    })()
+    check("channel UI tolerates missing and mismatched imported images",
+          impasto.ui_channels.paint_layer_image_sizes(fake_layer)
+          == {"base_color": (1024, 512),
+              "roughness": (2048, 2048)})
+    bpy.data.images.remove(size_a)
+    bpy.data.images.remove(size_b)
     paint_tip = impasto.ops.IMPASTO_OT_layer_add.description(
         None, type("Props", (), {"layer_type": "PAINT"})())
     fill_tip = impasto.ops.IMPASTO_OT_layer_add.description(

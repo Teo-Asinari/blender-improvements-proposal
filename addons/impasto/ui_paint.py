@@ -10,6 +10,7 @@ import bpy
 from . import gpu_engine
 from . import model
 from . import ops
+from .ui_channels import format_image_dimensions, paint_layer_image_sizes
 
 
 class PaintPanelMixin:
@@ -408,6 +409,9 @@ class PaintPanelMixin:
     def _draw_bindings(self, box, state, layer):
         col = box.column(align=True)
         col.label(text="Channel Images / Layer Influence")
+        image_sizes = (paint_layer_image_sizes(layer)
+                       if layer.layer_type == 'PAINT' else {})
+        sizes_mismatch = len(set(image_sizes.values())) > 1
 
         def draw_channel(parent, c):
             ch = model.CHANNEL_MAP.get(c.name)
@@ -448,8 +452,9 @@ class PaintPanelMixin:
                                             or layer.image_name)
                 detail = parent.row()
                 detail.enabled = False
-                detail.label(text=("Image: %s" % image.name if image else
-                                   "Image: missing"),
+                detail.label(text=("Image: %s  ·  %s" %
+                                   (image.name, format_image_dimensions(image))
+                                   if image else "Image: missing"),
                              icon='IMAGE_DATA' if image else 'ERROR')
 
         grouped = {'Core': [], 'Emission': [], 'Subsurface': []}
@@ -479,3 +484,8 @@ class PaintPanelMixin:
             if expanded:
                 for c in channels:
                     draw_channel(section, c)
+
+        if sizes_mismatch:
+            warning = col.row()
+            warning.alert = True
+            warning.label(text="Channel image sizes differ", icon='ERROR')
