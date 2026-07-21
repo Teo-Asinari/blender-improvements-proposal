@@ -1,5 +1,11 @@
 # Impasto — multi-channel painting milestone progress
 
+## 0.11.2 — clearer brush-mode controls
+
+- Paint, Soften, and Erase are separate icon buttons in a boxed Brush Mode
+  group, visually separated from radius, hardness, and opacity controls.
+- Each mode button exposes its behavior through the enum tooltip.
+
 ## 0.11.1 — channel image dimension readout
 
 - The expanded Layer Channels view now shows the real Blender image datablock

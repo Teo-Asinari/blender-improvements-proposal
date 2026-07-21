@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Real-Blender Phase 1 lifecycle checks."""
 
+import inspect
 import sys
 import traceback
 from pathlib import Path
@@ -25,8 +26,12 @@ try:
     impasto.register()
     check("package registration",
           hasattr(bpy.types.ShaderNodeTree, "impasto"))
-    check("metadata", impasto.bl_info["version"] == (0, 11, 1))
-    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.11.1")
+    check("metadata", impasto.bl_info["version"] == (0, 11, 2))
+    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.11.2")
+    check("brush modes use distinct icon buttons",
+          all(token in inspect.getsource(impasto.ui_paint.draw_brush_mode)
+              for token in ("'PAINT'", "'SOFTEN'", "'ERASE'",
+                            "'BRUSH_DATA'", "'SMOOTHCURVE'", "'X'")))
     layer_rna = impasto.props.ImpastoLayer.bl_rna.properties
     check("brush-wide controls have explicit names",
           layer_rna["brush_radius"].name == "Brush Radius"

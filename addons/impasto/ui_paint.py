@@ -13,6 +13,16 @@ from . import ops
 from .ui_channels import format_image_dimensions, paint_layer_image_sizes
 
 
+def draw_brush_mode(layout, layer):
+    """Draw a visually distinct, icon-only GPU brush-mode selector."""
+    box = layout.box()
+    box.label(text="Brush Mode")
+    row = box.row(align=True)
+    row.prop_enum(layer, "brush_mode", 'PAINT', text="", icon='BRUSH_DATA')
+    row.prop_enum(layer, "brush_mode", 'SOFTEN', text="", icon='SMOOTHCURVE')
+    row.prop_enum(layer, "brush_mode", 'ERASE', text="", icon='X')
+
+
 class PaintPanelMixin:
     def _draw_paint_tools(self, context, box, layer):
         keys = [key for key, _image in ops.gpu_paint_targets(layer)]
@@ -37,8 +47,9 @@ class PaintPanelMixin:
 
         if layer.paint_workflow == 'GPU':
             brush = paint.column(align=True)
+            draw_brush_mode(brush, layer)
+            brush.separator()
             brush.label(text="Brush Shape & Input", icon='BRUSH_DATA')
-            brush.prop(layer, "brush_mode", expand=True)
             brush.prop(layer, "brush_radius", text="Brush Radius")
             brush.prop(layer, "brush_hardness", text="Brush Hardness",
                        slider=True)
@@ -317,7 +328,7 @@ class PaintPanelMixin:
             box.separator()
             box.label(text="Experimental GPU Brush", icon='BRUSH_DATA')
             gpu_col = box.column(align=True)
-            gpu_col.prop(layer, "brush_mode", expand=True)
+            draw_brush_mode(gpu_col, layer)
             gpu_col.prop(layer, "gpu_preview_mode", text="Live Preview")
             gpu_col.label(text="Display only — painted channels are unchanged",
                           icon='INFO')

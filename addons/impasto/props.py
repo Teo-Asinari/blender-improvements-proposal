@@ -231,10 +231,11 @@ class ImpastoLayer(bpy.types.PropertyGroup):
     brush_mode: EnumProperty(
         name="Brush Mode",
         description="Paint values, soften detail, or erase layer coverage",
-        items=(('PAINT', "Paint", "Deposit enabled channel values"),
+        items=(('PAINT', "Paint", "Paint the configured values into every "
+                                  "enabled channel"),
                ('SOFTEN', "Soften", "Blur detail in every enabled channel "
-                                    "while keeping its texture GPU-resident"),
-               ('ERASE', "Erase", "Remove active-layer coverage to reveal "
+                                    "using pressure-scaled soften strength"),
+               ('ERASE', "Erase", "Erase active-layer coverage to reveal "
                                    "the layers below")),
         default='PAINT')
     brush_pressure_opacity: BoolProperty(
