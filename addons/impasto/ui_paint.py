@@ -37,10 +37,14 @@ class PaintPanelMixin:
         if layer.paint_workflow == 'GPU':
             brush = paint.column(align=True)
             brush.label(text="Brush Shape & Input", icon='BRUSH_DATA')
+            brush.prop(layer, "brush_mode", expand=True)
             brush.prop(layer, "brush_radius", text="Brush Radius")
             brush.prop(layer, "brush_hardness", text="Brush Hardness",
                        slider=True)
-            brush.prop(layer, "brush_opacity", text="Brush Opacity",
+            brush.prop(layer, "brush_opacity",
+                       text=("Soften Strength"
+                             if layer.brush_mode == 'SOFTEN'
+                             else "Brush Opacity"),
                        slider=True)
             row = brush.row(align=True)
             row.label(text="Pressure")
@@ -48,8 +52,18 @@ class PaintPanelMixin:
             row.prop(layer, "brush_pressure_size", toggle=True)
 
         paint.separator()
-        paint.label(text="Painted Channel Values", icon='MATERIAL')
+        erasing = (layer.paint_workflow == 'GPU'
+                   and layer.brush_mode == 'ERASE')
+        softening = (layer.paint_workflow == 'GPU'
+                     and layer.brush_mode == 'SOFTEN')
+        paint.label(text=("Values ignored while erasing" if erasing else
+                          "Softens all enabled layer channels" if softening
+                          else "Painted Channel Values"), icon='MATERIAL')
+        if softening:
+            paint.label(text="Pressure controls strength when enabled",
+                        icon='INFO')
         values = paint.column(align=True)
+        values.enabled = not (erasing or softening)
         if 'base_color' in keys:
             values.prop(layer, "paint_color", text="Base Color")
         if 'roughness' in keys:
@@ -161,7 +175,7 @@ class PaintPanelMixin:
                 warning.label(text="Alpha requires varying transparency",
                               icon='ERROR')
                 warning.label(text="Opaque grayscale image? Choose Grayscale")
-            col.label(text="Grayscale gradients write Normal only",
+            col.label(text="Relief writes Normal; image masks other channels",
                       icon='NORMALS_FACE')
         else:
             col.label(text="Modulates every enabled paint channel",
@@ -302,6 +316,7 @@ class PaintPanelMixin:
             box.separator()
             box.label(text="Experimental GPU Brush", icon='BRUSH_DATA')
             gpu_col = box.column(align=True)
+            gpu_col.prop(layer, "brush_mode", expand=True)
             gpu_col.prop(layer, "gpu_preview_mode", text="Live Preview")
             gpu_col.label(text="Display only — painted channels are unchanged",
                           icon='INFO')
@@ -464,4 +479,3 @@ class PaintPanelMixin:
             if expanded:
                 for c in channels:
                     draw_channel(section, c)
-

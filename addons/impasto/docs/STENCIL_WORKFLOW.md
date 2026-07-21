@@ -48,8 +48,10 @@ once into the shared falloff before writing any MRT attachment.
 2. **Normal profile:** intensity is a height/profile field. Aspect-corrected
    neighboring texel samples generate tangent-space detail; Strength controls
    magnitude and Invert reverses raised/recessed relief. The detail is
-   slope-composed with the configured Normal paint value and only the Normal
-   target is written.
+   slope-composed with the configured Normal paint value. In the same stroke,
+   intensity remains the coverage mask for every other enabled material
+   channel, so one stencil can deposit Normal, Base Color, Metallic,
+   Roughness, and other configured values together.
 
 The pure `stencil.profile_tangent_normal()` contract mirrors the shader's
 profile polarity, central differences, strength, inversion, and encoded normal

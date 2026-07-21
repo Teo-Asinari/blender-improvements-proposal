@@ -226,6 +226,7 @@ void main()
      * every covered fragment is exactly one texel of the paint texture. */
     gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
     worldPos = (dab_params.model_matrix * vec4(pos, 1.0)).xyz;
+    paintUV = uv;
 }
 """
 
@@ -298,6 +299,7 @@ void main()
     /* Evaluate one shared image mask before any MRT output so every enabled
      * material channel receives exactly the same spatial modulation. */
     float stencil_factor = 1.0;
+    float profile_factor = 1.0;
     vec3 profile_normal = vec3(0.5, 0.5, 1.0);
     bool profile_mode = (dab_params.paint_flags.z > 0.5 &&
                          dab_params.profile_flags.x > 0.5);
@@ -323,8 +325,10 @@ void main()
         if (any(lessThan(stencil_uv, vec2(0.0))) ||
             any(greaterThan(stencil_uv, vec2(1.0)))) {
             stencil_factor = 0.0;
+            profile_factor = 0.0;
         } else {
             if (profile_mode) {
+                float mask_value = impasto_stencil_intensity(stencil_uv);
                 vec2 profile_size = vec2(textureSize(stencil_tex, 0));
                 vec2 profile_texel = 1.0 / max(profile_size, vec2(1.0));
                 float left = impasto_stencil_intensity(
@@ -341,7 +345,9 @@ void main()
                     profile_size * dab_params.profile_flags.y * direction;
                 vec3 detail_n = normalize(vec3(-gradient, 1.0));
                 profile_normal = detail_n * 0.5 + 0.5;
-                stencil_factor = clamp(dab_params.stencil_flags.y,
+                stencil_factor = clamp(mask_value *
+                    dab_params.stencil_flags.y, 0.0, 1.0);
+                profile_factor = clamp(dab_params.stencil_flags.y,
                                        0.0, 1.0);
             } else {
                 float mask_value = impasto_stencil_intensity(stencil_uv);
@@ -350,6 +356,7 @@ void main()
             }
         }
     }
+    float profile_f = f * profile_factor;
     f *= stencil_factor;
 """
 
@@ -368,32 +375,56 @@ def dab_frag_src(channels=1, additive=False, profile_slots=None,
     lines = []
     for i in range(channels):
         output = "fragColor" if i == 0 else "fragColor%d" % i
+        lines.append(
+            "    if (dab_params.profile_flags.w > 0.5) { %s = "
+            "vec4(1.0 - clamp(dab_params.paint_flags.y * f, 0.0, 1.0)); } "
+            "else" % output)
         if profile_slots[i]:
             lines.append(
-                "    %s = profile_mode ? vec4(compose_profile_normal("
+                "    { %s = profile_mode ? vec4(compose_profile_normal("
                 "dab_params.brush_values[%d].rgb, profile_normal), "
                 "dab_params.brush_values[%d].a * dab_params.paint_flags.y "
-                "* f) : vec4(dab_params.brush_values[%d].rgb, "
+                "* profile_f) : vec4(dab_params.brush_values[%d].rgb, "
                 "dab_params.brush_values[%d].a * dab_params.paint_flags.y "
-                "* f);" % (output, i, i, i, i))
-        elif profile_enabled:
-            lines.append(
-                "    %s = profile_mode ? vec4(0.0) : "
-                "vec4(dab_params.brush_values[%d].rgb, "
-                "dab_params.brush_values[%d].a * dab_params.paint_flags.y "
-                "* f);" % (output, i, i))
+                "* f); }" % (output, i, i, i, i))
         elif additive:
             lines.append(
-                "    %s = vec4(dab_params.brush_values[%d].rgb * "
+                "    { %s = vec4(dab_params.brush_values[%d].rgb * "
                 "dab_params.brush_values[%d].a * "
                 "dab_params.paint_flags.y * f, "
-                "dab_params.paint_flags.y * f);" % (output, i, i))
+                "dab_params.paint_flags.y * f); }" % (output, i, i))
         else:
-            lines.append("    %s = vec4(dab_params.brush_values[%d].rgb, "
+            lines.append("    { %s = vec4(dab_params.brush_values[%d].rgb, "
                          "dab_params.brush_values[%d].a * "
-                         "dab_params.paint_flags.y * f);"
+                         "dab_params.paint_flags.y * f); }"
                          % (output, i, i))
     return _DAB_FRAG_PRELUDE + "\n".join(lines) + "\n}\n"
+
+
+def soften_frag_src():
+    """One-channel resident Gaussian soften dab.
+
+    The source and destination are deliberately different textures; sampling
+    an attached render target is undefined on Blender's supported GPU APIs.
+    RGBA is filtered together because MIX canvases are resident in
+    premultiplied-alpha form.
+    """
+    output = """
+    vec2 texel = 1.0 / vec2(textureSize(source_tex, 0));
+    vec4 softened = texture(source_tex, paintUV) * 4.0;
+    softened += texture(source_tex, paintUV + vec2(texel.x, 0.0)) * 2.0;
+    softened += texture(source_tex, paintUV - vec2(texel.x, 0.0)) * 2.0;
+    softened += texture(source_tex, paintUV + vec2(0.0, texel.y)) * 2.0;
+    softened += texture(source_tex, paintUV - vec2(0.0, texel.y)) * 2.0;
+    softened += texture(source_tex, paintUV + texel);
+    softened += texture(source_tex, paintUV - texel);
+    softened += texture(source_tex, paintUV + vec2(texel.x, -texel.y));
+    softened += texture(source_tex, paintUV + vec2(-texel.x, texel.y));
+    softened *= 0.0625;
+    float soften_strength = clamp(dab_params.paint_flags.y * f, 0.0, 1.0);
+    fragColor = mix(texture(source_tex, paintUV), softened, soften_strength);
+"""
+    return _DAB_FRAG_PRELUDE + output + "\n}\n"
 
 PREPASS_VERT_SRC = """
 void main()
@@ -1158,6 +1189,7 @@ def dab_shader_create_info(channels=1, additive=False, profile_slots=None,
         raise ValueError("channels > MAX_CHANNELS")
     iface = gpu.types.GPUStageInterfaceInfo("gpu_paint_spike_dab_iface")
     iface.smooth('VEC3', "worldPos")
+    iface.smooth('VEC2', "paintUV")
     info = gpu.types.GPUShaderCreateInfo()
     info.typedef_source(DAB_UBO_TYPEDEF)
     info.uniform_buf(DAB_UBO_SLOT, "ImpastoDabParams", DAB_UBO_NAME)
@@ -1174,6 +1206,25 @@ def dab_shader_create_info(channels=1, additive=False, profile_slots=None,
                          + dab_frag_src(channels, additive=additive,
                                        profile_slots=profile_slots,
                                        profile_enabled=profile_enabled))
+    return info
+
+
+def soften_shader_create_info():
+    iface = gpu.types.GPUStageInterfaceInfo("impasto_soften_dab_iface")
+    iface.smooth('VEC3', "worldPos")
+    iface.smooth('VEC2', "paintUV")
+    info = gpu.types.GPUShaderCreateInfo()
+    info.typedef_source(DAB_UBO_TYPEDEF)
+    info.uniform_buf(DAB_UBO_SLOT, "ImpastoDabParams", DAB_UBO_NAME)
+    info.sampler(0, 'FLOAT_2D', "scene_depth_tex")
+    info.sampler(1, 'FLOAT_2D', "stencil_tex")
+    info.sampler(2, 'FLOAT_2D', "source_tex")
+    info.vertex_in(0, 'VEC3', "pos")
+    info.vertex_in(1, 'VEC2', "uv")
+    info.vertex_out(iface)
+    info.fragment_out(0, 'VEC4', "fragColor")
+    info.vertex_source(DAB_VERT_SRC)
+    info.fragment_source(visibility.GLSL_SOURCE + soften_frag_src())
     return info
 
 
@@ -1200,7 +1251,8 @@ def dab_uniform_data(model_matrix, view_proj_matrix, view_depth_plane,
                      stencil_interpretation, stencil_opacity,
                      stencil_position, stencil_scale, stencil_rotation,
                      brush_values, profile_usage=False,
-                     profile_strength=1.0, profile_invert=False, data=None):
+                     profile_strength=1.0, profile_invert=False,
+                     erase=False, data=None):
     """Pack dab state into the all-vec4 std140 UBO layout.
 
     Matrices are transposed before flattening because mathutils/numpy expose
@@ -1235,7 +1287,7 @@ def dab_uniform_data(model_matrix, view_proj_matrix, view_depth_plane,
         float(stencil_scale[0]), float(stencil_scale[1]))
     data[DAB_UBO_PROFILE_FLAGS] = (
         1.0 if profile_usage else 0.0, float(profile_strength),
-        1.0 if profile_invert else 0.0, 0.0)
+        1.0 if profile_invert else 0.0, 1.0 if erase else 0.0)
     for index, value in enumerate(brush_values[:MAX_CHANNELS]):
         data[DAB_UBO_BRUSH_VALUES + index] = value
     return data
@@ -1600,6 +1652,11 @@ class _Session:
         self.dab_shaders = None
         self.dab_ubos = None
         self.dab_ubo_data = None
+        self.soften_shader = None
+        self.soften_ubo = None
+        self.soften_ubo_data = None
+        self.soften_scratch = None
+        self.batch_soften = None
         self.prepass_shader = None
         self.preview_shader = None
         self.paint_texs = None         # list of N RGBA16F GPUTextures
@@ -2125,6 +2182,7 @@ def cursor_position():
 
 
 def update_stroke_settings(payloads, radius=None, hardness=None, opacity=None,
+                           brush_mode=None,
                            stamp=None, stencil_settings=None,
                            caliper_settings=None):
     """Refresh values sampled at the next pen-down without restarting.
@@ -2146,6 +2204,8 @@ def update_stroke_settings(payloads, radius=None, hardness=None, opacity=None,
         s.settings["hardness"] = float(hardness)
     if opacity is not None:
         s.settings["opacity"] = max(0.0, min(1.0, float(opacity)))
+    if brush_mode is not None:
+        s.settings["brush_mode"] = str(brush_mode)
     s.settings["brush_stamp"] = stamp
     if stencil_settings is not None:
         s.settings.update(dict(stencil_settings))
@@ -2421,6 +2481,9 @@ def _ensure_gpu(s):
                   for data in s.dab_ubo_data]
     s.prepass_shader = gpu.shader.create_from_info(
         prepass_shader_create_info())
+    s.soften_shader = gpu.shader.create_from_info(soften_shader_create_info())
+    s.soften_ubo_data = np.zeros((DAB_UBO_VEC4_COUNT, 4), dtype=np.float32)
+    s.soften_ubo = gpu.types.GPUUniformBuf(s.soften_ubo_data)
     s.preview_shader = gpu.shader.create_from_info(
         preview_shader_create_info())
     s.copy_shader = gpu.shader.create_from_info(copy_shader_create_info())
@@ -2489,6 +2552,7 @@ def _ensure_gpu(s):
         for _blend, indices in s.target_batches]
     s.single_fbs = [gpu.types.GPUFrameBuffer(color_slots=(tex,))
                     for tex in s.paint_texs]
+    s.soften_scratch = gpu.types.GPUTexture((size, size), format='RGBA16F')
     seed_line = "paint_tex_seeded_images=%d/%d" % (seeded_count, n)
     s.probe_lines.append(seed_line)
     _log_line("GPU_PAINT_SPIKE_PROBE %s" % seed_line)
@@ -2503,6 +2567,8 @@ def _ensure_gpu(s):
     s.batch_dabs = [batch_for_shader(
         shader, 'TRIS', {"pos": s.coords, "uv": s.uvs})
         for shader in s.dab_shaders]
+    s.batch_soften = batch_for_shader(
+        s.soften_shader, 'TRIS', {"pos": s.coords, "uv": s.uvs})
     s.batch_prepass = batch_for_shader(
         s.prepass_shader, 'TRIS', {"pos": s.coords})
     s.batch_preview = batch_for_shader(
@@ -3186,13 +3252,23 @@ def _flush_dabs(s, region):
                 s.stroke_transaction.touch_rect(
                     channel, rect, (s.size, s.size))
 
+    if s.settings.get("brush_mode", "PAINT") == "SOFTEN":
+        _flush_soften_dabs(s, region, queue, radius, hardness, occlusion,
+                           stamp, stencil_tex, use_stencil)
+        s.dab_count += len(queue)
+        s.last_dab_t = time.perf_counter()
+        return
+
     for batch_index, ((blend, indices), fb, sh, ubo, ubo_data,
                       draw_batch) in enumerate(
             zip(s.target_batches, s.paint_fbs, s.dab_shaders,
                 s.dab_ubos, s.dab_ubo_data, s.batch_dabs)):
         with fb.bind():
             fb.viewport_set(0, 0, s.size, s.size)
-            gpu.state.blend_set('ADDITIVE' if blend == 'ADD' else 'ALPHA')
+            erase = s.settings.get("brush_mode", 'PAINT') == 'ERASE'
+            gpu.state.blend_set(
+                'MULTIPLY' if erase else
+                ('ADDITIVE' if blend == 'ADD' else 'ALPHA'))
             gpu.state.depth_test_set('NONE')
             gpu.state.depth_mask_set(False)
             gpu.state.face_culling_set('NONE')
@@ -3231,6 +3307,7 @@ def _flush_dabs(s, region):
                 stencil_opacity, stencil_position, stencil_scale,
                 stencil_rotation, brush_values, profile_usage,
                 profile_strength, profile_invert, data=ubo_data)
+            ubo_data[DAB_UBO_PROFILE_FLAGS, 3] = 1.0 if erase else 0.0
             ubo.update(ubo_data)
             sh.uniform_block(DAB_UBO_NAME, ubo)
             sh.uniform_sampler("scene_depth_tex", s.depth_color_tex)
@@ -3256,6 +3333,71 @@ def _flush_dabs(s, region):
                 s.submit_times.append(time.perf_counter() - t0)
     s.dab_count += len(queue)
     s.last_dab_t = time.perf_counter()
+
+
+def _flush_soften_dabs(s, region, queue, radius, hardness, occlusion, stamp,
+                       stencil_tex, use_stencil):
+    """Blur enabled resident targets without sampling a render attachment.
+
+    Each dab copies a target into the spare texture, overwrites only covered
+    mesh fragments there from the old target, then swaps the handles. No
+    Blender Image access or GPU-to-CPU synchronization occurs.
+    """
+    sh = s.soften_shader
+    ubo = s.soften_ubo
+    data = s.soften_ubo_data
+    stencil_projection = s.settings.get("stencil_projection") == 'BRUSH_ALPHA'
+    stencil_interpretation = (
+        s.settings.get("stencil_interpretation") == 'LUMINANCE')
+    stencil_position = tuple(s.settings.get("stencil_position", (0.5, 0.5)))
+    stencil_scale = tuple(s.settings.get("stencil_scale", (0.35, 0.35)))
+    stencil_opacity = float(s.settings.get("stencil_opacity", 1.0))
+    stencil_rotation = float(s.settings.get("stencil_rotation", 0.0))
+    for x, y, pressure in queue:
+        dab_radius, dab_opacity = (stamp.values_at_pressure(pressure)
+                                   if stamp is not None
+                                   else (radius, pressure))
+        strength = max(0.0, min(1.0, dab_opacity * float(
+            s.settings.get("opacity", 1.0))))
+        if stamp is not None and stamp.use_pressure_strength:
+            strength = overlap_compensated_opacity(
+                strength, stamp.spacing_ratio)
+        dab_uniform_data(
+            s.model, s.view_proj, s.view_depth_plane,
+            (region.width, region.height), (x, y), dab_radius, hardness,
+            DEPTH_EPSILON, visibility.DEFAULT_POLICY.relative_epsilon,
+            occlusion, strength, use_stencil, stencil_projection,
+            stencil_interpretation, stencil_opacity, stencil_position,
+            stencil_scale, stencil_rotation, (), data=data)
+        ubo.update(data)
+        for index in range(s.channels):
+            source = s.paint_texs[index]
+            target = s.soften_scratch
+            target_fb = gpu.types.GPUFrameBuffer(color_slots=(target,))
+            s.history_backend._draw_copy(
+                source, target_fb, (0, 0, s.size, s.size),
+                (0.0, 0.0), (1.0, 1.0))
+            with target_fb.bind():
+                target_fb.viewport_set(0, 0, s.size, s.size)
+                gpu.state.blend_set('NONE')
+                gpu.state.depth_test_set('NONE')
+                gpu.state.depth_mask_set(False)
+                gpu.state.face_culling_set('NONE')
+                sh.bind()
+                sh.uniform_block(DAB_UBO_NAME, ubo)
+                sh.uniform_sampler("scene_depth_tex", s.depth_color_tex)
+                sh.uniform_sampler("stencil_tex", stencil_tex if use_stencil
+                                   else s.depth_color_tex)
+                sh.uniform_sampler("source_tex", source)
+                s.batch_soften.draw(sh)
+            s.paint_texs[index] = target
+            s.soften_scratch = source
+        # Swaps invalidate every framebuffer attachment wrapper.
+        s.single_fbs = [gpu.types.GPUFrameBuffer(color_slots=(tex,))
+                        for tex in s.paint_texs]
+        s.paint_fbs = [gpu.types.GPUFrameBuffer(
+            color_slots=tuple(s.paint_texs[i] for i in indices))
+            for _blend, indices in s.target_batches]
 
 
 # ---------------------------------------------------------------------------

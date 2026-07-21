@@ -1,5 +1,19 @@
 # Impasto — multi-channel painting milestone progress
 
+## Next — resident Soften brush
+
+- Added a first GPU blend brush: Soften applies a small Gaussian blur to every
+  enabled active-layer channel, with brush falloff and pressure-scaled strength.
+- Source and destination textures remain separate and GPU-resident; pen-up
+  retains the existing deferred synchronization and atomic channel undo model.
+
+## 0.11.0 — combined stencils, erase, and soften
+
+- Normal Relief can paint alongside the other enabled material channels.
+- GPU Erase removes active-layer coverage to reveal lower layers.
+- GPU Soften applies a resident 3×3 blur across enabled layer channels; this
+  correctness-first path still needs interactive performance qualification.
+
 ## 0.10.1 — usable stencil Normal Relief
 
 - Normal-profile central differences are converted from per-texel change to
@@ -16,8 +30,9 @@
   require reproduction before changing tolerances or normal policy.
 - Implement real layer masks with painting, visibility/invert controls, and
   predictable per-channel/layer application.
-- Add an eraser workflow that removes resident stroke coverage atomically
-  across the selected channels rather than painting replacement values.
+- Interactively qualify the implemented GPU eraser, which removes resident
+  stroke coverage atomically across enabled channels rather than painting
+  replacement values.
 - Add flatten/export: composite the layer stack into one authoritative image
   per material channel, with explicit resolution, colorspace, normal/height,
   and alpha rules.

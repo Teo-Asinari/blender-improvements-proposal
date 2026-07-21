@@ -25,8 +25,8 @@ try:
     impasto.register()
     check("package registration",
           hasattr(bpy.types.ShaderNodeTree, "impasto"))
-    check("metadata", impasto.bl_info["version"] == (0, 10, 1))
-    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.10.1")
+    check("metadata", impasto.bl_info["version"] == (0, 11, 0))
+    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.11.0")
     layer_rna = impasto.props.ImpastoLayer.bl_rna.properties
     check("brush-wide controls have explicit names",
           layer_rna["brush_radius"].name == "Brush Radius"

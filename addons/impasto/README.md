@@ -1,6 +1,6 @@
 # Impasto
 
-Impasto 0.10.1 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
+Impasto 0.11.0 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
 painting. It stores material work as ordered Paint and Fill layers, compiles
 the stack into a Principled BSDF material, and provides a GPU-resident painting
 session with immediate material feedback.
@@ -18,6 +18,11 @@ prototype and is not intended for serious work.**
   Emission Color/Strength, and Subsurface Weight/Radius/Scale.
 - Post-creation channel expansion without replacing existing canvases.
 - GPU multi-channel strokes with tablet-pressure control for size and opacity.
+- A GPU-resident **Soften** brush that blurs all enabled active-layer channel
+  canvases together; brush strength, falloff, and optional pressure control the
+  effect without synchronizing images back to the CPU.
+- Layer-aware GPU erasing that removes active-layer coverage to reveal the
+  layers below instead of painting black or neutral channel values.
 - GPU-resident per-stroke undo and deferred synchronization to Blender Images.
 - Lit PBR and diagnostic live previews.
 - Image stencils as a viewport projection or brush-following alpha.
@@ -45,8 +50,8 @@ Impasto currently targets Blender 5.1.
 2. Add or select a Paint layer.
 3. Expand **Layer Channels** and add the channels that layer should own.
 4. Under **Brush Controls**, select **GPU Multi-Channel**.
-5. Set Brush Radius, Brush Hardness, Brush Opacity, pressure behavior, and the
-   values to deposit into each painted channel.
+5. Choose Paint or Erase, then set Brush Radius, Brush Hardness, Brush
+   Opacity, pressure behavior, and any channel values used by Paint mode.
 6. Start GPU Painting.
 7. Use LMB to paint. RMB or Esc flushes the resident canvases and exits.
 
@@ -123,7 +128,10 @@ it does not interpret grayscale directly as normal-map RGB. See
 [STENCIL_WORKFLOW.md](docs/STENCIL_WORKFLOW.md) for the detailed transform and
 sampling contract. **Alpha Channel** only produces relief when the image has
 varying transparency. For an opaque grayscale height image, select
-**Grayscale** so relief is derived from its visible brightness.
+**Grayscale** so relief is derived from its visible brightness. Normal Relief
+can be used in the same stroke as Base Color, Metallic, Roughness, and other
+enabled material channels: the derived gradient supplies Normal while the
+stencil intensity remains the shared paint-coverage mask for those channels.
 
 ## Emission and subsurface painting
 

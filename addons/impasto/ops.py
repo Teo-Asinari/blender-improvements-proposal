@@ -1043,6 +1043,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             "brush_stamp": (stamp if stamp is not None
                             and stamp.supported else None),
             "opacity": layer.brush_opacity,
+            "brush_mode": layer.brush_mode,
             "preview_mode": gpu_preview_mode(layer),
             "stack_model": snapshot.snapshot(
                 tree, _context_material(context)),
@@ -1139,6 +1140,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         gpu_engine.update_stroke_settings(
             payloads, radius=self._radius,
             hardness=layer.brush_hardness, opacity=layer.brush_opacity,
+            brush_mode=layer.brush_mode,
             stamp=supported_stamp,
             stencil_settings=gpu_stencil_settings(layer).as_gpu_settings(),
             caliper_settings=gpu_sss_caliper(layer, context.scene))

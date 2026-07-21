@@ -33,7 +33,8 @@ USAGE_ITEMS = (
     ('NORMAL_PROFILE', "Normal Relief",
      "Treat image intensity as height and derive tangent-normal detail "
      "from its gradients; Alpha Channel requires varying transparency, while "
-     "opaque grayscale images require Grayscale; only Normal is painted"),
+     "opaque grayscale images require Grayscale; Normal receives relief and "
+     "the image still controls coverage for every other enabled channel"),
 )
 USAGE_IDS = frozenset(item[0] for item in USAGE_ITEMS)
 

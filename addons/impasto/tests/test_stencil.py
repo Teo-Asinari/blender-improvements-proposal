@@ -169,8 +169,19 @@ try:
     check("normal-profile output composes with configured normal",
           "compose_profile_normal" in profile_source
           and "profile_normal" in profile_source)
-    check("normal-profile mode suppresses non-Normal MRT outputs",
-          "fragColor = profile_mode ? vec4(0.0)" in profile_source)
+    check("normal-profile mode preserves non-Normal MRT outputs",
+          "fragColor = profile_mode ? vec4(0.0)" not in profile_source
+          and "fragColor = vec4(dab_params.brush_values[0].rgb" in
+          profile_source)
+    check("normal relief separates profile opacity from material coverage",
+          "float profile_f = f * profile_factor" in profile_source
+          and "mask_value *" in profile_source
+          and "* profile_f" in profile_source)
+    additive_profile_source = gpu_engine.dab_frag_src(
+        2, additive=True, profile_slots=(False, True))
+    check("normal relief preserves additive non-Normal channel output",
+          "brush_values[0].rgb *" in additive_profile_source
+          and "paint_flags.y * f" in additive_profile_source)
 
     targets = ops.gpu_paint_targets(layer)
     keys = tuple(key for key, _image in targets)

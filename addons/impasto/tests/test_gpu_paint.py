@@ -20,7 +20,7 @@ if ADDONS not in sys.path:
     sys.path.insert(0, ADDONS)
 
 import impasto
-from impasto import gpu_engine, model, ops
+from impasto import gpu_engine, model, ops, props
 from impasto.gpu import brush_math, caliper, overlays
 
 
@@ -62,6 +62,17 @@ for target in (0.2, 0.8):
     check("pressure opacity survives dense dab overlap at %.1f" % target,
           abs(accumulated - target) < 1e-6, repr(accumulated))
 
+erase_src = gpu_engine.dab_frag_src(2)
+check("eraser shader scales complete resident RGBA coverage",
+      erase_src.count("profile_flags.w > 0.5") == 2
+      and "vec4(1.0 - clamp(dab_params.paint_flags.y * f" in erase_src)
+soften_src = gpu_engine.soften_frag_src()
+check("soften shader uses a separate resident source and 3x3 kernel",
+      "textureSize(source_tex, 0)" in soften_src
+      and soften_src.count("texture(source_tex") == 10
+      and "paint_flags.y * f" in soften_src
+      and gpu_engine.soften_shader_create_info() is not None)
+
 effective, ring_px, percentages, too_small = gpu_engine.sss_caliper_layout(
     0.01, (1.0, 0.5, 0.25), 100.0, 2.0)
 check("SSS caliper uses Scale times RGB Radius",
@@ -89,6 +100,12 @@ check("tiny mesh-relative SSS distances warn without scaling",
 
 try:
     impasto.register()
+
+    brush_modes = props.ImpastoLayer.bl_rna.properties[
+        "brush_mode"].enum_items
+    check("GPU brush exposes Paint, Soften, and Erase modes",
+          tuple(item.identifier for item in brush_modes)
+          == ('PAINT', 'SOFTEN', 'ERASE'))
 
     # ---- registry contract behind stroke_payloads --------------------
     keys = gpu_engine.GPU_PAINT_CHANNEL_KEYS
@@ -344,13 +361,15 @@ try:
         ("base_color", "height"), refreshed_brush)
     check("GPU values refresh between strokes without restart",
           gpu_engine.update_stroke_settings(
-              refreshed, radius=73.0, hardness=0.25))
+              refreshed, radius=73.0, hardness=0.25,
+              brush_mode='SOFTEN'))
     current_payloads, current_settings = \
         gpu_engine.stroke_settings_snapshot()
     check("GPU session uses refreshed payload, radius and hardness",
           current_payloads == refreshed
           and current_settings["radius"] == 73.0
-          and current_settings["hardness"] == 0.25)
+          and current_settings["hardness"] == 0.25
+          and current_settings["brush_mode"] == 'SOFTEN')
     gpu_engine.begin_stroke(10.0, 10.0, 0.2)
     gpu_engine.move_stroke(30.0, 10.0, 0.8, 40.0)
     queued_pressures = [dab[2] for dab in gpu_engine._session.dab_queue]

@@ -228,6 +228,15 @@ class ImpastoLayer(bpy.types.PropertyGroup):
         description="Additional opacity multiplier applied to every channel "
                     "of a GPU stroke",
         default=1.0, min=0.0, max=1.0, subtype='FACTOR')
+    brush_mode: EnumProperty(
+        name="Brush Mode",
+        description="Paint values, soften detail, or erase layer coverage",
+        items=(('PAINT', "Paint", "Deposit enabled channel values"),
+               ('SOFTEN', "Soften", "Blur detail in every enabled channel "
+                                    "while keeping its texture GPU-resident"),
+               ('ERASE', "Erase", "Remove active-layer coverage to reveal "
+                                   "the layers below")),
+        default='PAINT')
     brush_pressure_opacity: BoolProperty(
         name="Opacity",
         description="Use tablet pressure to control GPU stroke opacity",
