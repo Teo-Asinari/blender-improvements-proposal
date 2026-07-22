@@ -4,7 +4,7 @@
 bl_info = {
     "name": "Impasto",
     "author": "Teo Asinari",
-    "version": (0, 12, 1),
+    "version": (0, 13, 0),
     "blender": (5, 1, 0),
     "location": "3D Viewport > Sidebar (N) > Impasto tab",
     "description": "Non-destructive PBR material layer stacks",
@@ -63,6 +63,10 @@ if "model" in locals():
         operator_support = importlib.reload(operator_support)
     else:
         from . import operator_support
+    if "flatten_export" in locals():
+        flatten_export = importlib.reload(flatten_export)
+    else:
+        from . import flatten_export
     ops = importlib.reload(ops)
     if "ui_channels" in locals():
         ui_channels = importlib.reload(ui_channels)
@@ -98,6 +102,7 @@ else:
     from . import props
     from . import paint
     from . import operator_support
+    from . import flatten_export
     from . import ops
     from . import ui_channels
     from . import ui_paint

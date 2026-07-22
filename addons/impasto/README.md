@@ -1,6 +1,6 @@
 # Impasto
 
-Impasto 0.12.1 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
+Impasto 0.13.0 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
 painting. It stores material work as ordered Paint and Fill layers, compiles
 the stack into a Principled BSDF material, and provides a GPU-resident painting
 session with immediate material feedback.
@@ -28,6 +28,9 @@ prototype and is not intended for serious work.**
 - A GPU-resident **Soften** brush that blurs all enabled active-layer channel
   canvases together; brush strength, falloff, and optional pressure control the
   effect without synchronizing images back to the CPU.
+- A GPU-resident **Smear** brush that transports enabled active-layer channel
+  pixels along the stroke. This first version maps screen direction onto
+  texture axes; rotated UV islands and seams remain a refinement target.
 - Layer-aware GPU erasing that removes active-layer coverage to reveal the
   layers below instead of painting black or neutral channel values.
 - GPU-resident per-stroke undo and deferred synchronization to Blender Images.
@@ -57,8 +60,11 @@ Impasto currently targets Blender 5.1.
 2. Add or select a Paint layer.
 3. Expand **Layer Channels** and add the channels that layer should own.
 4. Under **Brush Controls**, select **GPU Multi-Channel**.
-5. Choose Paint or Erase, then set Brush Radius, Brush Hardness, Brush
+5. Choose Paint, Soften, Smear, or Erase, then set Brush Radius, Brush Hardness, Brush
    Opacity, pressure behavior, and any channel values used by Paint mode.
+   Erase exposes a compact **Erase Channels** grid for targeting any subset
+   of the enabled layer channels. All are selected by default, and the
+   selection is saved in the `.blend`.
 6. Start GPU Painting.
 7. Use LMB to paint. RMB or Esc flushes the resident canvases and exits.
 
@@ -73,6 +79,23 @@ During a session:
 Ordinary GPU strokes remain resident at pen-up. Synchronization is explicit or
 performed when the session exits; 4K is viable, but uses substantially more
 VRAM and makes synchronization slower.
+
+## Flatten to channel images
+
+The **Flatten / Export** box creates one new Blender Image for every enabled
+stack channel without changing or deleting the source layers. Choose 1K, 2K,
+or 4K; generated datablocks are named `Impasto Export <material> <channel>`
+and can be packed safely into the `.blend`. Repeating the operation updates
+images with matching names and dimensions.
+
+Color channels are tagged sRGB; scalar, normal, height, and vector channels
+are Non-Color. Tangent normals remain encoded RGB, height remains in its
+stored data representation, and flattened outputs are opaque because the
+channel's material default supplies a complete surface below all layers.
+Source images are bilinearly resampled to the chosen size. Flush a resident
+GPU session first. UDIM images and stacks using multiple UV maps are rejected
+rather than producing a misleading result; file-path export is left to
+Blender's Image editor.
 
 ## Painting engines
 
@@ -123,6 +146,12 @@ baseline layer. Multiple opaque normal layers still use encoded-RGB mixing;
 true RNM/UDN layered-normal composition remains unimplemented.
 
 ## Image stencils
+
+The stencil image selector includes a cached thumbnail of the selected image.
+The Preview Lighting popover includes Blender's spherical preview for the
+active material; because resident strokes deliberately avoid routine
+readback, that sphere represents the last synchronized material. Use Inspect
+Material or finish the painting session to synchronize it.
 
 An Image Stencil has three independent choices:
 

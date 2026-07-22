@@ -27,10 +27,32 @@ def draw_brush_mode(layout, layer):
                       icon_value=ui_icons.icon_value('soften'),
                       depress=layer.brush_mode == 'SOFTEN')
     op.mode = 'SOFTEN'
+    op = row.operator(ops.IMPASTO_OT_brush_mode_set.bl_idname, text="Smear",
+                      icon='FORCE_VORTEX',
+                      depress=layer.brush_mode == 'SMEAR')
+    op.mode = 'SMEAR'
     op = row.operator(ops.IMPASTO_OT_brush_mode_set.bl_idname, text="Erase",
                       icon_value=ui_icons.icon_value('erase'),
                       depress=layer.brush_mode == 'ERASE')
     op.mode = 'ERASE'
+
+
+def draw_erase_channels(layout, layer, channel_keys):
+    """Draw compact channel targeting for the GPU eraser."""
+    box = layout.box()
+    box.label(text="Erase Channels", icon='IMAGE_DATA')
+    grid = box.grid_flow(row_major=True, columns=2, even_columns=True,
+                         even_rows=False, align=True)
+    selected = 0
+    for key in channel_keys:
+        index = model.CHANNEL_ORDER[key]
+        grid.prop(layer, "erase_channels", index=index,
+                  text=model.CHANNEL_MAP[key].label, toggle=True)
+        selected += bool(layer.erase_channels[index])
+    if not selected:
+        warning = box.row()
+        warning.alert = True
+        warning.label(text="Select at least one channel", icon='ERROR')
 
 
 def draw_recent_colors(layout, layer, channel_keys):
@@ -102,14 +124,16 @@ class PaintPanelMixin:
         if layer.paint_workflow == 'GPU':
             brush = paint.column(align=True)
             draw_brush_mode(brush, layer)
+            if layer.brush_mode == 'ERASE':
+                draw_erase_channels(brush, layer, keys)
             brush.separator()
             brush.label(text="Brush Shape & Input", icon='BRUSH_DATA')
             brush.prop(layer, "brush_radius", text="Brush Radius")
             brush.prop(layer, "brush_hardness", text="Brush Hardness",
                        slider=True)
             brush.prop(layer, "brush_opacity",
-                       text=("Soften Strength"
-                             if layer.brush_mode == 'SOFTEN'
+                       text=("Effect Strength"
+                             if layer.brush_mode in {'SOFTEN', 'SMEAR'}
                              else "Brush Opacity"),
                        slider=True)
             row = brush.row(align=True)
@@ -122,14 +146,17 @@ class PaintPanelMixin:
                    and layer.brush_mode == 'ERASE')
         softening = (layer.paint_workflow == 'GPU'
                      and layer.brush_mode == 'SOFTEN')
+        smearing = (layer.paint_workflow == 'GPU'
+                    and layer.brush_mode == 'SMEAR')
         paint.label(text=("Values ignored while erasing" if erasing else
                           "Softens all enabled layer channels" if softening
+                          else "Smears all enabled layer channels" if smearing
                           else "Painted Channel Values"), icon='MATERIAL')
-        if softening:
+        if softening or smearing:
             paint.label(text="Pressure controls strength when enabled",
                         icon='INFO')
         values = paint.column(align=True)
-        values.enabled = not (erasing or softening)
+        values.enabled = not (erasing or softening or smearing)
         if 'base_color' in keys:
             values.prop(layer, "paint_color", text="Base Color")
         if 'roughness' in keys:
@@ -209,7 +236,12 @@ class PaintPanelMixin:
 
     def _draw_stencil_controls(self, col, layer):
         """Present projection, source data, and effect as distinct choices."""
-        col.template_ID(layer, "brush_stencil_image", open="image.open")
+        # Blender owns the thumbnail cache, so this remains cheap and updates
+        # when the selected Image datablock changes without an Impasto GPU
+        # allocation or pixel readback.
+        col.template_ID_preview(
+            layer, "brush_stencil_image", open="image.open",
+            rows=3, cols=4, hide_buttons=False)
 
         col.separator()
         col.label(text="Placement", icon='VIEW_CAMERA')
@@ -232,6 +264,8 @@ class PaintPanelMixin:
         effects.label(text="Stencil Effects", icon='MODIFIER')
         effects.prop(layer, "brush_stencil_coverage", toggle=True)
         effects.prop(layer, "brush_stencil_normal_relief", toggle=True)
+        effects.label(text="Coverage affects enabled Layer Channels only",
+                      icon='INFO')
 
         controls = col.box()
         controls.label(text="Effect Controls", icon='SETTINGS')

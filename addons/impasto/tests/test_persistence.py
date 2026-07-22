@@ -48,6 +48,7 @@ try:
         paint.paint_sss_weight = 0.65
         paint.paint_sss_radius = (1.4, 0.35, 0.12)
         paint.paint_sss_scale = 0.025
+        paint.erase_channels[model.CHANNEL_ORDER["metallic"]] = False
         impasto.ops.remember_recent_color(
             paint, "base_color", (0.12, 0.34, 0.56))
         impasto.ops.remember_recent_color(
@@ -110,6 +111,10 @@ try:
           and all(abs(a - b) < 1e-6 for a, b in zip(
               paint.paint_sss_radius, (1.4, 0.35, 0.12)))
           and abs(paint.paint_sss_scale - 0.025) < 1e-6)
+    check("eraser channel targeting persists across save/reopen",
+          not paint.erase_channels[model.CHANNEL_ORDER["metallic"]]
+          and paint.erase_channels[model.CHANNEL_ORDER["base_color"]]
+          and paint.erase_channels[model.CHANNEL_ORDER["roughness"]])
     check("recent Base and Emission colors persist per material stack",
           len(tree.impasto.recent_base_colors) == 1
           and len(tree.impasto.recent_emission_colors) == 1

@@ -381,8 +381,9 @@ def dab_frag_src(channels=1, additive=False, profile_slots=None,
         output = "fragColor" if i == 0 else "fragColor%d" % i
         lines.append(
             "    if (dab_params.profile_flags.w > 0.5) { %s = "
-            "vec4(1.0 - clamp(dab_params.paint_flags.y * f, 0.0, 1.0)); } "
-            "else" % output)
+            "vec4(1.0 - clamp(dab_params.brush_values[%d].a * "
+            "dab_params.paint_flags.y * f, 0.0, 1.0)); } "
+            "else" % (output, i))
         if profile_slots[i]:
             lines.append(
                 "    { %s = profile_mode ? vec4(compose_profile_normal("
@@ -427,6 +428,23 @@ def soften_frag_src():
     softened *= 0.0625;
     float soften_strength = clamp(dab_params.paint_flags.y * f, 0.0, 1.0);
     fragColor = mix(texture(source_tex, paintUV), softened, soften_strength);
+"""
+    return _DAB_FRAG_PRELUDE + output + "\n}\n"
+
+
+def smear_frag_src():
+    """Resident directional transport from a separate source texture.
+
+    ``profile_flags.zw`` is expressed in texture UV and points back toward the
+    preceding dab.  Keeping source and destination separate avoids undefined
+    render-target feedback, just as the Soften path does.
+    """
+    output = """
+    vec4 current = texture(source_tex, paintUV);
+    vec4 carried = texture(source_tex, clamp(paintUV + dab_params.profile_flags.zw,
+                                             vec2(0.0), vec2(1.0)));
+    float smear_strength = clamp(dab_params.paint_flags.y * f, 0.0, 1.0);
+    fragColor = mix(current, carried, smear_strength);
 """
     return _DAB_FRAG_PRELUDE + output + "\n}\n"
 
@@ -1232,6 +1250,25 @@ def soften_shader_create_info():
     return info
 
 
+def smear_shader_create_info():
+    iface = gpu.types.GPUStageInterfaceInfo("impasto_smear_dab_iface")
+    iface.smooth('VEC3', "worldPos")
+    iface.smooth('VEC2', "paintUV")
+    info = gpu.types.GPUShaderCreateInfo()
+    info.typedef_source(DAB_UBO_TYPEDEF)
+    info.uniform_buf(DAB_UBO_SLOT, "ImpastoDabParams", DAB_UBO_NAME)
+    info.sampler(0, 'FLOAT_2D', "scene_depth_tex")
+    info.sampler(1, 'FLOAT_2D', "stencil_tex")
+    info.sampler(2, 'FLOAT_2D', "source_tex")
+    info.vertex_in(0, 'VEC3', "pos")
+    info.vertex_in(1, 'VEC2', "uv")
+    info.vertex_out(iface)
+    info.fragment_out(0, 'VEC4', "fragColor")
+    info.vertex_source(DAB_VERT_SRC)
+    info.fragment_source(visibility.GLSL_SOURCE + smear_frag_src())
+    return info
+
+
 def stencil_preview_shader_create_info():
     """POST_PIXEL image shader for both stencil projection previews."""
     iface = gpu.types.GPUStageInterfaceInfo("impasto_stencil_preview_iface")
@@ -1657,10 +1694,13 @@ class _Session:
         self.dab_ubos = None
         self.dab_ubo_data = None
         self.soften_shader = None
+        self.smear_shader = None
         self.soften_ubo = None
         self.soften_ubo_data = None
         self.soften_scratch = None
         self.batch_soften = None
+        self.batch_smear = None
+        self.smear_last_point = None
         self.prepass_shader = None
         self.preview_shader = None
         self.paint_texs = None         # list of N RGBA16F GPUTextures
@@ -2075,8 +2115,39 @@ def stop_session():
     if _session is not None:
         if _session.history_backend is not None:
             _session.history.clear(_session.history_backend)
-        # Drop gpu refs; Blender frees them with the last reference.
+        _release_gpu_references(_session)
         _session = None
+
+
+def _release_gpu_references(s):
+    """Drop every session-owned GPU object deterministically.
+
+    Blender releases the underlying resource when the final Python reference
+    disappears.  Clearing the references explicitly prevents a stopped or
+    restarted resident session from retaining a texture/framebuffer cycle
+    until a later garbage-collection pass.
+    """
+    names = (
+        "dab_shaders", "dab_ubos", "soften_shader", "smear_shader",
+        "soften_ubo", "soften_scratch", "batch_soften", "batch_smear",
+        "prepass_shader",
+        "preview_shader", "paint_texs", "paint_fbs", "depth_color_tex",
+        "depth_depth_tex", "depth_fb", "batch_dabs", "batch_prepass",
+        "batch_preview", "neutral_tex", "copy_shader", "copy_batch",
+        "single_fbs", "environment_tex", "base_normal_tex",
+        "base_normal_gpu_ref", "stencil_tex", "stencil_preview_shader",
+        "baseline_shader", "baseline_batch", "baseline_texs",
+        "baseline_gpu_refs", "overlay_circle_batch", "overlay_color_shader",
+    )
+    for name in names:
+        if name == "baseline_texs":
+            setattr(s, name, {})
+        elif name == "baseline_gpu_refs":
+            setattr(s, name, [])
+        else:
+            setattr(s, name, None)
+    s.depth_fb_size = None
+    s.gpu_ready = False
 
 
 def begin_stroke(x, y, pressure):
@@ -2096,6 +2167,7 @@ def begin_stroke(x, y, pressure):
     s.stroke_dirty = None
     s.stroke_dirty_full = False
     s.dirty_ms = 0.0
+    s.smear_last_point = None
     s.dab_queue.append((x, y, pressure))
 
 
@@ -2187,6 +2259,7 @@ def cursor_position():
 
 def update_stroke_settings(payloads, radius=None, hardness=None, opacity=None,
                            brush_mode=None,
+                           erase_channel_keys=None,
                            stamp=None, stencil_settings=None,
                            caliper_settings=None):
     """Refresh values sampled at the next pen-down without restarting.
@@ -2210,6 +2283,8 @@ def update_stroke_settings(payloads, radius=None, hardness=None, opacity=None,
         s.settings["opacity"] = max(0.0, min(1.0, float(opacity)))
     if brush_mode is not None:
         s.settings["brush_mode"] = str(brush_mode)
+    if erase_channel_keys is not None:
+        s.settings["erase_channel_keys"] = tuple(erase_channel_keys)
     s.settings["brush_stamp"] = stamp
     if stencil_settings is not None:
         s.settings.update(dict(stencil_settings))
@@ -2486,6 +2561,7 @@ def _ensure_gpu(s):
     s.prepass_shader = gpu.shader.create_from_info(
         prepass_shader_create_info())
     s.soften_shader = gpu.shader.create_from_info(soften_shader_create_info())
+    s.smear_shader = gpu.shader.create_from_info(smear_shader_create_info())
     s.soften_ubo_data = np.zeros((DAB_UBO_VEC4_COUNT, 4), dtype=np.float32)
     s.soften_ubo = gpu.types.GPUUniformBuf(s.soften_ubo_data)
     s.preview_shader = gpu.shader.create_from_info(
@@ -2573,6 +2649,8 @@ def _ensure_gpu(s):
         for shader in s.dab_shaders]
     s.batch_soften = batch_for_shader(
         s.soften_shader, 'TRIS', {"pos": s.coords, "uv": s.uvs})
+    s.batch_smear = batch_for_shader(
+        s.smear_shader, 'TRIS', {"pos": s.coords, "uv": s.uvs})
     s.batch_prepass = batch_for_shader(
         s.prepass_shader, 'TRIS', {"pos": s.coords})
     s.batch_preview = batch_for_shader(
@@ -3131,6 +3209,12 @@ def _update_prepass(s, region, rv3d):
     w = max(int(region.width), 8)
     h = max(int(region.height), 8)
     if s.depth_fb_size != (w, h):
+        # Release the old attachment graph before replacing it.  Framebuffers
+        # retain their attachments, so merely overwriting the textures can
+        # otherwise defer a viewport-sized allocation until GC.
+        s.depth_fb = None
+        s.depth_color_tex = None
+        s.depth_depth_tex = None
         s.depth_color_tex = gpu.types.GPUTexture((w, h), format='R32F')
         s.depth_depth_tex = gpu.types.GPUTexture(
             (w, h), format='DEPTH_COMPONENT32F')
@@ -3251,14 +3335,24 @@ def _flush_dabs(s, region):
                     s.history_backend, "GPU multi-channel stroke")
             rect = dirty_rect or (0, 0, s.size, s.size)
             keys = tuple(s.settings.get("channel_keys", ()))
+            erase = s.settings.get("brush_mode", "PAINT") == "ERASE"
+            erase_keys = set(s.settings.get("erase_channel_keys", keys))
             for i in range(s.channels):
                 channel = keys[i] if i < len(keys) else str(i)
+                if erase and channel not in erase_keys:
+                    continue
                 s.stroke_transaction.touch_rect(
                     channel, rect, (s.size, s.size))
 
     if s.settings.get("brush_mode", "PAINT") == "SOFTEN":
         _flush_soften_dabs(s, region, queue, radius, hardness, occlusion,
                            stamp, stencil_tex, use_stencil)
+        s.dab_count += len(queue)
+        s.last_dab_t = time.perf_counter()
+        return
+    if s.settings.get("brush_mode", "PAINT") == "SMEAR":
+        _flush_smear_dabs(s, region, queue, radius, hardness, occlusion,
+                          stamp, stencil_tex, use_stencil)
         s.dab_count += len(queue)
         s.last_dab_t = time.perf_counter()
         return
@@ -3270,6 +3364,9 @@ def _flush_dabs(s, region):
         with fb.bind():
             fb.viewport_set(0, 0, s.size, s.size)
             erase = s.settings.get("brush_mode", 'PAINT') == 'ERASE'
+            channel_keys = tuple(s.settings.get("channel_keys", ()))
+            erase_keys = set(s.settings.get("erase_channel_keys",
+                                             channel_keys))
             gpu.state.blend_set(
                 'MULTIPLY' if erase else
                 ('ADDITIVE' if blend == 'ADD' else 'ALPHA'))
@@ -3283,7 +3380,10 @@ def _flush_dabs(s, region):
                 value = tuple(payload.get("value", (0.0, 0.0, 0.0)))[:3]
                 brush_values.append((
                     value[0], value[1], value[2],
-                    float(payload.get("strength", 1.0))))
+                    (1.0 if (target_index < len(channel_keys)
+                             and channel_keys[target_index] in erase_keys)
+                     else 0.0)
+                    if erase else float(payload.get("strength", 1.0))))
             stencil_projection = (
                 s.settings.get("stencil_projection") == 'BRUSH_ALPHA')
             stencil_interpretation = (
@@ -3406,6 +3506,75 @@ def _flush_soften_dabs(s, region, queue, radius, hardness, occlusion, stamp,
         s.paint_fbs = [gpu.types.GPUFrameBuffer(
             color_slots=tuple(s.paint_texs[i] for i in indices))
             for _blend, indices in s.target_batches]
+
+
+def _flush_smear_dabs(s, region, queue, radius, hardness, occlusion, stamp,
+                      stencil_tex, use_stencil):
+    """Transport resident pixels in stroke direction without readback.
+
+    This first usable version maps screen direction onto texture axes. It is
+    deterministic and useful on ordinary UV islands; projection-aware
+    transport across rotated islands and seams remains future work.
+    """
+    sh = s.smear_shader
+    data = s.soften_ubo_data
+    ubo = s.soften_ubo
+    previous = s.smear_last_point
+    for x, y, pressure in queue:
+        if previous is None:
+            previous = (x, y)
+            continue
+        dx, dy = float(x - previous[0]), float(y - previous[1])
+        length = max((dx * dx + dy * dy) ** 0.5, 1e-6)
+        # Sample behind the dab, capped to keep transport stable on sparse
+        # tablet events. Direction is inverted because GLSL samples source.
+        travel = min(length, max(1.0, radius * 0.35)) / float(s.size)
+        offset = (-dx / length * travel, -dy / length * travel)
+        dab_radius, dab_opacity = (stamp.values_at_pressure(pressure)
+                                   if stamp is not None
+                                   else (radius, pressure))
+        strength = max(0.0, min(1.0, dab_opacity * float(
+            s.settings.get("opacity", 1.0))))
+        dab_uniform_data(
+            s.model, s.view_proj, s.view_depth_plane,
+            (region.width, region.height), (x, y), dab_radius, hardness,
+            DEPTH_EPSILON, visibility.DEFAULT_POLICY.relative_epsilon,
+            occlusion, strength, use_stencil,
+            s.settings.get("stencil_projection") == 'BRUSH_ALPHA',
+            s.settings.get("stencil_interpretation") == 'LUMINANCE',
+            float(s.settings.get("stencil_opacity", 1.0)),
+            tuple(s.settings.get("stencil_position", (0.5, 0.5))),
+            tuple(s.settings.get("stencil_scale", (0.35, 0.35))),
+            float(s.settings.get("stencil_rotation", 0.0)), (), data=data)
+        data[DAB_UBO_PROFILE_FLAGS, 2:4] = offset
+        ubo.update(data)
+        for index in range(s.channels):
+            source, target = s.paint_texs[index], s.soften_scratch
+            target_fb = gpu.types.GPUFrameBuffer(color_slots=(target,))
+            s.history_backend._draw_copy(source, target_fb,
+                                         (0, 0, s.size, s.size),
+                                         (0.0, 0.0), (1.0, 1.0))
+            with target_fb.bind():
+                target_fb.viewport_set(0, 0, s.size, s.size)
+                gpu.state.blend_set('NONE')
+                gpu.state.depth_test_set('NONE')
+                gpu.state.depth_mask_set(False)
+                gpu.state.face_culling_set('NONE')
+                sh.bind()
+                sh.uniform_block(DAB_UBO_NAME, ubo)
+                sh.uniform_sampler("scene_depth_tex", s.depth_color_tex)
+                sh.uniform_sampler("stencil_tex", stencil_tex if use_stencil
+                                   else s.depth_color_tex)
+                sh.uniform_sampler("source_tex", source)
+                s.batch_smear.draw(sh)
+            s.paint_texs[index], s.soften_scratch = target, source
+        previous = (x, y)
+    s.smear_last_point = previous
+    s.single_fbs = [gpu.types.GPUFrameBuffer(color_slots=(tex,))
+                    for tex in s.paint_texs]
+    s.paint_fbs = [gpu.types.GPUFrameBuffer(
+        color_slots=tuple(s.paint_texs[i] for i in indices))
+        for _blend, indices in s.target_batches]
 
 
 # ---------------------------------------------------------------------------

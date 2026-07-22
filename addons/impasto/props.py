@@ -20,9 +20,9 @@ Every ``update=`` callback routes to engine.py's trigger classifier
 import re
 
 import bpy
-from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
-                       FloatProperty, FloatVectorProperty, IntProperty,
-                       IntVectorProperty, PointerProperty,
+from bpy.props import (BoolProperty, BoolVectorProperty, CollectionProperty,
+                       EnumProperty, FloatProperty, FloatVectorProperty,
+                       IntProperty, IntVectorProperty, PointerProperty,
                        StringProperty)
 
 from . import engine
@@ -241,14 +241,23 @@ class ImpastoLayer(bpy.types.PropertyGroup):
         default=1.0, min=0.0, max=1.0, subtype='FACTOR')
     brush_mode: EnumProperty(
         name="Brush Mode",
-        description="Paint values, soften detail, or erase layer coverage",
+        description="Paint, soften, smear, or erase active-layer detail",
         items=(('PAINT', "Paint", "Paint the configured values into every "
                                   "enabled channel"),
                ('SOFTEN', "Soften", "Blur detail in every enabled channel "
                                     "using pressure-scaled soften strength"),
+               ('SMEAR', "Smear", "Transport active-layer pixels along the "
+                                   "stroke direction"),
                ('ERASE', "Erase", "Erase active-layer coverage to reveal "
                                    "the layers below")),
         default='PAINT')
+    erase_channels: BoolVectorProperty(
+        name="Erase Channels",
+        description="Choose which enabled layer channels the Erase brush "
+                    "removes; newly created and existing layers default to "
+                    "all channels",
+        size=len(model.CHANNELS),
+        default=tuple(True for _channel in model.CHANNELS))
     brush_pressure_opacity: BoolProperty(
         name="Opacity",
         description="Use tablet pressure to control GPU stroke opacity",

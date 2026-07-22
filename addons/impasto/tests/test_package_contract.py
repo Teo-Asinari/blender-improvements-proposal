@@ -19,7 +19,7 @@ PUBLIC_MODULES = (
     "model", "channel_paint", "debounce", "compat", "reconcile",
     "snapshot", "engine", "visibility", "brush_adapter", "tile_undo",
     "ibl", "preview_stack", "stencil", "gpu_engine", "props", "paint",
-    "ops", "ui_icons", "ui",
+    "flatten_export", "ops", "ui_icons", "ui",
 )
 
 OPERATOR_IDS = {
@@ -37,6 +37,7 @@ OPERATOR_IDS = {
     "IMPASTO_OT_detail_paint": "impasto.detail_paint",
     "IMPASTO_OT_recent_color_apply": "impasto.recent_color_apply",
     "IMPASTO_OT_brush_mode_set": "impasto.brush_mode_set",
+    "IMPASTO_OT_flatten_export": "impasto.flatten_export",
     "IMPASTO_OT_native_multichannel_paint":
         "impasto.native_multichannel_paint",
     "IMPASTO_OT_gpu_paint": "impasto.gpu_paint",
@@ -63,7 +64,8 @@ PROPERTY_IDS = {
         "paint_emission_color", "paint_emission_strength",
         "paint_sss_weight", "paint_sss_radius", "paint_sss_scale",
         "show_sss_caliper", "brush_radius", "brush_hardness",
-        "brush_opacity", "brush_mode", "brush_pressure_opacity",
+        "brush_opacity", "brush_mode", "erase_channels",
+        "brush_pressure_opacity",
         "brush_pressure_size",
         "brush_stencil_enabled", "brush_stencil_image",
         "brush_stencil_projection", "brush_stencil_interpretation",

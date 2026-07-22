@@ -94,6 +94,10 @@ try:
         layer_type="PAINT") == {'FINISHED'})
     tree = engine.find_stack_for_material(obj.active_material)
     layer = tree.impasto.active_layer()
+    for scalar_key in ("metallic", "roughness"):
+        check("bind %s stencil target" % scalar_key,
+              bpy.ops.impasto.binding_add(
+                  channel_key=scalar_key) == {'FINISHED'})
     mask = bpy.data.images.new("Impasto Stencil Test", 16, 8, alpha=True)
     layer.brush_stencil_enabled = True
     layer.brush_stencil_image = mask
@@ -197,7 +201,31 @@ try:
     targets = ops.gpu_paint_targets(layer)
     keys = tuple(key for key, _image in targets)
     images = [image for _key, image in targets]
+    layer.paint_metallic = 0.23
+    layer.paint_roughness = 0.81
     payloads = gpu_engine.stroke_payloads(keys, ops._gpu_brush(layer))
+    payload_by_key = dict(zip(keys, payloads))
+    check("combined stencil keeps configured scalar channel values",
+          all(abs(value - 0.23) < 1e-6 for value in
+              payload_by_key["metallic"]["value"])
+          and all(abs(value - 0.81) < 1e-6 for value in
+                  payload_by_key["roughness"]["value"]))
+    import numpy as np
+    packed_values = [tuple(payload["value"]) +
+                     (float(payload["strength"]),)
+                     for payload in payloads]
+    packed = gpu_engine.dab_uniform_data(
+        np.identity(4), np.identity(4), (0.0, 0.0, 1.0, 0.0),
+        (800, 600), (400, 300), 40.0, 0.5, 1e-4, 1e-4, True,
+        1.0, True, True, True, 0.6, (0.5, 0.5), (1.0, 1.0), 0.0,
+        packed_values, profile_usage=True)
+    metallic_slot = keys.index("metallic")
+    roughness_slot = keys.index("roughness")
+    check("combined stencil packs scalar values into their MRT slots",
+          abs(float(packed[gpu_engine.DAB_UBO_BRUSH_VALUES
+                           + metallic_slot, 0]) - 0.23) < 1e-6
+          and abs(float(packed[gpu_engine.DAB_UBO_BRUSH_VALUES
+                               + roughness_slot, 0]) - 0.81) < 1e-6)
     runtime = {"channel_keys": keys, "radius": 40.0, "hardness": 0.5}
     runtime.update(gpu_settings)
     check("resident stencil session starts without image readback",

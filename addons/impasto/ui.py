@@ -133,6 +133,12 @@ class IMPASTO_PT_main(PaintPanelMixin, bpy.types.Panel):
                 box.prop(layer, "opacity", slider=True)
 
         layout.separator()
+        export_box = layout.box()
+        export_box.label(text="Flatten / Export", icon='IMAGE_DATA')
+        export_box.label(text="Creates new images; layers stay editable")
+        export_box.operator_context = 'INVOKE_DEFAULT'
+        export_box.operator(ops.IMPASTO_OT_flatten_export.bl_idname,
+                            text="Flatten to Channel Images", icon='RENDER_RESULT')
         layout.operator(ops.IMPASTO_OT_stack_rebuild.bl_idname,
                         text="Rebuild", icon='FILE_REFRESH')
 
@@ -152,6 +158,12 @@ class IMPASTO_PT_preview_lighting(bpy.types.Panel):
             self.layout.label(text="No active Impasto layer", icon='INFO')
             return
         col = self.layout.column(align=True)
+        mat = obj.active_material if obj is not None else None
+        if mat is not None:
+            col.label(text="Material Sphere", icon='MATERIAL')
+            col.template_preview(mat, show_buttons=False)
+            col.label(text="Shows the last synchronized material", icon='INFO')
+            col.separator()
         col.label(text="Environment", icon='WORLD')
         col.prop(layer, "preview_environment_exposure", text="Exposure")
         col.prop(layer, "preview_environment_rotation", text="Rotation")

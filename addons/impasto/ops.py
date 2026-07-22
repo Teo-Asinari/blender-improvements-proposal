@@ -15,6 +15,7 @@ from . import compat
 from . import brush_adapter
 from . import channel_paint
 from . import engine
+from . import flatten_export
 from . import gpu_engine
 from . import model
 from . import operator_support
@@ -1120,6 +1121,9 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
                             and stamp.supported else None),
             "opacity": layer.brush_opacity,
             "brush_mode": layer.brush_mode,
+            "erase_channel_keys": tuple(
+                key for key in keys
+                if layer.erase_channels[model.CHANNEL_ORDER[key]]),
             "preview_mode": gpu_preview_mode(layer),
             "stack_model": snapshot.snapshot(
                 tree, _context_material(context)),
@@ -1217,6 +1221,9 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             payloads, radius=self._radius,
             hardness=layer.brush_hardness, opacity=layer.brush_opacity,
             brush_mode=layer.brush_mode,
+            erase_channel_keys=tuple(
+                key for key in self._channel_keys
+                if layer.erase_channels[model.CHANNEL_ORDER[key]]),
             stamp=supported_stamp,
             stencil_settings=gpu_stencil_settings(layer).as_gpu_settings(),
             caliper_settings=gpu_sss_caliper(layer, context.scene))
@@ -1543,6 +1550,7 @@ class IMPASTO_OT_brush_mode_set(bpy.types.Operator):
     mode: EnumProperty(items=(
         ('PAINT', "Paint", "Paint configured values into enabled channels"),
         ('SOFTEN', "Soften", "Diffuse detail across enabled channels"),
+        ('SMEAR', "Smear", "Transport active-layer pixels along the stroke"),
         ('ERASE', "Erase", "Remove active-layer coverage"),
     ))
 
@@ -1552,6 +1560,8 @@ class IMPASTO_OT_brush_mode_set(bpy.types.Operator):
             'PAINT': "Paint configured values into every enabled channel",
             'SOFTEN': "Soften detail in every enabled channel; pressure can "
                       "control strength",
+            'SMEAR': "Smear active-layer detail along the stroke direction; "
+                     "pressure can control strength",
             'ERASE': "Erase active-layer coverage to reveal the layers below",
         }.get(properties.mode, "Select the GPU brush mode")
 
@@ -1567,6 +1577,47 @@ class IMPASTO_OT_brush_mode_set(bpy.types.Operator):
         if layer is None:
             return {'CANCELLED'}
         layer.brush_mode = self.mode
+        return {'FINISHED'}
+
+
+class IMPASTO_OT_flatten_export(bpy.types.Operator):
+    """Composite the visible stack into new, packed channel images; source
+    layers are preserved unchanged"""
+    bl_idname = "impasto.flatten_export"
+    bl_label = "Impasto: Flatten to Channel Images"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    resolution: EnumProperty(name="Output Resolution", items=(
+        ('1024', "1K", "1024 x 1024 pixels"),
+        ('2048', "2K", "2048 x 2048 pixels"),
+        ('4096', "4K", "4096 x 4096 pixels"),
+    ), default='2048')
+    pack_images: BoolProperty(
+        name="Pack Images in .blend", default=True,
+        description="Pack generated images into the blend file; no files are written")
+
+    @classmethod
+    def poll(cls, context):
+        _, tree = _context_stack(context)
+        return tree is not None
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context):
+        mat, tree = _context_stack(context)
+        if gpu_engine.has_unflushed_changes():
+            self.report({'ERROR'}, "Flush GPU paint before flattening")
+            return {'CANCELLED'}
+        size = int(self.resolution)
+        try:
+            images = flatten_export.flatten_stack(
+                tree, mat.name, size, size, self.pack_images)
+        except (RuntimeError, ValueError) as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, "Created %d non-destructive %s channel images"
+                    % (len(images), self.resolution))
         return {'FINISHED'}
 
 
@@ -1589,6 +1640,7 @@ _classes = (
     IMPASTO_OT_gpu_flush,
     IMPASTO_OT_gpu_material_inspect_toggle,
     IMPASTO_OT_brush_mode_set,
+    IMPASTO_OT_flatten_export,
 )
 
 

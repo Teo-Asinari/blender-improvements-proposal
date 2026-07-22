@@ -43,6 +43,7 @@ run_one "$TESTS_DIR/test_preview_modes.py" "IMPASTO_PREVIEW_MODES_PASSED" || sta
 run_one "$TESTS_DIR/test_gpu_preview_contract.py" "IMPASTO_GPU_PREVIEW_CONTRACT_PASSED" || status=1
 run_one "$TESTS_DIR/test_ibl_preview.py" "IMPASTO_IBL_PREVIEW_PASSED" || status=1
 run_one "$TESTS_DIR/test_preview_stack.py" "IMPASTO_PREVIEW_STACK_PASSED" || status=1
+run_one "$TESTS_DIR/test_preview_hardening.py" "preview hardening tests PASSED" || status=1
 run_one "$TESTS_DIR/test_brush_undo.py" "IMPASTO_BRUSH_UNDO_PASSED" || status=1
 run_one "$TESTS_DIR/test_visibility.py" "IMPASTO_VISIBILITY_PASSED" || status=1
 run_one "$TESTS_DIR/test_scalar_channels.py" "IMPASTO_SCALAR_CHANNELS_PASSED" || status=1
@@ -50,6 +51,7 @@ run_one "$TESTS_DIR/test_rendered_semantics.py" "IMPASTO_RENDERED_SEMANTICS_PASS
 run_one "$TESTS_DIR/test_pbr_canvas_semantics.py" "IMPASTO_PBR_CANVAS_PASSED" || status=1
 run_one "$TESTS_DIR/test_normal_paint.py" "IMPASTO_NORMAL_PAINT_PASSED" || status=1
 run_one "$TESTS_DIR/test_persistence.py" "IMPASTO_PERSISTENCE_PASSED" || status=1
+run_one "$TESTS_DIR/test_flatten_export.py" "flatten export tests passed" || status=1
 run_one "$TESTS_DIR/test_restore.py" "IMPASTO_RESTORE_PASSED" || status=1
 run_one "$TESTS_DIR/test_undo.py" "IMPASTO_UNDO_PASSED" || status=1
 if [ "$status" -eq 0 ]; then

@@ -1,5 +1,21 @@
 # Impasto — multi-channel painting milestone progress
 
+## 0.13.0 — targeted erase, smear, export, and preview hardening
+
+- Added GPU-resident Smear across every enabled active-layer channel with
+  pressure-scaled strength and no routine GPU-to-CPU synchronization.
+- Direction mapping is presently screen-to-texture approximate;
+  projection-aware transport over rotated UV islands and seams remains.
+- Erase can target a persistent subset of the active layer's enabled channels;
+  all channels remain selected by default.
+- Non-destructive Flatten to Channel Images creates explicit 1K/2K/4K channel
+  images while preserving the source stack; UDIM and mixed-UV stacks remain
+  unsupported.
+- Added stencil and synchronized-material previews plus deterministic resident
+  GPU resource teardown.
+- Confirmed with exact payload/UBO-slot tests that bound Metallic and Roughness
+  values survive combined Paint Coverage and Normal Relief strokes.
+
 ## 0.12.1 — independent stencil effects
 
 - Paint Coverage and Normal Relief are independent toggles and can run in the
@@ -60,9 +76,6 @@
 - Interactively qualify the implemented GPU eraser, which removes resident
   stroke coverage atomically across enabled channels rather than painting
   replacement values.
-- Add flatten/export: composite the layer stack into one authoritative image
-  per material channel, with explicit resolution, colorspace, normal/height,
-  and alpha rules.
 - Add spherical material previews, stencil thumbnails, and a recent-material
   palette with channel-value tooltips.
 - Add a pinned SSS Caliper inspection mode outside active GPU painting.
