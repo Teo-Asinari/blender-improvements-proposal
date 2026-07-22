@@ -19,7 +19,7 @@ PUBLIC_MODULES = (
     "model", "channel_paint", "debounce", "compat", "reconcile",
     "snapshot", "engine", "visibility", "brush_adapter", "tile_undo",
     "ibl", "preview_stack", "stencil", "gpu_engine", "props", "paint",
-    "ops", "ui",
+    "ops", "ui_icons", "ui",
 )
 
 OPERATOR_IDS = {
@@ -35,6 +35,8 @@ OPERATOR_IDS = {
     "IMPASTO_OT_import_kiln_normal": "impasto.import_kiln_normal",
     "IMPASTO_OT_paint_activate": "impasto.paint_activate",
     "IMPASTO_OT_detail_paint": "impasto.detail_paint",
+    "IMPASTO_OT_recent_color_apply": "impasto.recent_color_apply",
+    "IMPASTO_OT_brush_mode_set": "impasto.brush_mode_set",
     "IMPASTO_OT_native_multichannel_paint":
         "impasto.native_multichannel_paint",
     "IMPASTO_OT_gpu_paint": "impasto.gpu_paint",
@@ -44,6 +46,7 @@ OPERATOR_IDS = {
 }
 
 PROPERTY_IDS = {
+    "ImpastoRecentColor": {"color"},
     "ImpastoBinding": {
         "image_name", "enabled", "mode", "value", "color", "blend_mode",
         "opacity", "use_masks",
@@ -75,12 +78,14 @@ PROPERTY_IDS = {
         "preview_base_normal_image", "preview_base_normal_uv_map",
         "preview_base_normal_strength", "preview_base_normal_invert_green",
         "paint_workflow", "ui_show_channels", "ui_show_emission_channels",
-        "ui_show_subsurface_channels", "ui_show_advanced",
+        "ui_show_subsurface_channels", "ui_show_recent_colors",
+        "ui_show_advanced",
     },
     "ImpastoChannel": {"enabled"},
     "ImpastoStack": {
         "is_stack", "schema_version", "blender_version", "channels",
         "layers", "active_layer_uid", "active_index",
+        "recent_base_colors", "recent_emission_colors",
     },
     "ImpastoMaterialState": {"displaced_links", "stack_tree"},
 }

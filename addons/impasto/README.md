@@ -1,6 +1,6 @@
 # Impasto
 
-Impasto 0.11.3 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
+Impasto 0.12.0 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
 painting. It stores material work as ordered Paint and Fill layers, compiles
 the stack into a Principled BSDF material, and provides a GPU-resident painting
 session with immediate material feedback.
@@ -21,6 +21,10 @@ prototype and is not intended for serious work.**
   Emission Color/Strength, and Subsurface Weight/Radius/Scale.
 - Post-creation channel expansion without replacing existing canvases.
 - GPU multi-channel strokes with tablet-pressure control for size and opacity.
+- A collapsed **Recent Colors** menu remembers up to eight colors actually
+  used in each material stack. Base and Emission histories are separate,
+  near-identical colors are consolidated, and the history persists in the
+  `.blend`. Expand the menu and click the arrow beside a swatch to reuse it.
 - A GPU-resident **Soften** brush that blurs all enabled active-layer channel
   canvases together; brush strength, falloff, and optional pressure control the
   effect without synchronizing images back to the CPU.

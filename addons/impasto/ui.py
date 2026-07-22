@@ -12,6 +12,7 @@ from . import engine
 from . import gpu_engine
 from . import model
 from . import ops
+from . import ui_icons
 from .ui_channels import (
     IMPASTO_MT_add_channel,
     IMPASTO_MT_add_channel_register,
@@ -217,6 +218,7 @@ _classes = (
 
 
 def register():
+    ui_icons.register()
     for cls in _classes:
         bpy.utils.register_class(cls)
     for menu_name in _MENUS:
@@ -235,3 +237,4 @@ def unregister():
                 pass
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)
+    ui_icons.unregister()

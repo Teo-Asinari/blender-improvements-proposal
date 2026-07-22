@@ -1,5 +1,13 @@
 # Impasto — multi-channel painting milestone progress
 
+## 0.12.0 — persistent color swatches and custom brush icons
+
+- Added a collapsed per-material-stack Recent Colors menu for Base and Emission paint,
+  with persistent, deduplicated eight-color histories captured on real paint
+  strokes rather than continuously while dragging Blender's color picker.
+- Soften and Erase use project-owned icons that depict diffusion and active
+  erasure instead of unrelated Blender stock glyphs.
+
 ## 0.11.3 — legible brush-mode selector
 
 - Replaced the sparse icon-only mode controls with a compact segmented row

@@ -9,7 +9,7 @@ import time
 from dataclasses import replace
 
 import bpy
-from bpy.props import BoolProperty, EnumProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
 
 from . import compat
 from . import brush_adapter
@@ -667,6 +667,81 @@ def _gpu_brush(layer):
             "sss_weight": layer.paint_sss_weight,
             "sss_radius": tuple(layer.paint_sss_radius),
             "sss_scale": layer.paint_sss_scale}
+
+
+RECENT_COLOR_LIMIT = 8
+
+
+def _remember_color(colors, value):
+    """Deduplicate and cap one Blender collection; exposed for tests."""
+    value = tuple(value)
+    epsilon = 1.0 / 255.0
+    duplicate = next((i for i, item in enumerate(colors)
+                      if max(abs(float(a) - float(b))
+                             for a, b in zip(item.color, value)) <= epsilon),
+                     None)
+    if duplicate is not None:
+        colors.remove(duplicate)
+    item = colors.add()
+    item.color = value
+    while len(colors) > RECENT_COLOR_LIMIT:
+        colors.remove(0)
+    return len(colors) - 1
+
+
+def remember_recent_color(layer, channel_key, color=None):
+    """Remember a color that was actually used, newest last.
+
+    Near-identical picker results collapse to one entry so small UI drags do
+    not fill the history with visual duplicates.
+    """
+    stack = layer.id_data.impasto
+    if channel_key == 'base_color':
+        colors = stack.recent_base_colors
+        value = tuple(color or layer.paint_color)
+    elif channel_key == 'emission_color':
+        colors = stack.recent_emission_colors
+        value = tuple(color or layer.paint_emission_color)
+    else:
+        raise ValueError("Recent colors only support color channels")
+    return _remember_color(colors, value)
+
+
+class IMPASTO_OT_recent_color_apply(bpy.types.Operator):
+    """Reuse a color previously painted on this layer"""
+    bl_idname = "impasto.recent_color_apply"
+    bl_label = "Use Recent Color"
+    bl_options = {'UNDO', 'INTERNAL'}
+
+    channel_key: EnumProperty(items=(
+        ('base_color', "Base Color", "Apply to the Base Color brush value"),
+        ('emission_color', "Emission Color",
+         "Apply to the Emission Color brush value")))
+    index: IntProperty(default=-1)
+
+    @classmethod
+    def description(cls, context, properties):
+        label = ("Base Color" if properties.channel_key == 'base_color'
+                 else "Emission Color")
+        return "Reuse this recent color as the %s brush value" % label
+
+    def execute(self, context):
+        _mat, tree = _context_stack(context)
+        layer = tree.impasto.active_layer() if tree else None
+        if layer is None:
+            return {'CANCELLED'}
+        colors = (tree.impasto.recent_base_colors
+                  if self.channel_key == 'base_color'
+                  else tree.impasto.recent_emission_colors)
+        if not 0 <= self.index < len(colors):
+            return {'CANCELLED'}
+        value = tuple(colors[self.index].color)
+        if self.channel_key == 'base_color':
+            layer.paint_color = value
+        else:
+            layer.paint_emission_color = value
+        remember_recent_color(layer, self.channel_key, value)
+        return {'FINISHED'}
 
 
 def gpu_preview_mode(layer):
@@ -1339,6 +1414,13 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
                 except (ValueError, paint.PaintTargetError) as exc:
                     self.report({'ERROR'}, str(exc))
                     return self._finish(context)
+                tree = bpy.data.node_groups.get(self._tree_name)
+                layer = (tree.impasto.layers.get(self._layer_uid)
+                         if tree is not None else None)
+                if layer is not None and layer.brush_mode == 'PAINT':
+                    for key in ('base_color', 'emission_color'):
+                        if key in self._channel_keys:
+                            remember_recent_color(layer, key)
                 rx, ry = self._mouse_region(event)
                 gpu_engine.begin_stroke(rx, ry, event.pressure)
                 self._region.tag_redraw()
@@ -1451,6 +1533,42 @@ class IMPASTO_OT_gpu_material_inspect_toggle(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class IMPASTO_OT_brush_mode_set(bpy.types.Operator):
+    """Select an Impasto GPU brush mode"""
+    bl_idname = "impasto.brush_mode_set"
+    bl_label = "Impasto: Set Brush Mode"
+    bl_options = {'INTERNAL'}
+
+    mode: EnumProperty(items=(
+        ('PAINT', "Paint", "Paint configured values into enabled channels"),
+        ('SOFTEN', "Soften", "Diffuse detail across enabled channels"),
+        ('ERASE', "Erase", "Remove active-layer coverage"),
+    ))
+
+    @classmethod
+    def description(cls, context, properties):
+        return {
+            'PAINT': "Paint configured values into every enabled channel",
+            'SOFTEN': "Soften detail in every enabled channel; pressure can "
+                      "control strength",
+            'ERASE': "Erase active-layer coverage to reveal the layers below",
+        }.get(properties.mode, "Select the GPU brush mode")
+
+    @classmethod
+    def poll(cls, context):
+        _, tree = _context_stack(context)
+        layer = tree.impasto.active_layer() if tree else None
+        return layer is not None and layer.layer_type == 'PAINT'
+
+    def execute(self, context):
+        _, tree = _context_stack(context)
+        layer = tree.impasto.active_layer() if tree else None
+        if layer is None:
+            return {'CANCELLED'}
+        layer.brush_mode = self.mode
+        return {'FINISHED'}
+
+
 _classes = (
     IMPASTO_OT_stack_init,
     IMPASTO_OT_stack_remove,
@@ -1464,10 +1582,12 @@ _classes = (
     IMPASTO_OT_import_kiln_normal,
     IMPASTO_OT_paint_activate,
     IMPASTO_OT_detail_paint,
+    IMPASTO_OT_recent_color_apply,
     IMPASTO_OT_native_multichannel_paint,
     IMPASTO_OT_gpu_paint,
     IMPASTO_OT_gpu_flush,
     IMPASTO_OT_gpu_material_inspect_toggle,
+    IMPASTO_OT_brush_mode_set,
 )
 
 

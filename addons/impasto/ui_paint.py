@@ -10,6 +10,7 @@ import bpy
 from . import gpu_engine
 from . import model
 from . import ops
+from . import ui_icons
 from .ui_channels import format_image_dimensions, paint_layer_image_sizes
 
 
@@ -19,12 +20,61 @@ def draw_brush_mode(layout, layer):
     box.label(text="Brush Mode")
     row = box.row(align=True)
     row.scale_y = 1.2
-    row.prop_enum(layer, "brush_mode", 'PAINT', text="Paint",
-                  icon='BRUSH_DATA')
-    row.prop_enum(layer, "brush_mode", 'SOFTEN', text="Soften",
-                  icon='MOD_SMOOTH')
-    row.prop_enum(layer, "brush_mode", 'ERASE', text="Erase",
-                  icon='EVENT_TABLET_ERASER')
+    op = row.operator(ops.IMPASTO_OT_brush_mode_set.bl_idname, text="Paint",
+                      icon='BRUSH_DATA', depress=layer.brush_mode == 'PAINT')
+    op.mode = 'PAINT'
+    op = row.operator(ops.IMPASTO_OT_brush_mode_set.bl_idname, text="Soften",
+                      icon_value=ui_icons.icon_value('soften'),
+                      depress=layer.brush_mode == 'SOFTEN')
+    op.mode = 'SOFTEN'
+    op = row.operator(ops.IMPASTO_OT_brush_mode_set.bl_idname, text="Erase",
+                      icon_value=ui_icons.icon_value('erase'),
+                      depress=layer.brush_mode == 'ERASE')
+    op.mode = 'ERASE'
+
+
+def draw_recent_colors(layout, layer, channel_keys):
+    """Draw a collapsed-by-default, per-layer color recall menu."""
+    if not any(key in channel_keys
+               for key in ('base_color', 'emission_color')):
+        return
+    box = layout.box()
+    row = box.row(align=True)
+    row.prop(layer, "ui_show_recent_colors", text="Recent Colors",
+             icon=('TRIA_DOWN' if layer.ui_show_recent_colors
+                   else 'TRIA_RIGHT'), emboss=False)
+    if not layer.ui_show_recent_colors:
+        return
+    stack = layer.id_data.impasto
+    groups = (
+        ('base_color', "Base", stack.recent_base_colors),
+        ('emission_color', "Emission", stack.recent_emission_colors),
+    )
+    shown = False
+    for key, label, colors in groups:
+        if key not in channel_keys:
+            continue
+        shown = True
+        box.label(text=label)
+        if not colors:
+            row = box.row()
+            row.label(text="Paint to add colors", icon='INFO')
+            continue
+        box.label(text="Click the arrow to reuse", icon='INFO')
+        # Newest first. A read-only, color-managed socket is the swatch; the
+        # adjacent operator recalls it without making history itself editable.
+        grid = box.grid_flow(row_major=True, columns=4, even_columns=True,
+                             even_rows=True, align=True)
+        for index in reversed(range(len(colors))):
+            swatch = grid.row(align=True)
+            swatch.template_node_socket(
+                color=tuple(colors[index].color) + (1.0,))
+            op = swatch.operator(ops.IMPASTO_OT_recent_color_apply.bl_idname,
+                                 text="", icon='IMPORT')
+            op.channel_key = key
+            op.index = index
+    if not shown:
+        box.label(text="Enable Base or Emission Color", icon='INFO')
 
 
 class PaintPanelMixin:
@@ -100,6 +150,7 @@ class PaintPanelMixin:
             if 'emission_strength' in keys:
                 emission.prop(layer, "paint_emission_strength",
                               text="Strength")
+        draw_recent_colors(paint, layer, keys)
         if any(k in keys for k in
                ('sss_weight', 'sss_radius', 'sss_scale')):
             subsurface = paint.box()

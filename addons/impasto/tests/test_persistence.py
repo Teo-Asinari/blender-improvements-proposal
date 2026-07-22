@@ -48,6 +48,10 @@ try:
         paint.paint_sss_weight = 0.65
         paint.paint_sss_radius = (1.4, 0.35, 0.12)
         paint.paint_sss_scale = 0.025
+        impasto.ops.remember_recent_color(
+            paint, "base_color", (0.12, 0.34, 0.56))
+        impasto.ops.remember_recent_color(
+            paint, "emission_color", (0.9, 0.4, 0.1))
         stencil_image = bpy.data.images.new("Persisted Brush Stencil", 8, 8,
                                             alpha=True)
         paint.brush_stencil_enabled = True
@@ -106,6 +110,14 @@ try:
           and all(abs(a - b) < 1e-6 for a, b in zip(
               paint.paint_sss_radius, (1.4, 0.35, 0.12)))
           and abs(paint.paint_sss_scale - 0.025) < 1e-6)
+    check("recent Base and Emission colors persist per material stack",
+          len(tree.impasto.recent_base_colors) == 1
+          and len(tree.impasto.recent_emission_colors) == 1
+          and all(abs(a - b) < 1e-6 for a, b in zip(
+              tree.impasto.recent_base_colors[0].color, (0.12, 0.34, 0.56)))
+          and all(abs(a - b) < 1e-6 for a, b in zip(
+              tree.impasto.recent_emission_colors[0].color,
+              (0.9, 0.4, 0.1))))
     check("image stencil state persists across save/reopen",
           paint.brush_stencil_enabled
           and paint.brush_stencil_image is not None

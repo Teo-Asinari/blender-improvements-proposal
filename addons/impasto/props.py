@@ -140,6 +140,13 @@ class ImpastoMask(bpy.types.PropertyGroup):
     visible: BoolProperty(default=True, update=_structural)
 
 
+class ImpastoRecentColor(bpy.types.PropertyGroup):
+    """A color deliberately used by a layer brush, persisted in the .blend."""
+    color: FloatVectorProperty(
+        name="Recent Color", subtype='COLOR', size=3,
+        min=0.0, max=1.0, default=(0.8, 0.2, 0.1))
+
+
 class ImpastoLayer(bpy.types.PropertyGroup):
     """One stack layer. name = uid; label is the user-facing name."""
     label: StringProperty(name="Name", default="Layer")
@@ -193,6 +200,10 @@ class ImpastoLayer(bpy.types.PropertyGroup):
         name="Emission Strength",
         description="HDR luminosity written independently of emission color",
         default=0.0, min=0.0, soft_max=20.0)
+    ui_show_recent_colors: BoolProperty(
+        name="Recent Colors",
+        description="Show colors recently used for painting on this layer",
+        default=False)
     paint_sss_weight: FloatProperty(
         name="Subsurface Weight",
         description="How much subsurface scattering contributes; 0 disables "
@@ -381,6 +392,9 @@ class ImpastoStack(bpy.types.PropertyGroup):
     blender_version: IntVectorProperty(size=3)
     channels: CollectionProperty(type=ImpastoChannel)
     layers: CollectionProperty(type=ImpastoLayer)
+    # Material-stack palette shared by all of its paint layers.
+    recent_base_colors: CollectionProperty(type=ImpastoRecentColor)
+    recent_emission_colors: CollectionProperty(type=ImpastoRecentColor)
     active_layer_uid: StringProperty()
     # presentation-order UI slot for template_list; the uid above is
     # the source of truth for every cross-reference.
@@ -418,6 +432,7 @@ class ImpastoPreferences(bpy.types.AddonPreferences):
 _classes = (
     ImpastoBinding,
     ImpastoMask,
+    ImpastoRecentColor,
     ImpastoLayer,
     ImpastoChannel,
     ImpastoStack,

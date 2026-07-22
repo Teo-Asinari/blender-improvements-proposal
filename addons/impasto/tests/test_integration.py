@@ -26,13 +26,15 @@ try:
     impasto.register()
     check("package registration",
           hasattr(bpy.types.ShaderNodeTree, "impasto"))
-    check("metadata", impasto.bl_info["version"] == (0, 11, 3))
-    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.11.3")
-    check("brush modes use distinct icon buttons",
+    check("metadata", impasto.bl_info["version"] == (0, 12, 0))
+    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.12.0")
+    check("custom soften and erase icons loaded",
+          impasto.ui_icons.is_loaded('soften')
+          and impasto.ui_icons.is_loaded('erase'))
+    check("brush modes use custom icon operators",
           all(token in inspect.getsource(impasto.ui_paint.draw_brush_mode)
               for token in ("'PAINT'", "'SOFTEN'", "'ERASE'",
-                            "'BRUSH_DATA'", "'MOD_SMOOTH'",
-                            "'EVENT_TABLET_ERASER'")))
+                            "icon_value", "brush_mode_set")))
     layer_rna = impasto.props.ImpastoLayer.bl_rna.properties
     check("brush-wide controls have explicit names",
           layer_rna["brush_radius"].name == "Brush Radius"
@@ -94,6 +96,20 @@ try:
     mat = obj.active_material
     tree = engine.find_stack_for_material(mat)
     check("stack discoverable", tree is not None)
+    for value in ((0.1, 0.2, 0.3), (0.1001, 0.2001, 0.3001),
+                  (0.2, 0.3, 0.4), (0.3, 0.4, 0.5),
+                  (0.4, 0.5, 0.6), (0.5, 0.6, 0.7),
+                  (0.6, 0.7, 0.8), (0.7, 0.8, 0.9),
+                  (0.8, 0.9, 1.0), (0.9, 0.8, 0.7)):
+        impasto.ops._remember_color(tree.impasto.recent_base_colors, value)
+    check("recent colors deduplicate near matches and cap history",
+          len(tree.impasto.recent_base_colors)
+          == impasto.ops.RECENT_COLOR_LIMIT == 8)
+    impasto.ops._remember_color(
+        tree.impasto.recent_emission_colors, (1.0, 0.25, 0.1))
+    check("Base and Emission recent colors are independent",
+          len(tree.impasto.recent_emission_colors) == 1
+          and len(tree.impasto.recent_base_colors) == 8)
     check("material group exists",
           mat.node_tree.nodes.get(model.n_material_stack()) is not None)
     check("five standard channels", len(tree.impasto.channels) == 5)
