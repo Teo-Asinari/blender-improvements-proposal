@@ -324,7 +324,7 @@ void main()
                                              vec2(1e-4))) + 0.5;
         if (any(lessThan(stencil_uv, vec2(0.0))) ||
             any(greaterThan(stencil_uv, vec2(1.0)))) {
-            stencil_factor = 0.0;
+            stencil_factor = (dab_params.stencil_flags.w > 0.5) ? 0.0 : 1.0;
             profile_factor = 0.0;
         } else {
             if (profile_mode) {
@@ -345,14 +345,18 @@ void main()
                     profile_size * dab_params.profile_flags.y * direction;
                 vec3 detail_n = normalize(vec3(-gradient, 1.0));
                 profile_normal = detail_n * 0.5 + 0.5;
-                stencil_factor = clamp(mask_value *
-                    dab_params.stencil_flags.y, 0.0, 1.0);
+                stencil_factor = (dab_params.stencil_flags.w > 0.5)
+                    ? clamp(mask_value * dab_params.stencil_flags.y,
+                            0.0, 1.0)
+                    : 1.0;
                 profile_factor = clamp(dab_params.stencil_flags.y,
                                        0.0, 1.0);
             } else {
                 float mask_value = impasto_stencil_intensity(stencil_uv);
-                stencil_factor = clamp(mask_value *
-                    dab_params.stencil_flags.y, 0.0, 1.0);
+                stencil_factor = (dab_params.stencil_flags.w > 0.5)
+                    ? clamp(mask_value * dab_params.stencil_flags.y,
+                            0.0, 1.0)
+                    : 1.0;
             }
         }
     }
@@ -3307,6 +3311,8 @@ def _flush_dabs(s, region):
                 stencil_opacity, stencil_position, stencil_scale,
                 stencil_rotation, brush_values, profile_usage,
                 profile_strength, profile_invert, data=ubo_data)
+            ubo_data[DAB_UBO_STENCIL_FLAGS, 3] = (
+                1.0 if s.settings.get("stencil_coverage", True) else 0.0)
             ubo_data[DAB_UBO_PROFILE_FLAGS, 3] = 1.0 if erase else 0.0
             ubo.update(ubo_data)
             sh.uniform_block(DAB_UBO_NAME, ubo)
@@ -3369,6 +3375,8 @@ def _flush_soften_dabs(s, region, queue, radius, hardness, occlusion, stamp,
             occlusion, strength, use_stencil, stencil_projection,
             stencil_interpretation, stencil_opacity, stencil_position,
             stencil_scale, stencil_rotation, (), data=data)
+        data[DAB_UBO_STENCIL_FLAGS, 3] = (
+            1.0 if s.settings.get("stencil_coverage", True) else 0.0)
         ubo.update(data)
         for index in range(s.channels):
             source = s.paint_texs[index]

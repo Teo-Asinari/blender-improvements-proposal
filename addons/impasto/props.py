@@ -271,6 +271,20 @@ class ImpastoLayer(bpy.types.PropertyGroup):
         default='ALPHA')
     brush_stencil_usage: EnumProperty(
         name="Usage", items=stencil.USAGE_ITEMS, default='COVERAGE')
+    brush_stencil_coverage: BoolProperty(
+        name="Paint Coverage",
+        description="Use stencil intensity to mask every enabled painted "
+                    "channel; can be combined with Normal Relief",
+        default=True)
+    brush_stencil_normal_relief: BoolProperty(
+        name="Normal Relief",
+        description="Derive tangent-space Normal detail from stencil "
+                    "brightness gradients; can be combined with Paint "
+                    "Coverage",
+        get=lambda self: self.brush_stencil_usage == 'NORMAL_PROFILE',
+        set=lambda self, value: setattr(
+            self, "brush_stencil_usage",
+            'NORMAL_PROFILE' if value else 'COVERAGE'))
     brush_stencil_opacity: FloatProperty(
         name="Stencil Opacity", default=1.0, min=0.0, max=1.0,
         subtype='FACTOR')

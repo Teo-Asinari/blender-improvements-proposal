@@ -228,25 +228,29 @@ class PaintPanelMixin:
         col.prop(layer, "brush_stencil_interpretation", expand=True)
 
         col.separator()
-        col.label(text="Apply As", icon='MODIFIER')
-        col.prop(layer, "brush_stencil_usage", expand=True)
-        col.prop(layer, "brush_stencil_opacity", text="Stamp Opacity",
-                 slider=True)
-        if layer.brush_stencil_usage == 'NORMAL_PROFILE':
-            col.prop(layer, "brush_stencil_profile_strength",
-                     text="Relief Strength", slider=True)
-            col.prop(layer, "brush_stencil_profile_invert",
-                     text="Invert Relief")
+        effects = col.box()
+        effects.label(text="Stencil Effects", icon='MODIFIER')
+        effects.prop(layer, "brush_stencil_coverage", toggle=True)
+        effects.prop(layer, "brush_stencil_normal_relief", toggle=True)
+
+        controls = col.box()
+        controls.label(text="Effect Controls", icon='SETTINGS')
+        controls.prop(layer, "brush_stencil_opacity", text="Stamp Opacity",
+                      slider=True)
+        if layer.brush_stencil_normal_relief:
+            controls.prop(layer, "brush_stencil_profile_strength",
+                          text="Relief Strength", slider=True)
+            controls.prop(layer, "brush_stencil_profile_invert",
+                          text="Invert Relief")
             if layer.brush_stencil_interpretation == 'ALPHA':
-                warning = col.box().column(align=True)
+                warning = controls.box().column(align=True)
                 warning.label(text="Alpha requires varying transparency",
                               icon='ERROR')
                 warning.label(text="Opaque grayscale image? Choose Grayscale")
-            col.label(text="Relief writes Normal; image masks other channels",
-                      icon='NORMALS_FACE')
-        else:
-            col.label(text="Modulates every enabled paint channel",
-                      icon='INFO')
+        if (not layer.brush_stencil_coverage
+                and not layer.brush_stencil_normal_relief):
+            effects.label(text="Enable at least one stencil effect",
+                          icon='ERROR')
 
     def _draw_gpu_session(self, box):
         if gpu_engine.material_inspect_requested():

@@ -797,6 +797,7 @@ def gpu_stencil_settings(layer):
         interpretation=getattr(
             layer, "brush_stencil_interpretation", 'ALPHA'),
         usage=getattr(layer, "brush_stencil_usage", 'COVERAGE'),
+        coverage=getattr(layer, "brush_stencil_coverage", True),
         opacity=getattr(layer, "brush_stencil_opacity", 1.0),
         position=getattr(layer, "brush_stencil_position", (0.5, 0.5)),
         scale=scale,

@@ -100,6 +100,7 @@ try:
     layer.brush_stencil_projection = 'BRUSH_ALPHA'
     layer.brush_stencil_interpretation = 'LUMINANCE'
     layer.brush_stencil_usage = 'NORMAL_PROFILE'
+    layer.brush_stencil_coverage = True
     layer.brush_stencil_opacity = 0.6
     layer.brush_stencil_position = (0.25, 0.75)
     check("Brush Alpha defaults to one full brush diameter",
@@ -115,6 +116,7 @@ try:
           and settings.projection == 'BRUSH_ALPHA'
           and settings.interpretation == 'LUMINANCE'
           and settings.usage == 'NORMAL_PROFILE'
+          and settings.coverage
           and settings.opacity > 0.59
           and settings.profile_strength == 2.5
           and settings.profile_invert
@@ -177,6 +179,15 @@ try:
           "float profile_f = f * profile_factor" in profile_source
           and "mask_value *" in profile_source
           and "* profile_f" in profile_source)
+    check("paint coverage and normal relief are independent shader effects",
+          "stencil_flags.w > 0.5" in profile_source
+          and layer.brush_stencil_coverage
+          and layer.brush_stencil_normal_relief)
+    layer.brush_stencil_coverage = False
+    check("normal relief remains enabled without paint coverage",
+          layer.brush_stencil_normal_relief
+          and not ops.gpu_stencil_settings(layer).coverage)
+    layer.brush_stencil_coverage = True
     additive_profile_source = gpu_engine.dab_frag_src(
         2, additive=True, profile_slots=(False, True))
     check("normal relief preserves additive non-Normal channel output",

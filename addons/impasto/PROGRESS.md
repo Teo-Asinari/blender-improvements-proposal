@@ -1,5 +1,12 @@
 # Impasto — multi-channel painting milestone progress
 
+## 0.12.1 — independent stencil effects
+
+- Paint Coverage and Normal Relief are independent toggles and can run in the
+  same stencil stroke.
+- Effect selection is visually separated from Stamp Opacity, Relief Strength,
+  and relief inversion controls.
+
 ## 0.12.0 — persistent color swatches and custom brush icons
 
 - Added a collapsed per-material-stack Recent Colors menu for Base and Emission paint,
