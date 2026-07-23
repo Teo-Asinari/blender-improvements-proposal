@@ -35,7 +35,8 @@ prototype and is not intended for serious work.**
   texture axes; rotated UV islands and seams remain a refinement target.
 - Layer-aware GPU erasing that removes active-layer coverage to reveal the
   layers below instead of painting black or neutral channel values.
-  Its channel grid includes **All** and **None** selection shortcuts.
+- Paint, Soften, Smear, and Erase each remember independent per-channel target
+  selections and provide **All** and **None** shortcuts.
 - GPU-resident per-stroke undo and deferred synchronization to Blender Images.
 - Lit PBR and diagnostic live previews.
 - Image stencils as a viewport projection or brush-following alpha.
@@ -143,10 +144,11 @@ back to an active-layer-only preview. Use **Inspect Material** when Blender's
 actual shader evaluation is required.
 
 The preview-only **Base Normal Map** picker can display an existing tangent
-normal image while painting. It does not alter the node graph, stack, render,
-export, or source image. Kiln normal data can also be imported or repaired as a
-baseline layer. Multiple opaque normal layers still use encoded-RGB mixing;
-true RNM/UDN layered-normal composition remains unimplemented.
+normal image while painting. This manual fallback has been user-validated and
+works well. It does not alter the node graph, stack, render, export, or source
+image. Kiln normal data can also be imported or repaired as a baseline layer.
+Multiple opaque normal layers still use encoded-RGB mixing; true RNM/UDN
+layered-normal composition remains unimplemented.
 
 ## Image stencils
 
@@ -246,9 +248,10 @@ addons/impasto/tests/run_tests.sh
 ```
 
 The runner checks explicit success sentinels because Blender may exit with a
-zero status after a Python exception. Current release history, validation, and
-open work are tracked in [PROGRESS.md](PROGRESS.md). Architectural background
-is in [`../../research/layer-stack-design.md`](../../research/layer-stack-design.md).
+zero status after a Python exception. See the
+[documentation index](docs/README.md), [roadmap](ROADMAP.md), and
+[changelog](CHANGELOG.md). Architectural background is in
+[`../../research/layer-stack-design.md`](../../research/layer-stack-design.md).
 
 ## License
 

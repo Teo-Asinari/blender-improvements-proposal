@@ -84,15 +84,17 @@ Material Preview HDRI.
 
 For materials whose existing normal map cannot enter Impasto's restricted
 resident stack, GPU painting also offers an explicit **Base Normal Map**
-fallback. It supplies that image, UV map, strength, and optional green-channel
-inversion to Lit PBR and the normal diagnostic previews only. It does not edit
-the material node graph, painted images, bake/export output, or Blender's
-authoritative Material Preview; inspect the Blender material to verify the
-final result. Planned follow-up will discover Kiln's bake target automatically
-while retaining the explicit image picker as the authoritative manual override.
-Mixed UVs, image masks, participating upper layers, channel isolation,
-bake-down/export, arbitrary Blender brush textures, and specialized brush tools
-remain future work. Ctrl-S safely flushes before saving; menu-driven
+fallback. This user-validated manual workflow supplies that image, UV map,
+strength, and optional green-channel inversion to Lit PBR and the normal
+diagnostic previews only. It does not edit the material node graph, painted
+images, flattened output, or Blender's authoritative Material Preview.
+Planned follow-up will discover Kiln's bake target automatically while
+retaining the explicit image picker as the authoritative manual override.
+Flatten/Export to combined per-channel Blender Images is implemented. Paint,
+Soften, Smear, and Erase have independent per-channel target controls. Mixed
+UVs, production image masks, participating upper layers, arbitrary Blender
+brush textures, and specialized brush parity remain future work. Ctrl-S
+safely flushes before saving; menu-driven
 save/export should be preceded by **Flush for Save / Export**.
 
 ## Documents
@@ -101,6 +103,8 @@ save/export should be preceded by **Flush for Save / Export**.
   longer-term layered painting and voxel-sculpting changes that ultimately need
   work in Blender's core.
 - [research/](research/) — technical research feeding the flagship designs.
+- [Impasto documentation](addons/impasto/docs/README.md) — current workflow,
+  roadmap, changelog, technical references, and archived design history.
 
 ## Approach
 
