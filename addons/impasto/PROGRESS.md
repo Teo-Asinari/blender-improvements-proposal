@@ -81,6 +81,8 @@
   dab and need dirty-region copies before 8K can be considered interactive.
 - Treat 8K as an unsupported experimental target until the UI exposes it and
   tests confirm latency, synchronization, undo behavior, and VRAM headroom.
+  Estimates and acceptance scope are documented in
+  `docs/HIGH_RESOLUTION_PERFORMANCE.md`.
 - Interactively qualify whether any Lit PBR stripe or flat-shading artifacts
   remain after removing top-layer alpha holes; depth rejection and corner
   normals remain unchanged because no failing evidence implicated them.

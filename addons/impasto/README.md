@@ -225,6 +225,10 @@ were recorded.
   full texture copy per enabled channel per dab, making them especially poor
   8K candidates until dirty-region copies are implemented.
 
+See [High-resolution painting estimates](docs/HIGH_RESOLUTION_PERFORMANCE.md)
+for formulas, VRAM/RAM tables, expected responsiveness, and qualification
+requirements.
+
 ## Tests and development notes
 
 Runtime code is separated by responsibility: focused GPU helpers live under
