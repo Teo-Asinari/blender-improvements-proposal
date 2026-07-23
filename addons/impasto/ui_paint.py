@@ -40,7 +40,14 @@ def draw_brush_mode(layout, layer):
 def draw_erase_channels(layout, layer, channel_keys):
     """Draw compact channel targeting for the GPU eraser."""
     box = layout.box()
-    box.label(text="Erase Channels", icon='IMAGE_DATA')
+    header = box.row(align=True)
+    header.label(text="Erase Channels", icon='IMAGE_DATA')
+    op = header.operator(ops.IMPASTO_OT_erase_channels_set.bl_idname,
+                         text="All")
+    op.selected = True
+    op = header.operator(ops.IMPASTO_OT_erase_channels_set.bl_idname,
+                         text="None")
+    op.selected = False
     grid = box.grid_flow(row_major=True, columns=2, even_columns=True,
                          even_rows=False, align=True)
     selected = 0

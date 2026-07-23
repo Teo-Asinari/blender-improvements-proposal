@@ -1580,6 +1580,36 @@ class IMPASTO_OT_brush_mode_set(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class IMPASTO_OT_erase_channels_set(bpy.types.Operator):
+    """Select or clear every currently enabled Erase channel"""
+    bl_idname = "impasto.erase_channels_set"
+    bl_label = "Impasto: Set Erase Channels"
+    bl_options = {'INTERNAL', 'UNDO'}
+
+    selected: BoolProperty(default=True)
+
+    @classmethod
+    def description(cls, context, properties):
+        return ("Select every enabled channel for erasing" if
+                properties.selected else
+                "Clear every enabled channel from the eraser")
+
+    @classmethod
+    def poll(cls, context):
+        _, tree = _context_stack(context)
+        layer = tree.impasto.active_layer() if tree else None
+        return layer is not None and layer.layer_type == 'PAINT'
+
+    def execute(self, context):
+        _, tree = _context_stack(context)
+        layer = tree.impasto.active_layer() if tree else None
+        if layer is None:
+            return {'CANCELLED'}
+        for key, _image in gpu_paint_targets(layer):
+            layer.erase_channels[model.CHANNEL_ORDER[key]] = self.selected
+        return {'FINISHED'}
+
+
 class IMPASTO_OT_flatten_export(bpy.types.Operator):
     """Composite the visible stack into new, packed channel images; source
     layers are preserved unchanged"""
@@ -1640,6 +1670,7 @@ _classes = (
     IMPASTO_OT_gpu_flush,
     IMPASTO_OT_gpu_material_inspect_toggle,
     IMPASTO_OT_brush_mode_set,
+    IMPASTO_OT_erase_channels_set,
     IMPASTO_OT_flatten_export,
 )
 

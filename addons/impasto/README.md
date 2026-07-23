@@ -1,6 +1,6 @@
 # Impasto
 
-Impasto 0.13.1 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
+Impasto 0.13.2 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
 painting. It stores material work as ordered Paint and Fill layers, compiles
 the stack into a Principled BSDF material, and provides a GPU-resident painting
 session with immediate material feedback.
@@ -35,6 +35,7 @@ prototype and is not intended for serious work.**
   texture axes; rotated UV islands and seams remain a refinement target.
 - Layer-aware GPU erasing that removes active-layer coverage to reveal the
   layers below instead of painting black or neutral channel values.
+  Its channel grid includes **All** and **None** selection shortcuts.
 - GPU-resident per-stroke undo and deferred synchronization to Blender Images.
 - Lit PBR and diagnostic live previews.
 - Image stencils as a viewport projection or brush-following alpha.

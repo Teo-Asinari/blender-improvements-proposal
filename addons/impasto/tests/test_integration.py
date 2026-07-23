@@ -26,8 +26,8 @@ try:
     impasto.register()
     check("package registration",
           hasattr(bpy.types.ShaderNodeTree, "impasto"))
-    check("metadata", impasto.bl_info["version"] == (0, 13, 1))
-    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.13.1")
+    check("metadata", impasto.bl_info["version"] == (0, 13, 2))
+    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.13.2")
     check("extended brush sections collapse by default",
           not impasto.props.ImpastoLayer.bl_rna.properties[
               "ui_show_emission_paint"].default
@@ -132,6 +132,21 @@ try:
           == ["FILL", "PAINT"])
     check("layer reconcile clean", not engine._last_deltas.errors,
           str(engine._last_deltas))
+
+    paint_layer = tree.impasto.active_layer()
+    erase_target_indices = [
+        model.CHANNEL_ORDER[key]
+        for key, _image in impasto.ops.gpu_paint_targets(paint_layer)
+    ]
+    check("paint layer has eraser targets", bool(erase_target_indices))
+    check("clear all eraser targets",
+          bpy.ops.impasto.erase_channels_set(selected=False) == {"FINISHED"}
+          and not any(paint_layer.erase_channels[index]
+                      for index in erase_target_indices))
+    check("select all eraser targets",
+          bpy.ops.impasto.erase_channels_set(selected=True) == {"FINISHED"}
+          and all(paint_layer.erase_channels[index]
+                  for index in erase_target_indices))
 
     d1 = engine.rebuild(tree)
     d2 = engine.reconcile_stack(tree)

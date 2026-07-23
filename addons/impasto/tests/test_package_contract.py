@@ -37,6 +37,7 @@ OPERATOR_IDS = {
     "IMPASTO_OT_detail_paint": "impasto.detail_paint",
     "IMPASTO_OT_recent_color_apply": "impasto.recent_color_apply",
     "IMPASTO_OT_brush_mode_set": "impasto.brush_mode_set",
+    "IMPASTO_OT_erase_channels_set": "impasto.erase_channels_set",
     "IMPASTO_OT_flatten_export": "impasto.flatten_export",
     "IMPASTO_OT_native_multichannel_paint":
         "impasto.native_multichannel_paint",

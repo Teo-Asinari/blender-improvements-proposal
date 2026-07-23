@@ -1,5 +1,10 @@
 # Impasto — multi-channel painting milestone progress
 
+## 0.13.2 — eraser channel shortcuts
+
+- Added All and None actions to the Erase Channels grid. They affect the
+  active Paint layer's currently enabled channel targets.
+
 ## 0.13.1 — top-layer preview continuity and compact brush values
 
 - The Lit PBR overlay now owns the complete visible front surface. Active
