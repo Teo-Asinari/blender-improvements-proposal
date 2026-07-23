@@ -75,6 +75,12 @@
 
 ## Active roadmap
 
+- Benchmark ordinary Paint, Erase, Soften, and Smear at 4K across 1/4/8
+  channels. Ordinary MRT painting should remain the primary high-resolution
+  path; Soften and Smear currently copy a full RGBA16F texture per channel per
+  dab and need dirty-region copies before 8K can be considered interactive.
+- Treat 8K as an unsupported experimental target until the UI exposes it and
+  tests confirm latency, synchronization, undo behavior, and VRAM headroom.
 - Interactively qualify whether any Lit PBR stripe or flat-shading artifacts
   remain after removing top-layer alpha holes; depth rejection and corner
   normals remain unchanged because no failing evidence implicated them.
@@ -83,8 +89,9 @@
 - Interactively qualify the implemented GPU eraser, which removes resident
   stroke coverage atomically across enabled channels rather than painting
   replacement values.
-- Add spherical material previews, stencil thumbnails, and a recent-material
-  palette with channel-value tooltips.
+- Add a recent-material palette with spherical thumbnails and channel-value
+  tooltips. The basic synchronized material sphere and stencil-image thumbnail
+  are implemented.
 - Add a pinned SSS Caliper inspection mode outside active GPU painting.
 - Implement RNM/UDN composition for multiple tangent-normal layers and expand
   resident preview support beyond the common same-UV stack.

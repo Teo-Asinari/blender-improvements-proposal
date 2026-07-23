@@ -210,12 +210,20 @@ were recorded.
 - Full arbitrary layered-normal composition is not implemented.
 - Image masks are represented in the stack model but are not a complete
   production mask workflow.
-- Material preset spheres, stencil thumbnails, and recent-material swatches
-  remain roadmap work.
+- A synchronized material sphere and stencil thumbnail are available. A real
+  recent-material preset palette with parameter tooltips remains roadmap work.
 - The SSS Caliper is tied to an active GPU paint session; a persistent pinned
   inspection mode remains future work.
 - GPU canvases consume real VRAM. One 4K RGBA16F channel is approximately
   128 MB before preview, depth, and undo resources.
+- Resident painting also keeps one full-size RGBA16F scratch texture regardless
+  of channel count. The minimum active-canvas allocation is therefore roughly
+  `(channels + 1) × 128 MiB` at 4K and `(channels + 1) × 512 MiB` at 8K,
+  before baseline textures, viewport depth, Blender's own image textures, and
+  up to 256 MiB of tile undo snapshots.
+- 8K creation is not currently exposed in the UI. Soften and Smear perform a
+  full texture copy per enabled channel per dab, making them especially poor
+  8K candidates until dirty-region copies are implemented.
 
 ## Tests and development notes
 
