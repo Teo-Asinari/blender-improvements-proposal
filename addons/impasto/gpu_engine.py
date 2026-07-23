@@ -1345,7 +1345,6 @@ def preview_shader_create_info():
     info.push_constant('FLOAT', "environment_ready")
     info.push_constant('VEC4', "preview_lighting")
     info.push_constant('VEC4', "preview_fill")
-    info.push_constant('FLOAT', "resolved_stack")
     info.push_constant('VEC4', "preview_view_depth_plane")
     info.push_constant('VEC2', "preview_region_size")
     info.push_constant('FLOAT', "preview_depth_epsilon")
@@ -3804,7 +3803,6 @@ def _draw_composed_preview(s):
     shader.uniform_float("preview_fill", (
         float(s.settings.get("preview_fill_strength", 1.0)), 0.0, 0.0, 0.0))
     resolved = bool(s.stack_spec and s.stack_spec.get("enabled"))
-    shader.uniform_float("resolved_stack", 1.0 if resolved else 0.0)
     shader.uniform_float("preview_view_depth_plane", s.view_depth_plane)
     shader.uniform_float("preview_region_size", s.depth_fb_size)
     shader.uniform_float("preview_depth_epsilon", DEPTH_EPSILON)

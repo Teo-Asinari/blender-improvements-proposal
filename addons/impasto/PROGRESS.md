@@ -1,5 +1,10 @@
 # Impasto — multi-channel painting milestone progress
 
+## 0.13.3 — resident-preview startup fix
+
+- Removed a stale `resolved_stack` uniform upload that Blender 5.1 rejected
+  after optimizing the unused shader input away.
+
 ## 0.13.2 — eraser channel shortcuts
 
 - Added All and None actions to the Erase Channels grid. They affect the

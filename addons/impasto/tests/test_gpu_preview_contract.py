@@ -186,5 +186,9 @@ check("preview draw performs no synchronization",
       not any(word in draw_source for word in forbidden), draw_source)
 check("preview mode is a draw-time integer uniform",
       'uniform_int("preview_mode"' in draw_source)
+check("preview does not upload optimized-away resolved-stack uniform",
+      "resolved_stack" not in draw_source
+      and "resolved_stack" not in
+      inspect.getsource(gpu_engine.preview_shader_create_info))
 
 print("IMPASTO_GPU_PREVIEW_CONTRACT_PASSED")
