@@ -381,6 +381,12 @@ class ImpastoLayer(bpy.types.PropertyGroup):
     ui_show_channels: BoolProperty(name="Channels", default=True)
     ui_show_emission_channels: BoolProperty(name="Emission", default=False)
     ui_show_subsurface_channels: BoolProperty(name="Subsurface", default=False)
+    ui_show_emission_paint: BoolProperty(
+        name="Emission Brush Values", default=False,
+        description="Show Emission color and strength brush controls")
+    ui_show_subsurface_paint: BoolProperty(
+        name="Subsurface Brush Values", default=False,
+        description="Show Subsurface brush controls and the SSS caliper")
     ui_show_advanced: BoolProperty(name="Advanced", default=False)
 
 

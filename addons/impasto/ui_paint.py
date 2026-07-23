@@ -171,31 +171,41 @@ class PaintPanelMixin:
             row.prop(layer, "paint_height_strength", text="Step")
         if 'emission_color' in keys or 'emission_strength' in keys:
             emission = paint.box()
-            emission.label(text="Emission", icon='LIGHT')
-            if 'emission_color' in keys:
-                emission.prop(layer, "paint_emission_color", text="Color")
-            if 'emission_strength' in keys:
-                emission.prop(layer, "paint_emission_strength",
-                              text="Strength")
+            row = emission.row(align=True)
+            row.prop(layer, "ui_show_emission_paint", text="Emission",
+                     icon=('TRIA_DOWN' if layer.ui_show_emission_paint
+                           else 'TRIA_RIGHT'), emboss=False)
+            if layer.ui_show_emission_paint:
+                if 'emission_color' in keys:
+                    emission.prop(layer, "paint_emission_color", text="Color")
+                if 'emission_strength' in keys:
+                    emission.prop(layer, "paint_emission_strength",
+                                  text="Strength")
         draw_recent_colors(paint, layer, keys)
         if any(k in keys for k in
                ('sss_weight', 'sss_radius', 'sss_scale')):
             subsurface = paint.box()
-            subsurface.label(text="Subsurface", icon='SHADING_RENDERED')
-            if 'sss_weight' in keys:
-                subsurface.prop(layer, "paint_sss_weight", text="Weight",
-                                slider=True)
-            if 'sss_radius' in keys:
-                subsurface.prop(layer, "paint_sss_radius", text="Radius RGB")
-            if 'sss_scale' in keys:
-                subsurface.prop(layer, "paint_sss_scale", text="Scale")
-            subsurface.prop(layer, "show_sss_caliper",
-                            text="Show SSS Caliper", toggle=True,
-                            icon='DRIVER_DISTANCE')
-            subsurface.label(text="Weight = amount; Scale = travel distance",
-                             icon='INFO')
-            subsurface.label(text="Radius sets relative RGB travel",
-                             icon='INFO')
+            row = subsurface.row(align=True)
+            row.prop(layer, "ui_show_subsurface_paint", text="Subsurface",
+                     icon=('TRIA_DOWN' if layer.ui_show_subsurface_paint
+                           else 'TRIA_RIGHT'), emboss=False)
+            if layer.ui_show_subsurface_paint:
+                if 'sss_weight' in keys:
+                    subsurface.prop(layer, "paint_sss_weight", text="Weight",
+                                    slider=True)
+                if 'sss_radius' in keys:
+                    subsurface.prop(layer, "paint_sss_radius",
+                                    text="Radius RGB")
+                if 'sss_scale' in keys:
+                    subsurface.prop(layer, "paint_sss_scale", text="Scale")
+                subsurface.prop(layer, "show_sss_caliper",
+                                text="Show SSS Caliper", toggle=True,
+                                icon='DRIVER_DISTANCE')
+                subsurface.label(
+                    text="Weight = amount; Scale = travel distance",
+                    icon='INFO')
+                subsurface.label(text="Radius sets relative RGB travel",
+                                 icon='INFO')
 
         row = paint.row()
         row.scale_y = 1.35

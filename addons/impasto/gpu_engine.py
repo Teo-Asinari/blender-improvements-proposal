@@ -838,31 +838,12 @@ void main()
     rgb += emission_color * emission_strength;
     rgb = aces_fitted(rgb);
 
-    float coverage = 1.0;
-    if (resolved_stack < 0.5) {
-        coverage = 0.0;
-        if (active_base_color > 0.5)
-            coverage = max(coverage, straight_sample(base_color_tex, uvInterp).a);
-        if (active_metallic > 0.5)
-            coverage = max(coverage, straight_sample(metallic_tex, uvInterp).a);
-        if (active_roughness > 0.5)
-            coverage = max(coverage, straight_sample(roughness_tex, uvInterp).a);
-        if (active_normal > 0.5)
-            coverage = max(coverage, straight_sample(normal_tex, uvInterp).a);
-        if (active_height > 0.5)
-            coverage = max(coverage, straight_sample(height_tex, uvInterp).a);
-        if (active_emission_color > 0.5)
-            coverage = max(coverage, straight_sample(emission_color_tex, uvInterp).a);
-        if (active_emission_strength > 0.5)
-            coverage = max(coverage, straight_sample(emission_strength_tex, uvInterp).a);
-        if (active_sss_weight > 0.5)
-            coverage = max(coverage, straight_sample(sss_weight_tex, uvInterp).a);
-        if (active_sss_radius > 0.5)
-            coverage = max(coverage, straight_sample(sss_radius_tex, uvInterp).a);
-        if (active_sss_scale > 0.5)
-            coverage = max(coverage, straight_sample(sss_scale_tex, uvInterp).a);
-    }
-    fragColor = vec4(rgb, coverage * preview_opacity);
+    /* The resident material preview owns the whole visible front surface.
+     * Per-channel alpha already gates each active layer exactly once inside
+     * resolve_stack_channel(). Reusing it as overlay alpha punched UV/texel
+     * gaps through to Blender's underlying material, producing intermittent
+     * white or surface-colored stripes on the topmost unresolved path. */
+    fragColor = vec4(rgb, preview_opacity);
 }
 """
 

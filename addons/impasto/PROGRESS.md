@@ -1,5 +1,13 @@
 # Impasto — multi-channel painting milestone progress
 
+## 0.13.1 — top-layer preview continuity and compact brush values
+
+- The Lit PBR overlay now owns the complete visible front surface. Active
+  channel alpha still gates layer influence inside stack composition, but no
+  longer punches UV/texel gaps through to Blender's underlying material.
+- Emission and Subsurface brush-value sections are persistent dropdowns,
+  collapsed by default.
+
 ## 0.13.0 — targeted erase, smear, export, and preview hardening
 
 - Added GPU-resident Smear across every enabled active-layer channel with
@@ -67,10 +75,9 @@
 
 ## Active roadmap
 
-- Diagnose and fix top-layer Lit PBR preview regressions: intermittent white
-  surface stripes/holes and unexpected flat-looking shading. The likely seams
-  are front-surface depth rejection and the corner-normal fallback, but both
-  require reproduction before changing tolerances or normal policy.
+- Interactively qualify whether any Lit PBR stripe or flat-shading artifacts
+  remain after removing top-layer alpha holes; depth rejection and corner
+  normals remain unchanged because no failing evidence implicated them.
 - Implement real layer masks with painting, visibility/invert controls, and
   predictable per-channel/layer application.
 - Interactively qualify the implemented GPU eraser, which removes resident

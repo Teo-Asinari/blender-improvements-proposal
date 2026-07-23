@@ -82,6 +82,7 @@ PROPERTY_IDS = {
         "preview_base_normal_strength", "preview_base_normal_invert_green",
         "paint_workflow", "ui_show_channels", "ui_show_emission_channels",
         "ui_show_subsurface_channels", "ui_show_recent_colors",
+        "ui_show_emission_paint", "ui_show_subsurface_paint",
         "ui_show_advanced",
     },
     "ImpastoChannel": {"enabled"},

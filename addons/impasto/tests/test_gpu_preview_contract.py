@@ -132,6 +132,9 @@ check("resident preview rejects rear self-occluded fragments",
       "impasto_visible_surface(preview_depth_tex" in src
       and 'uniform_sampler("preview_depth_tex"' in
       inspect.getsource(gpu_engine._draw_composed_preview))
+check("topmost Lit preview owns the complete front surface",
+      "fragColor = vec4(rgb, preview_opacity)" in src
+      and "coverage = max(coverage" not in src)
 check("height uses screen derivatives rather than four neighbor taps",
       "dFdx(height)" in src and "dFdy(height)" in src
       and "uvInterp + vec2" not in src and "uvInterp - vec2" not in src)

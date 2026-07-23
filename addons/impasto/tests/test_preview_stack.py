@@ -137,8 +137,10 @@ check("resident Kiln baseline ignores non-authoritative bake alpha",
 preview_src = gpu_engine.PREVIEW_FRAG_SRC
 check("resolved active alpha is applied exactly once",
       "active_factor * source.a" in preview_src
-      and "if (resolved_stack < 0.5)" in preview_src
-      and "float coverage = 1.0" in preview_src)
+      and "fragColor = vec4(rgb, preview_opacity)" in preview_src)
+check("topmost preview cannot expose alpha seam holes",
+      "float coverage = 1.0" not in preview_src
+      and "coverage = max(coverage" not in preview_src)
 check("active Base decodes once while baseline stays scene-linear",
       "if (decode_active_srgb > 0.5)" in preview_src
       and "source.rgb = srgb_to_linear(source.rgb)" in preview_src

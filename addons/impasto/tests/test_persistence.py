@@ -48,6 +48,8 @@ try:
         paint.paint_sss_weight = 0.65
         paint.paint_sss_radius = (1.4, 0.35, 0.12)
         paint.paint_sss_scale = 0.025
+        paint.ui_show_emission_paint = True
+        paint.ui_show_subsurface_paint = True
         paint.erase_channels[model.CHANNEL_ORDER["metallic"]] = False
         impasto.ops.remember_recent_color(
             paint, "base_color", (0.12, 0.34, 0.56))
@@ -111,6 +113,9 @@ try:
           and all(abs(a - b) < 1e-6 for a, b in zip(
               paint.paint_sss_radius, (1.4, 0.35, 0.12)))
           and abs(paint.paint_sss_scale - 0.025) < 1e-6)
+    check("brush-value section disclosure persists across save/reopen",
+          paint.ui_show_emission_paint
+          and paint.ui_show_subsurface_paint)
     check("eraser channel targeting persists across save/reopen",
           not paint.erase_channels[model.CHANNEL_ORDER["metallic"]]
           and paint.erase_channels[model.CHANNEL_ORDER["base_color"]]

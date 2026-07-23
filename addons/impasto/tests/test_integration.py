@@ -26,8 +26,13 @@ try:
     impasto.register()
     check("package registration",
           hasattr(bpy.types.ShaderNodeTree, "impasto"))
-    check("metadata", impasto.bl_info["version"] == (0, 13, 0))
-    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.13.0")
+    check("metadata", impasto.bl_info["version"] == (0, 13, 1))
+    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.13.1")
+    check("extended brush sections collapse by default",
+          not impasto.props.ImpastoLayer.bl_rna.properties[
+              "ui_show_emission_paint"].default
+          and not impasto.props.ImpastoLayer.bl_rna.properties[
+              "ui_show_subsurface_paint"].default)
     check("custom soften and erase icons loaded",
           impasto.ui_icons.is_loaded('soften')
           and impasto.ui_icons.is_loaded('erase'))
