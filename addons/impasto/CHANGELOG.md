@@ -4,6 +4,11 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.14.2
+
+- Removed the obsolete `active_normal_blend` preview uniform after RNM made
+  normal-layer color blend modes irrelevant, restoring GPU-paint startup.
+
 ## 0.14.1
 
 - Rebuild now discovers a loose material-level `Kiln Bake Target` image and

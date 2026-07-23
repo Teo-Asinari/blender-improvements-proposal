@@ -556,8 +556,7 @@ vec4 resolve_stack_channel(sampler2D active_tex, sampler2D baseline_tex,
 
 vec4 resolve_stack_normal(sampler2D active_tex, sampler2D baseline_tex,
                           vec4 baseline_value, float baseline_is_texture,
-                          float active_present, float active_factor,
-                          int active_blend)
+                          float active_present, float active_factor)
 {
     vec4 value = baseline_is_texture > 0.5
         ? texture(baseline_tex, uvInterp) : baseline_value;
@@ -674,7 +673,7 @@ void main()
     vec4 normal_sample = resolve_stack_normal(
         normal_tex, baseline_normal_tex, baseline_normal_value,
         baseline_normal_is_texture, active_normal,
-        active_normal_factor, active_normal_blend);
+        active_normal_factor);
     vec4 height_sample = resolve_stack_channel(
         height_tex, baseline_height_tex, baseline_height_value,
         baseline_height_is_texture, active_height,
@@ -1399,7 +1398,8 @@ def preview_shader_create_info():
         info.push_constant('FLOAT', "has_" + name)
         info.push_constant('FLOAT', "active_" + name)
         info.push_constant('FLOAT', "active_" + name + "_factor")
-        info.push_constant('INT', "active_" + name + "_blend")
+        if name != "normal":
+            info.push_constant('INT', "active_" + name + "_blend")
         info.push_constant('VEC4', "baseline_" + name + "_value")
         info.push_constant('FLOAT', "baseline_" + name + "_is_texture")
     info.sampler(0, 'FLOAT_2D', "base_color_tex")
@@ -3899,8 +3899,9 @@ def _draw_composed_preview(s):
         shader.uniform_float("active_" + key, 1.0 if active else 0.0)
         shader.uniform_float("active_" + key + "_factor",
                              float(active_spec.get("factor", 1.0)))
-        shader.uniform_int("active_" + key + "_blend", _BLEND_INDEX.get(
-            active_spec.get("blend", "MIX"), 0))
+        if key != "normal":
+            shader.uniform_int("active_" + key + "_blend", _BLEND_INDEX.get(
+                active_spec.get("blend", "MIX"), 0))
         shader.uniform_float("baseline_" + key + "_value", baseline_value)
         shader.uniform_float("baseline_" + key + "_is_texture",
                              1.0 if baseline_tex is not None else 0.0)

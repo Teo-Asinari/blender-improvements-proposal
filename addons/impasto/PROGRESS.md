@@ -8,4 +8,4 @@ This former combined progress log has been reorganized:
 - [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md) preserves
   the original detailed milestone and session history.
 
-Current release: **0.14.1**.
+Current release: **0.14.2**.
