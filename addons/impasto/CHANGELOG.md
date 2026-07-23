@@ -4,6 +4,14 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.14.0
+
+- Added bottom-up RNM composition for Kiln and Impasto tangent-normal layers.
+- Kept generated Blender nodes, resident Lit PBR preview, and flattened Normal
+  exports on the same alpha/mask-aware normal-composition semantics.
+- Existing stacks upgrade in place through Rebuild Stack without replacing
+  layers or painted images.
+
 ## 0.13.4
 
 - Paint, Soften, Smear, and Erase independently remember their selected layer

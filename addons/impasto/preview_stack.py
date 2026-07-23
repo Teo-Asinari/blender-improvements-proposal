@@ -205,6 +205,39 @@ def blend_value(a, b, factor, blend_mode):
     return _shape(out, not isinstance(a, (tuple, list)))
 
 
+def blend_tangent_normals_rnm(base, detail, factor):
+    """Blend encoded tangent normals with Reoriented Normal Mapping.
+
+    ``factor`` attenuates the detail toward the neutral tangent normal before
+    composition.  Any fourth component is preserved from the base because
+    resident stack coverage is tracked separately from normal direction.
+    """
+    import math
+
+    a, b = _tuple(base), _tuple(detail)
+    if len(a) < 3 or len(b) < 3:
+        raise ValueError("RNM operands require at least three components")
+    f = max(0.0, min(1.0, float(factor)))
+
+    def unit(v):
+        length = math.sqrt(sum(x * x for x in v))
+        return tuple(x / length for x in v) if length > 1e-12 else (
+            0.0, 0.0, 1.0)
+
+    n1 = unit(tuple(2.0 * x - 1.0 for x in a[:3]))
+    raw_detail = tuple(2.0 * x - 1.0 for x in b[:3])
+    n2 = unit((raw_detail[0] * f, raw_detail[1] * f,
+               1.0 + (raw_detail[2] - 1.0) * f))
+    t = (n1[0], n1[1], n1[2] + 1.0)
+    u = (-n2[0], -n2[1], n2[2])
+    dot_tu = sum(x * y for x, y in zip(t, u))
+    tz = max(t[2], 1e-5)
+    result = unit(tuple(t[i] * dot_tu / tz - u[i]
+                        for i in range(3)))
+    encoded = tuple(x * 0.5 + 0.5 for x in result)
+    return encoded + a[3:] if len(a) > 3 else encoded
+
+
 def affine_coefficients(b, factor, blend_mode):
     """Per-component ``(C, D)`` for an affine upper layer: out=C*A+D."""
     bb = _tuple(b)
@@ -319,6 +352,9 @@ def compose_channel_pixel(model_stack, channel_key, samples,
                                resident_samples)
         paint_alpha = _paint_alpha(layer, binding, samples, resident_samples)
         factor = _factor(model_stack, layer, binding, paint_alpha, samples)
-        value = blend_value(value, source.value, factor,
-                            model.effective_blend(layer, binding))
+        blend = model.effective_blend(layer, binding)
+        if channel_key == "normal":
+            value = blend_tangent_normals_rnm(value, source.value, factor)
+        else:
+            value = blend_value(value, source.value, factor, blend)
     return value

@@ -58,6 +58,40 @@ def _luminance(rgba):
             + rgba[..., 2] * 0.0722)
 
 
+def _normalize_normal(vector):
+    """Normalize a tangent-space vector array, safely falling back to +Z."""
+    np = _np()
+    length = np.linalg.norm(vector, axis=-1, keepdims=True)
+    fallback = np.zeros_like(vector)
+    fallback[..., 2] = 1.0
+    return np.where(length > 1e-8, vector / np.maximum(length, 1e-8),
+                    fallback)
+
+
+def _decode_normal(rgb):
+    return _normalize_normal(rgb[..., :3] * 2.0 - 1.0)
+
+
+def _encode_normal(vector):
+    np = _np()
+    return np.clip(_normalize_normal(vector) * 0.5 + 0.5, 0.0, 1.0)
+
+
+def _rnm(base, detail):
+    """Reoriented Normal Mapping, with ``base`` below ``detail``.
+
+    Inputs and output are normalized tangent-space vectors.  This is the
+    shortest form from Hill/Barré-Brisebois, preserving the base orientation
+    while reorienting the upper layer's detail around it.
+    """
+    np = _np()
+    t = base + np.array((0.0, 0.0, 1.0), dtype=np.float32)
+    u = detail * np.array((-1.0, -1.0, 1.0), dtype=np.float32)
+    combined = (t * np.sum(t * u, axis=-1, keepdims=True)
+                / np.maximum(t[..., 2:3], 1e-8) - u)
+    return _normalize_normal(combined)
+
+
 def _image(name):
     image = bpy.data.images.get(name)
     if image is None:
@@ -113,9 +147,20 @@ def composite_channel(stack_model, channel_key, width, height):
                 value = _luminance(mask_data)
                 if mask.invert: value = 1.0 - value
                 gate *= (1.0 - mask.opacity) + mask.opacity * value
-        mixed = _blend(result, source, model.effective_blend(layer, binding))
         fac = np.clip(gate * factor, 0.0, 1.0)[..., None]
-        result = result * (1.0 - fac) + mixed * fac
+        if channel_key == 'normal':
+            base = _decode_normal(result)
+            detail = _decode_normal(source)
+            neutral = np.zeros_like(detail)
+            neutral[..., 2] = 1.0
+            # Alpha, masks, and layer/binding opacity attenuate the detail
+            # normal toward neutral before it is reoriented over the base.
+            detail = _normalize_normal(neutral * (1.0 - fac) + detail * fac)
+            result[..., :3] = _encode_normal(_rnm(base, detail))
+        else:
+            mixed = _blend(result, source,
+                           model.effective_blend(layer, binding))
+            result = result * (1.0 - fac) + mixed * fac
     result[..., 3] = 1.0
     return result
 

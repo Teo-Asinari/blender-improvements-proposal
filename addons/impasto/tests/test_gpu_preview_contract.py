@@ -89,8 +89,10 @@ check("preview lighting updates do not rebuild or synchronize textures",
 
 check("resident alpha gates the active layer exactly once",
       "active_factor * source.a" in src)
-check("normal is decoded only after encoded-domain stack composition",
-      "vec3 encoded_n = normal_sample.rgb" in src)
+check("normal stack uses RNM before tangent-to-world decoding",
+      "vec3 rnm_blend(" in src
+      and "vec4 resolve_stack_normal(" in src
+      and "vec3 encoded_n = normal_sample.rgb" in src)
 check("preview-only base normal composes beneath resolved paint in all modes",
       "texture(base_normal_tex, baseNormalUV)" in main
       and "base_world_n + (n - geometric_n)" in main

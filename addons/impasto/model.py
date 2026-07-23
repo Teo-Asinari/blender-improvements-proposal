@@ -72,8 +72,9 @@ CHANNELS = (
     _c("roughness", "Roughness", "Roughness", "SCALAR", "Non-Color",
        (0.5,), "Core"),
     # Tangent-space normals are painted/stored in their conventional encoded
-    # RGB form.  The root compiler blends those encoded colors, then decodes
-    # the result exactly once with ShaderNodeNormalMap.
+    # RGB form.  The root compiler composes participating layers bottom-up
+    # with reoriented normal mapping (RNM), then decodes the result exactly
+    # once with ShaderNodeNormalMap.
     _c("normal", "Tangent Normal (RGB)", "Normal", "COLOR", "Non-Color",
        (0.5, 0.5, 1.0, 1.0), "Core"),
     # height is the one special channel: its chain feeds a single Bump
@@ -337,6 +338,10 @@ def n_normal_map():
     return "ps:root:ch.normal:decode"
 
 
+def n_rnm(uid, role):
+    return "ps:root:ch.normal:rnm.%s.%s" % (uid, role)
+
+
 def n_scalar_out(key):
     return "ps:root:ch.%s:scalar" % key
 
@@ -585,7 +590,12 @@ def _compile_root(model, grace):
             blend = n_blend(key, layer.uid)
             scalar_channel = ch.kind == "SCALAR"
             props = (("data_type", "FLOAT" if scalar_channel else "RGBA"),
-                     ("blend_type", effective_blend(layer, binding)),
+                     # Normal-map pixels encode directions rather than
+                     # ordinary colors.  This Mix only fades this layer
+                     # toward the neutral tangent normal; the result is
+                     # composed with the accumulated base by RNM below.
+                     ("blend_type", ("MIX" if key == "normal"
+                                     else effective_blend(layer, binding))),
                      ("clamp_factor", True),
                      ("clamp_result", False),
                      ("location", (-300.0 + 260.0 * chain_i,
@@ -599,7 +609,7 @@ def _compile_root(model, grace):
                             and layer.uid in treed_uids)
             if not use_fac_node:
                 inputs.append(("Factor_Float", fac))
-            if prev is None:
+            if prev is None or key == "normal":
                 inputs.append(("A_Float" if scalar_channel else "A_Color",
                                (float(ch.default_value[0]) if scalar_channel
                                 else seed_rgba(ch))))
@@ -643,12 +653,113 @@ def _compile_root(model, grace):
                                       (n_fac(key, layer.uid), "Value")))
                 links.append(LinkSpec((n_fac(key, layer.uid), "Value"),
                                       (blend, "Factor_Float")))
-            if prev is not None:
+            if prev is not None and key != "normal":
                 links.append(LinkSpec(prev,
                                       (blend, "A_Float" if scalar_channel
                                        else "A_Color")))
-            prev = (blend, "Result_Float" if scalar_channel
-                    else "Result_Color")
+            layer_result = (blend, "Result_Float" if scalar_channel
+                            else "Result_Color")
+            if key == "normal":
+                # Optimized RNM formulation from "Blending in Detail":
+                #   t = base * (2,2,2) + (-1,-1,0)
+                #   u = detail * (-2,-2,2) + (1,1,-1)
+                #   r = normalize(t * dot(t,u) / t.z - u)
+                # The normalized result is re-encoded to RGB so another
+                # detail layer can be composed before the one final Blender
+                # tangent-space Normal Map decode.
+                uid = layer.uid
+                t_mul, t_add = n_rnm(uid, "t_mul"), n_rnm(uid, "t_add")
+                u_mul, u_add = n_rnm(uid, "u_mul"), n_rnm(uid, "u_add")
+                u_norm = n_rnm(uid, "u_normalize")
+                dot, sep = n_rnm(uid, "dot"), n_rnm(uid, "sep")
+                safe_z, div = n_rnm(uid, "safe_z"), n_rnm(uid, "div")
+                scale = n_rnm(uid, "scale")
+                sub, norm = n_rnm(uid, "sub"), n_rnm(uid, "normalize")
+                enc_scale, enc_add = (n_rnm(uid, "encode_scale"),
+                                      n_rnm(uid, "encode_add"))
+                x = -300.0 + 260.0 * chain_i
+                y = -320.0 * ci
+                nodes.extend((
+                    NodeSpec(t_mul, "ShaderNodeVectorMath",
+                             (("operation", "MULTIPLY"),
+                              ("location", (x + 180.0, y + 220.0))),
+                             (("Vector_001", (2.0, 2.0, 2.0)),)),
+                    NodeSpec(t_add, "ShaderNodeVectorMath",
+                             (("operation", "ADD"),
+                              ("location", (x + 360.0, y + 220.0))),
+                             (("Vector_001", (-1.0, -1.0, 0.0)),)),
+                    NodeSpec(u_mul, "ShaderNodeVectorMath",
+                             (("operation", "MULTIPLY"),
+                              ("location", (x + 180.0, y - 180.0))),
+                             (("Vector_001", (-2.0, -2.0, 2.0)),)),
+                    NodeSpec(u_add, "ShaderNodeVectorMath",
+                             (("operation", "ADD"),
+                              ("location", (x + 360.0, y - 180.0))),
+                             (("Vector_001", (1.0, 1.0, -1.0)),)),
+                    NodeSpec(u_norm, "ShaderNodeVectorMath",
+                             (("operation", "NORMALIZE"),
+                              ("location", (x + 540.0, y - 180.0))), ()),
+                    NodeSpec(dot, "ShaderNodeVectorMath",
+                             (("operation", "DOT_PRODUCT"),
+                              ("location", (x + 720.0, y + 80.0))), ()),
+                    NodeSpec(sep, "ShaderNodeSeparateXYZ",
+                             (("location", (x + 540.0, y + 300.0)),), ()),
+                    NodeSpec(safe_z, "ShaderNodeMath",
+                             (("operation", "MAXIMUM"),
+                              ("location", (x + 720.0, y + 300.0))),
+                             (("Value_001", 1.0e-5),)),
+                    NodeSpec(div, "ShaderNodeMath",
+                             (("operation", "DIVIDE"),
+                              ("location", (x + 900.0, y + 80.0))), ()),
+                    NodeSpec(scale, "ShaderNodeVectorMath",
+                             (("operation", "SCALE"),
+                              ("location", (x + 1080.0, y + 160.0))), ()),
+                    NodeSpec(sub, "ShaderNodeVectorMath",
+                             (("operation", "SUBTRACT"),
+                              ("location", (x + 1260.0, y))), ()),
+                    NodeSpec(norm, "ShaderNodeVectorMath",
+                             (("operation", "NORMALIZE"),
+                              ("location", (x + 1440.0, y))), ()),
+                    NodeSpec(enc_scale, "ShaderNodeVectorMath",
+                             (("operation", "SCALE"),
+                              ("location", (x + 1620.0, y))),
+                             (("Scale", 0.5),)),
+                    NodeSpec(enc_add, "ShaderNodeVectorMath",
+                             (("operation", "ADD"),
+                              ("location", (x + 1800.0, y))),
+                             (("Vector_001", (0.5, 0.5, 0.5)),)),
+                ))
+                if prev is None:
+                    nodes[-14] = NodeSpec(
+                        t_mul, "ShaderNodeVectorMath",
+                        (("operation", "MULTIPLY"),
+                         ("location", (x + 180.0, y + 220.0))),
+                        (("Vector", (0.5, 0.5, 1.0)),
+                         ("Vector_001", (2.0, 2.0, 2.0))))
+                else:
+                    links.append(LinkSpec(prev, (t_mul, "Vector")))
+                links.extend((
+                    LinkSpec((t_mul, "Vector"), (t_add, "Vector")),
+                    LinkSpec(layer_result, (u_mul, "Vector")),
+                    LinkSpec((u_mul, "Vector"), (u_add, "Vector")),
+                    LinkSpec((u_add, "Vector"), (u_norm, "Vector")),
+                    LinkSpec((t_add, "Vector"), (dot, "Vector")),
+                    LinkSpec((u_norm, "Vector"), (dot, "Vector_001")),
+                    LinkSpec((t_add, "Vector"), (sep, "Vector")),
+                    LinkSpec((sep, "Z"), (safe_z, "Value")),
+                    LinkSpec((dot, "Value"), (div, "Value")),
+                    LinkSpec((safe_z, "Value"), (div, "Value_001")),
+                    LinkSpec((t_add, "Vector"), (scale, "Vector")),
+                    LinkSpec((div, "Value"), (scale, "Scale")),
+                    LinkSpec((scale, "Vector"), (sub, "Vector")),
+                    LinkSpec((u_norm, "Vector"), (sub, "Vector_001")),
+                    LinkSpec((sub, "Vector"), (norm, "Vector")),
+                    LinkSpec((norm, "Vector"), (enc_scale, "Vector")),
+                    LinkSpec((enc_scale, "Vector"), (enc_add, "Vector")),
+                ))
+                prev = (enc_add, "Vector")
+            else:
+                prev = layer_result
             chain_i += 1
         max_chain = max(max_chain, chain_i)
 

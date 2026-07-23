@@ -83,11 +83,9 @@ try:
     check("normal decoder is Normal Map node",
           decoder.bl_idname == "ShaderNodeNormalMap")
     check("normal decoder uses tangent space", decoder.space == "TANGENT")
-    normal_blend = root.nodes[model.n_blend("normal", layer.name)]
-    check("encoded normal blend feeds decoder",
-          linked(root, normal_blend.name, "Result", decoder.name, "Color")
-          or linked(root, normal_blend.name, "Result_Color",
-                    decoder.name, "Color"))
+    rnm_result = root.nodes[model.n_rnm(layer.name, "encode_add")]
+    check("RNM-composed encoded normal feeds decoder",
+          linked(root, rnm_result.name, "Vector", decoder.name, "Color"))
     root_out = root.nodes[model.n_root_out()]
     check("normal-only decode feeds root Normal",
           linked(root, decoder.name, "Normal", root_out.name, "Normal"))

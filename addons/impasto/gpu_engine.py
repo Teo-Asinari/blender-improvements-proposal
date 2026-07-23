@@ -524,6 +524,18 @@ vec4 stack_blend(vec4 a, vec4 b, float factor, int mode)
     return mix(a, b, f);
 }
 
+vec3 rnm_blend(vec3 base_encoded, vec3 detail_encoded, float factor)
+{
+    vec3 n1 = normalize(base_encoded * 2.0 - 1.0);
+    vec3 raw_detail = detail_encoded * 2.0 - 1.0;
+    float f = clamp(factor, 0.0, 1.0);
+    vec3 n2 = normalize(vec3(raw_detail.xy * f,
+                             1.0 + (raw_detail.z - 1.0) * f));
+    vec3 t = n1 + vec3(0.0, 0.0, 1.0);
+    vec3 u = n2 * vec3(-1.0, -1.0, 1.0);
+    return normalize(t * dot(t, u) / max(t.z, 1e-5) - u) * 0.5 + 0.5;
+}
+
 vec4 resolve_stack_channel(sampler2D active_tex, sampler2D baseline_tex,
                            vec4 baseline_value, float baseline_is_texture,
                            float active_present, float active_factor,
@@ -537,6 +549,22 @@ vec4 resolve_stack_channel(sampler2D active_tex, sampler2D baseline_tex,
             source.rgb = srgb_to_linear(source.rgb);
         value = stack_blend(value, source, active_factor * source.a,
                             active_blend);
+    }
+    value.a = 1.0;
+    return value;
+}
+
+vec4 resolve_stack_normal(sampler2D active_tex, sampler2D baseline_tex,
+                          vec4 baseline_value, float baseline_is_texture,
+                          float active_present, float active_factor,
+                          int active_blend)
+{
+    vec4 value = baseline_is_texture > 0.5
+        ? texture(baseline_tex, uvInterp) : baseline_value;
+    if (active_present > 0.5) {
+        vec4 source = straight_sample(active_tex, uvInterp);
+        float f = active_factor * source.a;
+        value.rgb = rnm_blend(value.rgb, source.rgb, f);
     }
     value.a = 1.0;
     return value;
@@ -643,10 +671,10 @@ void main()
         roughness_tex, baseline_roughness_tex, baseline_roughness_value,
         baseline_roughness_is_texture, active_roughness,
         active_roughness_factor, active_roughness_blend, 0.0);
-    vec4 normal_sample = resolve_stack_channel(
+    vec4 normal_sample = resolve_stack_normal(
         normal_tex, baseline_normal_tex, baseline_normal_value,
         baseline_normal_is_texture, active_normal,
-        active_normal_factor, active_normal_blend, 0.0);
+        active_normal_factor, active_normal_blend);
     vec4 height_sample = resolve_stack_channel(
         height_tex, baseline_height_tex, baseline_height_value,
         baseline_height_is_texture, active_height,
@@ -865,6 +893,18 @@ void main()
 """
 
 BASELINE_FRAG_SRC = """
+vec3 rnm_blend(vec3 base_encoded, vec3 detail_encoded, float factor)
+{
+    vec3 n1 = normalize(base_encoded * 2.0 - 1.0);
+    vec3 raw_detail = detail_encoded * 2.0 - 1.0;
+    float f = clamp(factor, 0.0, 1.0);
+    vec3 n2 = normalize(vec3(raw_detail.xy * f,
+                             1.0 + (raw_detail.z - 1.0) * f));
+    vec3 t = n1 + vec3(0.0, 0.0, 1.0);
+    vec3 u = n2 * vec3(-1.0, -1.0, 1.0);
+    return normalize(t * dot(t, u) / max(t.z, 1e-5) - u) * 0.5 + 0.5;
+}
+
 vec4 blend_step(vec4 a, vec4 b, float factor, int mode)
 {
     float f = clamp(factor, 0.0, 1.0);
@@ -889,7 +929,9 @@ void main()
     vec4 b = source_is_texture > 0.5
         ? texture(source_tex, uvInterp) : source_value;
     float f = factor * (source_uses_alpha > 0.5 ? b.a : 1.0);
-    fragColor = blend_step(a, b, f, blend_mode);
+    fragColor = is_normal > 0.5
+        ? vec4(rnm_blend(a.rgb, b.rgb, f), a.a)
+        : blend_step(a, b, f, blend_mode);
 }
 """
 
@@ -1416,6 +1458,7 @@ def baseline_shader_create_info():
     info.push_constant('FLOAT', "source_is_texture")
     info.push_constant('FLOAT', "source_uses_alpha")
     info.push_constant('FLOAT', "factor")
+    info.push_constant('FLOAT', "is_normal")
     info.push_constant('INT', "blend_mode")
     info.sampler(0, 'FLOAT_2D', "current_tex")
     info.sampler(1, 'FLOAT_2D', "source_tex")
@@ -2690,9 +2733,13 @@ def _build_stack_baselines(s):
             if not any(step["source"]["kind"] == "IMAGE" for step in steps):
                 value = channel["seed"]
                 for step in steps:
-                    value = preview_stack.blend_value(
-                        value, step["source"]["value"], step["factor"],
-                        step["blend"])
+                    if key == "normal":
+                        value = preview_stack.blend_tangent_normals_rnm(
+                            value, step["source"]["value"], step["factor"])
+                    else:
+                        value = preview_stack.blend_value(
+                            value, step["source"]["value"], step["factor"],
+                            step["blend"])
                 s.baseline_values[key] = _vec4(value)
                 continue
             ping = gpu.types.GPUTexture((size, size), format='RGBA16F')
@@ -2744,6 +2791,8 @@ def _build_stack_baselines(s):
                     shader.uniform_float("source_uses_alpha",
                                          1.0 if source.get("use_alpha") else 0.0)
                     shader.uniform_float("factor", float(step["factor"]))
+                    shader.uniform_float("is_normal",
+                                         1.0 if key == "normal" else 0.0)
                     shader.uniform_int("blend_mode", _BLEND_INDEX.get(
                         step["blend"], 0))
                     shader.uniform_sampler("current_tex", current)

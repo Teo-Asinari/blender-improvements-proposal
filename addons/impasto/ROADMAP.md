@@ -1,17 +1,12 @@
 # Impasto roadmap
 
-This is the authoritative list of open work for Impasto 0.13.4. Shipped work
+This is the authoritative list of open work for Impasto 0.14.0. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Near-term
 
 - Implement production layer masks: paintable mask canvases, visibility and
   invert controls, predictable layer/channel scope, and mask-aware export.
-- Replace ordinary encoded-RGB mixing between tangent-normal layers with a
-  defined vector composition method such as RNM or UDN: use Kiln or the
-  selected Base Normal Map as the base, compose Impasto detail normals
-  bottom-up, decode through one Normal Map stage, then apply Height through
-  Bump. Upper detail must augment the base rather than replace it.
 - Optimize Soften and Smear with dirty-region copies. Their current full
   texture copy per selected channel per dab is unsuitable for 8K and can be
   expensive at 4K.
@@ -50,3 +45,5 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
   user-validated as a useful, reliable manual fallback. Automatic Kiln
   discovery and true layered-normal composition remain open.
 - Stencil Paint Coverage and Normal Relief can be enabled together.
+- Kiln and Impasto normal layers use bottom-up RNM composition in the
+  generated material, resident preview, and flattened Normal export.

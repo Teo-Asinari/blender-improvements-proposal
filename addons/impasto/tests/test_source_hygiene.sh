@@ -17,7 +17,8 @@ fi
 git check-ignore -q addons/impasto/__pycache__/contract.pyc
 
 unexpected_root_docs="$(find addons/impasto -maxdepth 1 -type f -name '*.md' \
-    ! -name README.md ! -name PROGRESS.md -print)"
+    ! -name README.md ! -name PROGRESS.md ! -name ROADMAP.md \
+    ! -name CHANGELOG.md -print)"
 if [ -n "$unexpected_root_docs" ]; then
     echo "Impasto design/history documents belong under docs/:" >&2
     echo "$unexpected_root_docs" >&2

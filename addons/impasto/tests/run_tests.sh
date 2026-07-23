@@ -50,6 +50,7 @@ run_one "$TESTS_DIR/test_scalar_channels.py" "IMPASTO_SCALAR_CHANNELS_PASSED" ||
 run_one "$TESTS_DIR/test_rendered_semantics.py" "IMPASTO_RENDERED_SEMANTICS_PASSED" || status=1
 run_one "$TESTS_DIR/test_pbr_canvas_semantics.py" "IMPASTO_PBR_CANVAS_PASSED" || status=1
 run_one "$TESTS_DIR/test_normal_paint.py" "IMPASTO_NORMAL_PAINT_PASSED" || status=1
+run_one "$TESTS_DIR/test_rnm_rebuild.py" "IMPASTO_RNM_REBUILD_PASSED" || status=1
 run_one "$TESTS_DIR/test_persistence.py" "IMPASTO_PERSISTENCE_PASSED" || status=1
 run_one "$TESTS_DIR/test_flatten_export.py" "flatten export tests passed" || status=1
 run_one "$TESTS_DIR/test_restore.py" "IMPASTO_RESTORE_PASSED" || status=1

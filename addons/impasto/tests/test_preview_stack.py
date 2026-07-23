@@ -207,8 +207,10 @@ resident_normal = {"active": {
 }}
 got_normal = preview_stack.compose_channel_pixel(
     kiln_only, "normal", normal_samples, resident_normal)
-expected_normal = preview_stack.blend_value(
-    (0.6, 0.4, 1.0, 1.0), (0.8, 0.5, 1.0, 1.0), 0.25, "MIX")
+expected_normal = preview_stack.blend_tangent_normals_rnm(
+    preview_stack.blend_tangent_normals_rnm(
+        (0.5, 0.5, 1.0, 1.0), (0.6, 0.4, 1.0, 1.0), 1.0),
+    (0.8, 0.5, 1.0, 1.0), 0.25)
 check("resident normal layers over Kiln baked baseline",
       all(abs(a - b) < 1e-12 for a, b in
           zip(got_normal, expected_normal)), repr(got_normal))
@@ -222,9 +224,11 @@ transparent_active = {"active": {
 }}
 lower_only_normal = preview_stack.compose_channel_pixel(
     kiln_only, "normal", normal_samples, transparent_active)
+resolved_kiln = preview_stack.blend_tangent_normals_rnm(
+    (0.5, 0.5, 1.0, 1.0), normal_samples["Kiln Normal"].value, 1.0)
 check("transparent active normal preserves Kiln normal for every preview",
       all(abs(a - b) < 1e-12 for a, b in zip(
-          lower_only_normal, normal_samples["Kiln Normal"].value)),
+          lower_only_normal, resolved_kiln)),
       repr(lower_only_normal))
 
 opaque_active = {"active": {
@@ -234,10 +238,28 @@ top_only_normal = preview_stack.compose_channel_pixel(
     kiln_only, "normal", normal_samples, opaque_active)
 check("opaque active normal remains authoritative over Kiln normal",
       all(abs(a - b) < 1e-12 for a, b in zip(
-          top_only_normal, opaque_active["active"]["normal"].value)),
+          top_only_normal, preview_stack.blend_tangent_normals_rnm(
+              resolved_kiln,
+              opaque_active["active"]["normal"].value, 1.0))),
       repr(top_only_normal))
 
-normal_resolve_at = preview_src.index("vec4 normal_sample = resolve_stack_channel")
+neutral = (0.5, 0.5, 1.0, 1.0)
+tilt_x = (0.8, 0.5, 0.9, 1.0)
+tilt_y = (0.5, 0.8, 0.9, 1.0)
+combined_rnm = preview_stack.blend_tangent_normals_rnm(
+    tilt_x, tilt_y, 1.0)
+check("RNM preserves neutral identity and combines orthogonal detail",
+      all(abs(a - b) < 1e-7 for a, b in zip(
+          preview_stack.blend_tangent_normals_rnm(
+              tilt_x, neutral, 1.0), tilt_x))
+      and combined_rnm[0] > 0.5 and combined_rnm[1] > 0.5,
+      repr(combined_rnm))
+check("RNM zero factor preserves the lower normal",
+      all(abs(a - b) < 1e-7 for a, b in zip(
+          preview_stack.blend_tangent_normals_rnm(
+              tilt_x, tilt_y, 0.0), tilt_x)))
+
+normal_resolve_at = preview_src.index("vec4 normal_sample = resolve_stack_normal")
 raw_at = preview_src.index("if (preview_mode == 1)")
 decode_at = preview_src.index("if (has_normal > 0.5)")
 neutral_at = preview_src.index("if (preview_mode == 2)")

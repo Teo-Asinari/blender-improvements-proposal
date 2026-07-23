@@ -499,6 +499,42 @@ def test_material_tree():
           [socket.name for socket in normal_root.interface].count("Normal")
           == 1)
 
+    kiln = model.LayerModel(
+        uid="aa11bb22", label="Kiln Baked Normal", layer_type="PAINT",
+        uv_map="UVMap", bindings=(model.BindingModel(
+            key="normal", mode="SHARED", image_name="Kiln Normal.exr",
+            use_masks=False),))
+    detail = model.LayerModel(
+        uid="bb22cc44", label="Painted detail", layer_type="PAINT",
+        uv_map="UVMap", opacity=0.6, bindings=(model.BindingModel(
+            key="normal", mode="SHARED", image_name="Detail Normal.exr"),))
+    rnm_root = _tree(model.compile_stack(model.StackModel(
+        root_tree_name="RNM normals", channels=("normal",),
+        # Display order is top first: Kiln is the bottom baseline.
+        layers=(detail, kiln),
+        material=model.MaterialModel("Principled BSDF"))), "root")
+    rnm_nodes = {node.name: node for node in rnm_root.nodes}
+    rnm_links = {(link.src, link.dst) for link in rnm_root.links}
+    check("normal layers compile to one RNM stage per participant",
+          all(model.n_rnm(uid, "normalize") in rnm_nodes
+              for uid in (kiln.uid, detail.uid)))
+    check("Kiln baseline RNM result feeds the next detail stage",
+          ((model.n_rnm(kiln.uid, "encode_add"), "Vector"),
+           (model.n_rnm(detail.uid, "t_mul"), "Vector")) in rnm_links)
+    check("normal opacity fades detail from neutral before RNM",
+          dict(rnm_nodes[model.n_blend("normal", detail.uid)].inputs)
+          ["A_Color"] == (0.5, 0.5, 1.0, 1.0)
+          and dict(rnm_nodes[model.n_fac("normal", detail.uid)].inputs)
+          ["Value_001"] == 0.6
+          and ((model.n_fac("normal", detail.uid), "Value"),
+               (model.n_blend("normal", detail.uid),
+                "Factor_Float")) in rnm_links)
+    check("RNM chain has one final tangent-space decode",
+          sum(node.bl_idname == "ShaderNodeNormalMap"
+              for node in rnm_root.nodes) == 1
+          and ((model.n_rnm(detail.uid, "encode_add"), "Vector"),
+               (model.n_normal_map(), "Color")) in rnm_links)
+
     extended_keys = ("emission_color", "emission_strength", "sss_weight",
                      "sss_radius", "sss_scale")
     extended_layer = model.LayerModel(
