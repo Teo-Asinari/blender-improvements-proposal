@@ -51,6 +51,9 @@ try:
         paint.ui_show_emission_paint = True
         paint.ui_show_subsurface_paint = True
         paint.erase_channels[model.CHANNEL_ORDER["metallic"]] = False
+        paint.paint_channels[model.CHANNEL_ORDER["roughness"]] = False
+        paint.soften_channels[model.CHANNEL_ORDER["normal"]] = False
+        paint.smear_channels[model.CHANNEL_ORDER["base_color"]] = False
         impasto.ops.remember_recent_color(
             paint, "base_color", (0.12, 0.34, 0.56))
         impasto.ops.remember_recent_color(
@@ -120,6 +123,10 @@ try:
           not paint.erase_channels[model.CHANNEL_ORDER["metallic"]]
           and paint.erase_channels[model.CHANNEL_ORDER["base_color"]]
           and paint.erase_channels[model.CHANNEL_ORDER["roughness"]])
+    check("paint, soften, and smear targeting persists across save/reopen",
+          not paint.paint_channels[model.CHANNEL_ORDER["roughness"]]
+          and not paint.soften_channels[model.CHANNEL_ORDER["normal"]]
+          and not paint.smear_channels[model.CHANNEL_ORDER["base_color"]])
     check("recent Base and Emission colors persist per material stack",
           len(tree.impasto.recent_base_colors) == 1
           and len(tree.impasto.recent_emission_colors) == 1

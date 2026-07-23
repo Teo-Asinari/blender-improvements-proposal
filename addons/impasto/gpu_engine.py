@@ -397,7 +397,9 @@ def dab_frag_src(channels=1, additive=False, profile_slots=None,
                 "    { %s = vec4(dab_params.brush_values[%d].rgb * "
                 "dab_params.brush_values[%d].a * "
                 "dab_params.paint_flags.y * f, "
-                "dab_params.paint_flags.y * f); }" % (output, i, i))
+                "dab_params.brush_values[%d].a * "
+                "dab_params.paint_flags.y * f); }"
+                % (output, i, i, i))
         else:
             lines.append("    { %s = vec4(dab_params.brush_values[%d].rgb, "
                          "dab_params.brush_values[%d].a * "
@@ -2239,6 +2241,7 @@ def cursor_position():
 
 def update_stroke_settings(payloads, radius=None, hardness=None, opacity=None,
                            brush_mode=None,
+                           brush_target_channel_keys=None,
                            erase_channel_keys=None,
                            stamp=None, stencil_settings=None,
                            caliper_settings=None):
@@ -2263,6 +2266,9 @@ def update_stroke_settings(payloads, radius=None, hardness=None, opacity=None,
         s.settings["opacity"] = max(0.0, min(1.0, float(opacity)))
     if brush_mode is not None:
         s.settings["brush_mode"] = str(brush_mode)
+    if brush_target_channel_keys is not None:
+        s.settings["brush_target_channel_keys"] = tuple(
+            brush_target_channel_keys)
     if erase_channel_keys is not None:
         s.settings["erase_channel_keys"] = tuple(erase_channel_keys)
     s.settings["brush_stamp"] = stamp
@@ -3315,11 +3321,11 @@ def _flush_dabs(s, region):
                     s.history_backend, "GPU multi-channel stroke")
             rect = dirty_rect or (0, 0, s.size, s.size)
             keys = tuple(s.settings.get("channel_keys", ()))
-            erase = s.settings.get("brush_mode", "PAINT") == "ERASE"
-            erase_keys = set(s.settings.get("erase_channel_keys", keys))
+            target_keys = set(s.settings.get(
+                "brush_target_channel_keys", keys))
             for i in range(s.channels):
                 channel = keys[i] if i < len(keys) else str(i)
-                if erase and channel not in erase_keys:
+                if channel not in target_keys:
                     continue
                 s.stroke_transaction.touch_rect(
                     channel, rect, (s.size, s.size))
@@ -3345,8 +3351,9 @@ def _flush_dabs(s, region):
             fb.viewport_set(0, 0, s.size, s.size)
             erase = s.settings.get("brush_mode", 'PAINT') == 'ERASE'
             channel_keys = tuple(s.settings.get("channel_keys", ()))
-            erase_keys = set(s.settings.get("erase_channel_keys",
-                                             channel_keys))
+            target_keys = set(s.settings.get(
+                "brush_target_channel_keys",
+                s.settings.get("erase_channel_keys", channel_keys)))
             gpu.state.blend_set(
                 'MULTIPLY' if erase else
                 ('ADDITIVE' if blend == 'ADD' else 'ALPHA'))
@@ -3360,10 +3367,11 @@ def _flush_dabs(s, region):
                 value = tuple(payload.get("value", (0.0, 0.0, 0.0)))[:3]
                 brush_values.append((
                     value[0], value[1], value[2],
-                    (1.0 if (target_index < len(channel_keys)
-                             and channel_keys[target_index] in erase_keys)
-                     else 0.0)
-                    if erase else float(payload.get("strength", 1.0))))
+                    ((1.0 if erase else float(
+                        payload.get("strength", 1.0)))
+                     if (target_index < len(channel_keys)
+                         and channel_keys[target_index] in target_keys)
+                     else 0.0)))
             stencil_projection = (
                 s.settings.get("stencil_projection") == 'BRUSH_ALPHA')
             stencil_interpretation = (
@@ -3458,7 +3466,13 @@ def _flush_soften_dabs(s, region, queue, radius, hardness, occlusion, stamp,
         data[DAB_UBO_STENCIL_FLAGS, 3] = (
             1.0 if s.settings.get("stencil_coverage", True) else 0.0)
         ubo.update(data)
+        channel_keys = tuple(s.settings.get("channel_keys", ()))
+        target_keys = set(s.settings.get(
+            "brush_target_channel_keys", channel_keys))
         for index in range(s.channels):
+            if (index >= len(channel_keys)
+                    or channel_keys[index] not in target_keys):
+                continue
             source = s.paint_texs[index]
             target = s.soften_scratch
             target_fb = gpu.types.GPUFrameBuffer(color_slots=(target,))
@@ -3528,7 +3542,13 @@ def _flush_smear_dabs(s, region, queue, radius, hardness, occlusion, stamp,
             float(s.settings.get("stencil_rotation", 0.0)), (), data=data)
         data[DAB_UBO_PROFILE_FLAGS, 2:4] = offset
         ubo.update(data)
+        channel_keys = tuple(s.settings.get("channel_keys", ()))
+        target_keys = set(s.settings.get(
+            "brush_target_channel_keys", channel_keys))
         for index in range(s.channels):
+            if (index >= len(channel_keys)
+                    or channel_keys[index] not in target_keys):
+                continue
             source, target = s.paint_texs[index], s.soften_scratch
             target_fb = gpu.types.GPUFrameBuffer(color_slots=(target,))
             s.history_backend._draw_copy(source, target_fb,

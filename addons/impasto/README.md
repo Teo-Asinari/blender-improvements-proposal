@@ -1,6 +1,6 @@
 # Impasto
 
-Impasto 0.13.3 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
+Impasto 0.13.4 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
 painting. It stores material work as ordered Paint and Fill layers, compiles
 the stack into a Principled BSDF material, and provides a GPU-resident painting
 session with immediate material feedback.
@@ -65,9 +65,9 @@ Impasto currently targets Blender 5.1.
 4. Under **Brush Controls**, select **GPU Multi-Channel**.
 5. Choose Paint, Soften, Smear, or Erase, then set Brush Radius, Brush Hardness, Brush
    Opacity, pressure behavior, and any channel values used by Paint mode.
-   Erase exposes a compact **Erase Channels** grid for targeting any subset
-   of the enabled layer channels. All are selected by default, and the
-   selection is saved in the `.blend`.
+   Every GPU brush mode exposes its own compact channel grid. Paint, Soften,
+   Smear, and Erase remember independent target selections, with **All** and
+   **None** shortcuts.
 6. Start GPU Painting.
 7. Use LMB to paint. RMB or Esc flushes the resident canvases and exits.
 

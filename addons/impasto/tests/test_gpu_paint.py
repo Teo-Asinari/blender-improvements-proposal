@@ -116,9 +116,11 @@ try:
     erase_tree = bpy.data.node_groups.new("Impasto Erase Defaults",
                                           "ShaderNodeTree")
     layer = erase_tree.impasto.layers.add()
-    check("eraser defaults to targeting every material channel",
-          len(layer.erase_channels) == len(model.CHANNELS)
-          and all(layer.erase_channels))
+    check("every GPU brush defaults to targeting every material channel",
+          all(len(getattr(layer, name)) == len(model.CHANNELS)
+                  and all(getattr(layer, name))
+              for name in ("paint_channels", "soften_channels",
+                           "smear_channels", "erase_channels")))
 
     # ---- registry contract behind stroke_payloads --------------------
     keys = gpu_engine.GPU_PAINT_CHANNEL_KEYS
@@ -376,6 +378,7 @@ try:
           gpu_engine.update_stroke_settings(
               refreshed, radius=73.0, hardness=0.25,
               brush_mode='SOFTEN',
+              brush_target_channel_keys=('height',),
               erase_channel_keys=('base_color',)))
     current_payloads, current_settings = \
         gpu_engine.stroke_settings_snapshot()
@@ -384,6 +387,7 @@ try:
           and current_settings["radius"] == 73.0
           and current_settings["hardness"] == 0.25
           and current_settings["brush_mode"] == 'SOFTEN'
+          and current_settings["brush_target_channel_keys"] == ('height',)
           and current_settings["erase_channel_keys"] == ('base_color',))
     gpu_engine.begin_stroke(10.0, 10.0, 0.2)
     gpu_engine.move_stroke(30.0, 10.0, 0.8, 40.0)

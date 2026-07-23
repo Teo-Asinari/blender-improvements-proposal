@@ -242,9 +242,9 @@ class ImpastoLayer(bpy.types.PropertyGroup):
     brush_mode: EnumProperty(
         name="Brush Mode",
         description="Paint, soften, smear, or erase active-layer detail",
-        items=(('PAINT', "Paint", "Paint the configured values into every "
-                                  "enabled channel"),
-               ('SOFTEN', "Soften", "Blur detail in every enabled channel "
+        items=(('PAINT', "Paint", "Paint configured values into selected "
+                                  "channels"),
+               ('SOFTEN', "Soften", "Blur detail in selected channels "
                                     "using pressure-scaled soften strength"),
                ('SMEAR', "Smear", "Transport active-layer pixels along the "
                                    "stroke direction"),
@@ -256,6 +256,24 @@ class ImpastoLayer(bpy.types.PropertyGroup):
         description="Choose which enabled layer channels the Erase brush "
                     "removes; newly created and existing layers default to "
                     "all channels",
+        size=len(model.CHANNELS),
+        default=tuple(True for _channel in model.CHANNELS))
+    paint_channels: BoolVectorProperty(
+        name="Paint Channels",
+        description="Choose which enabled layer channels receive Paint "
+                    "brush values",
+        size=len(model.CHANNELS),
+        default=tuple(True for _channel in model.CHANNELS))
+    soften_channels: BoolVectorProperty(
+        name="Soften Channels",
+        description="Choose which enabled layer channels the Soften brush "
+                    "blurs",
+        size=len(model.CHANNELS),
+        default=tuple(True for _channel in model.CHANNELS))
+    smear_channels: BoolVectorProperty(
+        name="Smear Channels",
+        description="Choose which enabled layer channels the Smear brush "
+                    "transports",
         size=len(model.CHANNELS),
         default=tuple(True for _channel in model.CHANNELS))
     brush_pressure_opacity: BoolProperty(

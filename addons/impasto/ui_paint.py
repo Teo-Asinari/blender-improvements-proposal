@@ -37,25 +37,30 @@ def draw_brush_mode(layout, layer):
     op.mode = 'ERASE'
 
 
-def draw_erase_channels(layout, layer, channel_keys):
-    """Draw compact channel targeting for the GPU eraser."""
+def draw_brush_channels(layout, layer, channel_keys):
+    """Draw compact, mode-specific GPU brush channel targeting."""
+    mode = layer.brush_mode
+    property_name = ops._BRUSH_CHANNEL_PROPERTIES[mode]
+    label = "%s Channels" % mode.title()
     box = layout.box()
     header = box.row(align=True)
-    header.label(text="Erase Channels", icon='IMAGE_DATA')
-    op = header.operator(ops.IMPASTO_OT_erase_channels_set.bl_idname,
+    header.label(text=label, icon='IMAGE_DATA')
+    op = header.operator(ops.IMPASTO_OT_brush_channels_set.bl_idname,
                          text="All")
+    op.mode = mode
     op.selected = True
-    op = header.operator(ops.IMPASTO_OT_erase_channels_set.bl_idname,
+    op = header.operator(ops.IMPASTO_OT_brush_channels_set.bl_idname,
                          text="None")
+    op.mode = mode
     op.selected = False
     grid = box.grid_flow(row_major=True, columns=2, even_columns=True,
                          even_rows=False, align=True)
     selected = 0
     for key in channel_keys:
         index = model.CHANNEL_ORDER[key]
-        grid.prop(layer, "erase_channels", index=index,
+        grid.prop(layer, property_name, index=index,
                   text=model.CHANNEL_MAP[key].label, toggle=True)
-        selected += bool(layer.erase_channels[index])
+        selected += bool(getattr(layer, property_name)[index])
     if not selected:
         warning = box.row()
         warning.alert = True
@@ -131,8 +136,7 @@ class PaintPanelMixin:
         if layer.paint_workflow == 'GPU':
             brush = paint.column(align=True)
             draw_brush_mode(brush, layer)
-            if layer.brush_mode == 'ERASE':
-                draw_erase_channels(brush, layer, keys)
+            draw_brush_channels(brush, layer, keys)
             brush.separator()
             brush.label(text="Brush Shape & Input", icon='BRUSH_DATA')
             brush.prop(layer, "brush_radius", text="Brush Radius")
@@ -156,8 +160,8 @@ class PaintPanelMixin:
         smearing = (layer.paint_workflow == 'GPU'
                     and layer.brush_mode == 'SMEAR')
         paint.label(text=("Values ignored while erasing" if erasing else
-                          "Softens all enabled layer channels" if softening
-                          else "Smears all enabled layer channels" if smearing
+                          "Softens selected layer channels" if softening
+                          else "Smears selected layer channels" if smearing
                           else "Painted Channel Values"), icon='MATERIAL')
         if softening or smearing:
             paint.label(text="Pressure controls strength when enabled",
@@ -439,6 +443,7 @@ class PaintPanelMixin:
             box.label(text="Experimental GPU Brush", icon='BRUSH_DATA')
             gpu_col = box.column(align=True)
             draw_brush_mode(gpu_col, layer)
+            draw_brush_channels(gpu_col, layer, gpu_keys)
             gpu_col.prop(layer, "gpu_preview_mode", text="Live Preview")
             gpu_col.label(text="Display only — painted channels are unchanged",
                           icon='INFO')

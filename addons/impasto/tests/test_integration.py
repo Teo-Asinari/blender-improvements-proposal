@@ -26,8 +26,8 @@ try:
     impasto.register()
     check("package registration",
           hasattr(bpy.types.ShaderNodeTree, "impasto"))
-    check("metadata", impasto.bl_info["version"] == (0, 13, 3))
-    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.13.3")
+    check("metadata", impasto.bl_info["version"] == (0, 13, 4))
+    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.13.4")
     check("extended brush sections collapse by default",
           not impasto.props.ImpastoLayer.bl_rna.properties[
               "ui_show_emission_paint"].default
@@ -147,6 +147,20 @@ try:
           bpy.ops.impasto.erase_channels_set(selected=True) == {"FINISHED"}
           and all(paint_layer.erase_channels[index]
                   for index in erase_target_indices))
+    for mode, property_name in (
+            ('PAINT', "paint_channels"),
+            ('SOFTEN', "soften_channels"),
+            ('SMEAR', "smear_channels"),
+            ('ERASE', "erase_channels")):
+        values = getattr(paint_layer, property_name)
+        check("clear all %s targets" % mode.lower(),
+              bpy.ops.impasto.brush_channels_set(
+                  mode=mode, selected=False) == {"FINISHED"}
+              and not any(values[index] for index in erase_target_indices))
+        check("select all %s targets" % mode.lower(),
+              bpy.ops.impasto.brush_channels_set(
+                  mode=mode, selected=True) == {"FINISHED"}
+              and all(values[index] for index in erase_target_indices))
 
     d1 = engine.rebuild(tree)
     d2 = engine.reconcile_stack(tree)

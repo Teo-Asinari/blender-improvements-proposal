@@ -38,6 +38,7 @@ OPERATOR_IDS = {
     "IMPASTO_OT_recent_color_apply": "impasto.recent_color_apply",
     "IMPASTO_OT_brush_mode_set": "impasto.brush_mode_set",
     "IMPASTO_OT_erase_channels_set": "impasto.erase_channels_set",
+    "IMPASTO_OT_brush_channels_set": "impasto.brush_channels_set",
     "IMPASTO_OT_flatten_export": "impasto.flatten_export",
     "IMPASTO_OT_native_multichannel_paint":
         "impasto.native_multichannel_paint",
@@ -65,7 +66,8 @@ PROPERTY_IDS = {
         "paint_emission_color", "paint_emission_strength",
         "paint_sss_weight", "paint_sss_radius", "paint_sss_scale",
         "show_sss_caliper", "brush_radius", "brush_hardness",
-        "brush_opacity", "brush_mode", "erase_channels",
+        "brush_opacity", "brush_mode", "paint_channels", "soften_channels",
+        "smear_channels", "erase_channels",
         "brush_pressure_opacity",
         "brush_pressure_size",
         "brush_stencil_enabled", "brush_stencil_image",

@@ -1,5 +1,12 @@
 # Impasto — multi-channel painting milestone progress
 
+## 0.13.4 — per-brush channel targeting
+
+- Paint, Soften, Smear, and Erase each remember an independent subset of
+  enabled layer channels.
+- Every mode exposes a channel grid with All and None shortcuts.
+- Resident painting and stroke undo touch only the selected channels.
+
 ## 0.13.3 — resident-preview startup fix
 
 - Removed a stale `resolved_stack` uniform upload that Blender 5.1 rejected

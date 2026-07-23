@@ -654,6 +654,23 @@ def gpu_paint_targets(layer):
     return pairs
 
 
+_BRUSH_CHANNEL_PROPERTIES = {
+    'PAINT': "paint_channels",
+    'SOFTEN': "soften_channels",
+    'SMEAR': "smear_channels",
+    'ERASE': "erase_channels",
+}
+
+
+def gpu_brush_target_keys(layer, keys=None):
+    """Enabled channel keys selected for the layer's current GPU brush."""
+    keys = tuple(keys if keys is not None
+                 else (key for key, _image in gpu_paint_targets(layer)))
+    values = getattr(layer, _BRUSH_CHANNEL_PROPERTIES[layer.brush_mode])
+    return tuple(key for key in keys
+                 if values[model.CHANNEL_ORDER[key]])
+
+
 def _gpu_brush(layer):
     """Snapshot the layer's brush PropertyGroup values into the plain
     dict gpu_engine.stroke_payloads consumes (pure seam)."""
@@ -1121,6 +1138,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
                             and stamp.supported else None),
             "opacity": layer.brush_opacity,
             "brush_mode": layer.brush_mode,
+            "brush_target_channel_keys": gpu_brush_target_keys(layer, keys),
             "erase_channel_keys": tuple(
                 key for key in keys
                 if layer.erase_channels[model.CHANNEL_ORDER[key]]),
@@ -1221,6 +1239,8 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             payloads, radius=self._radius,
             hardness=layer.brush_hardness, opacity=layer.brush_opacity,
             brush_mode=layer.brush_mode,
+            brush_target_channel_keys=gpu_brush_target_keys(
+                layer, self._channel_keys),
             erase_channel_keys=tuple(
                 key for key in self._channel_keys
                 if layer.erase_channels[model.CHANNEL_ORDER[key]]),
@@ -1549,7 +1569,7 @@ class IMPASTO_OT_brush_mode_set(bpy.types.Operator):
 
     mode: EnumProperty(items=(
         ('PAINT', "Paint", "Paint configured values into enabled channels"),
-        ('SOFTEN', "Soften", "Diffuse detail across enabled channels"),
+        ('SOFTEN', "Soften", "Diffuse detail across selected channels"),
         ('SMEAR', "Smear", "Transport active-layer pixels along the stroke"),
         ('ERASE', "Erase", "Remove active-layer coverage"),
     ))
@@ -1558,7 +1578,7 @@ class IMPASTO_OT_brush_mode_set(bpy.types.Operator):
     def description(cls, context, properties):
         return {
             'PAINT': "Paint configured values into every enabled channel",
-            'SOFTEN': "Soften detail in every enabled channel; pressure can "
+            'SOFTEN': "Soften detail in selected channels; pressure can "
                       "control strength",
             'SMEAR': "Smear active-layer detail along the stroke direction; "
                      "pressure can control strength",
@@ -1607,6 +1627,43 @@ class IMPASTO_OT_erase_channels_set(bpy.types.Operator):
             return {'CANCELLED'}
         for key, _image in gpu_paint_targets(layer):
             layer.erase_channels[model.CHANNEL_ORDER[key]] = self.selected
+        return {'FINISHED'}
+
+
+class IMPASTO_OT_brush_channels_set(bpy.types.Operator):
+    """Select or clear every enabled channel for one GPU brush mode"""
+    bl_idname = "impasto.brush_channels_set"
+    bl_label = "Impasto: Set Brush Channels"
+    bl_options = {'INTERNAL', 'UNDO'}
+
+    mode: EnumProperty(items=(
+        ('PAINT', "Paint", ""),
+        ('SOFTEN', "Soften", ""),
+        ('SMEAR', "Smear", ""),
+        ('ERASE', "Erase", ""),
+    ))
+    selected: BoolProperty(default=True)
+
+    @classmethod
+    def description(cls, context, properties):
+        action = "Select every enabled channel for" if properties.selected \
+            else "Clear every enabled channel from"
+        return "%s the %s brush" % (action, properties.mode.title())
+
+    @classmethod
+    def poll(cls, context):
+        _, tree = _context_stack(context)
+        layer = tree.impasto.active_layer() if tree else None
+        return layer is not None and layer.layer_type == 'PAINT'
+
+    def execute(self, context):
+        _, tree = _context_stack(context)
+        layer = tree.impasto.active_layer() if tree else None
+        if layer is None:
+            return {'CANCELLED'}
+        values = getattr(layer, _BRUSH_CHANNEL_PROPERTIES[self.mode])
+        for key, _image in gpu_paint_targets(layer):
+            values[model.CHANNEL_ORDER[key]] = self.selected
         return {'FINISHED'}
 
 
@@ -1671,6 +1728,7 @@ _classes = (
     IMPASTO_OT_gpu_material_inspect_toggle,
     IMPASTO_OT_brush_mode_set,
     IMPASTO_OT_erase_channels_set,
+    IMPASTO_OT_brush_channels_set,
     IMPASTO_OT_flatten_export,
 )
 
