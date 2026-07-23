@@ -55,6 +55,22 @@ try:
     }
     image_names = tuple(layer.image_name for layer in (first, second))
 
+    material = bpy.context.object.active_material
+    kiln_image = bpy.data.images.new(
+        "RNM Rebuild Kiln Normal", width=8, height=8, alpha=True)
+    kiln_node = material.node_tree.nodes.new("ShaderNodeTexImage")
+    kiln_node.name = "Kiln Bake Target"
+    kiln_node.image = kiln_image
+    check("Rebuild discovers loose Kiln Bake Target",
+          bpy.ops.impasto.stack_rebuild() == {"FINISHED"})
+    kiln_layers = [layer for layer in root.impasto.layers
+                   if layer.label == "Kiln Baked Normal"]
+    check("discovered Kiln target becomes bottom normal baseline",
+          len(kiln_layers) == 1
+          and kiln_layers[0].name == root.impasto.layers[-1].name
+          and kiln_layers[0].bindings["normal"].image_name
+          == kiln_image.name)
+
     # An old generated graph lacks the new RNM node family. Rebuild must
     # reconcile that graph in place, preserving stack/layer datablocks and
     # every paint canvas rather than recreating the user's stack.

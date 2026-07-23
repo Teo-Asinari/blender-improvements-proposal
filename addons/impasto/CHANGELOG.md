@@ -4,6 +4,11 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.14.1
+
+- Rebuild now discovers a loose material-level `Kiln Bake Target` image and
+  imports or refreshes it as the bottom RNM normal layer.
+
 ## 0.14.0
 
 - Added bottom-up RNM composition for Kiln and Impasto tangent-normal layers.

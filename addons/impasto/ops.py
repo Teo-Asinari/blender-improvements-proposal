@@ -515,9 +515,20 @@ class IMPASTO_OT_stack_rebuild(bpy.types.Operator):
         return _context_stack(context)[1] is not None
 
     def execute(self, context):
-        _, tree = _context_stack(context)
+        mat, tree = _context_stack(context)
+        kiln_tex = (mat.node_tree.nodes.get("Kiln Bake Target")
+                    if mat is not None and mat.use_nodes else None)
+        imported = None
+        if (kiln_tex is not None
+                and kiln_tex.bl_idname == 'ShaderNodeTexImage'
+                and kiln_tex.image is not None):
+            imported = import_normal_baseline(
+                mat, kiln_tex.image, uv_map=_active_uv_map(context),
+                fallback_node_name="Kiln Normal Map")
         deltas = engine.rebuild(tree)
-        self.report({'INFO'}, "Impasto rebuild: %s" % deltas)
+        suffix = ("; imported Kiln Bake Target"
+                  if imported is not None else "")
+        self.report({'INFO'}, "Impasto rebuild: %s%s" % (deltas, suffix))
         return {'FINISHED'}
 
 

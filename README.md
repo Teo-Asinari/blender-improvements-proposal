@@ -43,7 +43,7 @@ default `0.1 m` voxel size from triggering a prohibitively expensive operation
 without review. A viewport guide draws grid slices and voxel-sized samples at
 all eight bounding-box corners so scale can be judged visually.
 
-### [Impasto](addons/impasto/) — v0.14.0 (active development)
+### [Impasto](addons/impasto/) — v0.14.1 (active development)
 
 A non-destructive Principled-PBR layer stack with Fill, Paint, and pass-through
 Group layers. One logical Paint layer can own separate Base Color, Metallic,
@@ -89,8 +89,9 @@ fallback. This user-validated manual workflow supplies that image, UV map,
 strength, and optional green-channel inversion to Lit PBR and the normal
 diagnostic previews only. It does not edit the material node graph, painted
 images, flattened output, or Blender's authoritative Material Preview.
-Planned follow-up will discover Kiln's bake target automatically while
-retaining the explicit image picker as the authoritative manual override.
+Rebuild automatically discovers a material-level `Kiln Bake Target` image and
+imports it as the bottom normal layer; the explicit Base Normal picker remains
+the authoritative preview-only manual override.
 Flatten/Export to combined per-channel Blender Images is implemented. Paint,
 Soften, Smear, and Erase have independent per-channel target controls. Mixed
 UVs, production image masks, participating upper layers, arbitrary Blender

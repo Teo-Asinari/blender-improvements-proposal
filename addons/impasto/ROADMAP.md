@@ -1,6 +1,6 @@
 # Impasto roadmap
 
-This is the authoritative list of open work for Impasto 0.14.0. Shipped work
+This is the authoritative list of open work for Impasto 0.14.1. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Near-term
@@ -25,8 +25,6 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 - Add a pinned SSS Caliper mode that remains available outside an active GPU
   painting session.
 - Improve Smear across rotated UV islands and seams.
-- Discover Kiln's bake target automatically for the preview-only Base Normal
-  Map while keeping the manual image picker authoritative.
 
 ## Architecture and compatibility
 
@@ -47,3 +45,5 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 - Stencil Paint Coverage and Normal Relief can be enabled together.
 - Kiln and Impasto normal layers use bottom-up RNM composition in the
   generated material, resident preview, and flattened Normal export.
+- Rebuild automatically imports or refreshes a loose material-level
+  `Kiln Bake Target` as the bottom normal layer.

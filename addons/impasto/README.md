@@ -1,6 +1,6 @@
 # Impasto
 
-Impasto 0.14.0 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
+Impasto 0.14.1 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
 painting. It stores material work as ordered Paint and Fill layers, compiles
 the stack into a Principled BSDF material, and provides a GPU-resident painting
 session with immediate material feedback.
@@ -151,6 +151,10 @@ Multiple normal layers are composed bottom-up with Reoriented Normal Mapping
 (RNM), so upper detail augments the normals below instead of replacing them.
 The same RNM semantics are used by the material, Lit PBR preview, and flattened
 Normal export; layer alpha, opacity, and masks attenuate detail toward neutral.
+**Rebuild** automatically discovers a loose material-level `Kiln Bake Target`
+image node and imports or refreshes it as the bottom **Kiln Baked Normal**
+layer. The top-level material continues to show one Impasto group connection;
+the RNM graph is generated inside that group.
 
 ## Image stencils
 
