@@ -14,8 +14,6 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
   8 channels. Treat 8K as experimental until latency, synchronization, undo,
   and memory behavior have been measured. See
   [high-resolution estimates](docs/HIGH_RESOLUTION_PERFORMANCE.md).
-- Interactively qualify the revised Lit PBR depth handling on production meshes,
-  especially close or intersecting geometry.
 
 ## Workflow and UX
 

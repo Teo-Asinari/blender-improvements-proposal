@@ -10,6 +10,7 @@ notes remain available in
   surface strips and expose Blender's underlying material.
 - Lit PBR now relies on Blender's framebuffer depth, a small clip-depth bias,
   smooth corner normals, and back-face culling for continuous, occluded preview.
+- Verified the revised Lit PBR depth handling on a production mesh.
 
 ## 0.14.2
 
