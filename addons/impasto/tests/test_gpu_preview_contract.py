@@ -100,7 +100,7 @@ check("preview-only base normal composes beneath resolved paint in all modes",
       "texture(base_normal_tex, baseNormalUV)" in main
       and "base_world_n + (n - geometric_n)" in main
       and main.index("base_world_n + (n - geometric_n)") < raw_normal_at
-      and 'sampler(22, \'FLOAT_2D\', "base_normal_tex")' in
+      and 'sampler(21, \'FLOAT_2D\', "base_normal_tex")' in
       inspect.getsource(gpu_engine.preview_shader_create_info))
 check("base normal path has independent UV, strength and green inversion",
       "baseNormalUV = base_uv" in gpu_engine.PREVIEW_VERT_SRC
@@ -133,10 +133,13 @@ check("Lit preview uses Blender corner normals instead of triangle normals",
       "surfaceNormal" in gpu_engine.PREVIEW_VERT_SRC
       and "geometric_n = normalize(surfaceNormal)" in src
       and "cross(dpdx, dpdy)" not in src)
-check("resident preview rejects rear self-occluded fragments",
-      "impasto_visible_surface(preview_depth_tex" in src
-      and 'uniform_sampler("preview_depth_tex"' in
-      inspect.getsource(gpu_engine._draw_composed_preview))
+draw_preview_source = inspect.getsource(gpu_engine._draw_composed_preview)
+check("resident preview uses biased framebuffer depth without prepass cracks",
+      "gl_Position.z -=" in gpu_engine.PREVIEW_VERT_SRC
+      and "impasto_visible_surface" not in src
+      and "preview_depth_tex" not in src
+      and "depth_test_set('LESS_EQUAL')" in draw_preview_source
+      and "face_culling_set('BACK')" in draw_preview_source)
 check("topmost Lit preview owns the complete front surface",
       "fragColor = vec4(rgb, preview_opacity)" in src
       and "coverage = max(coverage" not in src)

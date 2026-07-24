@@ -1,6 +1,6 @@
 # Impasto roadmap
 
-This is the authoritative list of open work for Impasto 0.14.2. Shipped work
+This is the authoritative list of open work for Impasto 0.14.3. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Near-term
@@ -14,8 +14,8 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
   8 channels. Treat 8K as experimental until latency, synchronization, undo,
   and memory behavior have been measured. See
   [high-resolution estimates](docs/HIGH_RESOLUTION_PERFORMANCE.md).
-- Qualify and fix any remaining Lit PBR stripe or flat-shading artifacts on
-  production meshes.
+- Interactively qualify the revised Lit PBR depth handling on production meshes,
+  especially close or intersecting geometry.
 
 ## Workflow and UX
 

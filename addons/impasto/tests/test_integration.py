@@ -26,8 +26,8 @@ try:
     impasto.register()
     check("package registration",
           hasattr(bpy.types.ShaderNodeTree, "impasto"))
-    check("metadata", impasto.bl_info["version"] == (0, 14, 2))
-    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.14.2")
+    check("metadata", impasto.bl_info["version"] == (0, 14, 3))
+    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.14.3")
     check("extended brush sections collapse by default",
           not impasto.props.ImpastoLayer.bl_rna.properties[
               "ui_show_emission_paint"].default

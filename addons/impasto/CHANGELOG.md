@@ -4,6 +4,13 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.14.3
+
+- Removed the redundant Lit PBR depth-texture comparison that could reject thin
+  surface strips and expose Blender's underlying material.
+- Lit PBR now relies on Blender's framebuffer depth, a small clip-depth bias,
+  smooth corner normals, and back-face culling for continuous, occluded preview.
+
 ## 0.14.2
 
 - Removed the obsolete `active_normal_blend` preview uniform after RNM made
