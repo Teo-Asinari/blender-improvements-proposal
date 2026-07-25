@@ -127,6 +127,35 @@ class IMPASTO_PT_main(PaintPanelMixin, bpy.types.Panel):
                 row.menu("IMPASTO_MT_add_channel", text="", icon='ADD')
                 if layer.ui_show_channels:
                     self._draw_bindings(channels_box, state, layer)
+                masks_box = box.box()
+                row = masks_box.row(align=True)
+                row.label(text="Layer Masks", icon='MOD_MASK')
+                row.operator(ops.IMPASTO_OT_mask_add.bl_idname, text="",
+                             icon='ADD')
+                row.operator(ops.IMPASTO_OT_mask_remove.bl_idname, text="",
+                             icon='REMOVE')
+                for index, mask in enumerate(layer.masks):
+                    row = masks_box.row(align=True)
+                    row.prop(mask, "visible", text="")
+                    row.prop(mask, "label", text="")
+                    row.prop(mask, "invert", text="Invert")
+                    row.prop(mask, "opacity", text="", slider=True)
+                    op = row.operator(
+                        ops.IMPASTO_OT_mask_select.bl_idname, text="",
+                        icon=('RADIOBUT_ON' if index
+                              == layer.active_mask_index else 'RADIOBUT_OFF'))
+                    op.index = index
+                if layer.masks:
+                    masks_box.operator(
+                        ops.IMPASTO_OT_mask_paint.bl_idname,
+                        text="Paint Selected Mask", icon='BRUSH_DATA')
+                    row = masks_box.row(align=True)
+                    row.label(text="Affect Channels:")
+                    for binding in layer.bindings:
+                        if binding.enabled:
+                            row.prop(binding, "use_masks",
+                                     text=model.CHANNEL_MAP[
+                                         binding.name].label)
                 if layer.layer_type == 'PAINT':
                     self._draw_paint_tools(context, box, layer)
             else:

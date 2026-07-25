@@ -1,12 +1,10 @@
 # Impasto roadmap
 
-This is the authoritative list of open work for Impasto 0.14.6. Shipped work
+This is the authoritative list of open work for Impasto 0.15.0. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Near-term
 
-- Implement production layer masks: paintable mask canvases, visibility and
-  invert controls, predictable layer/channel scope, and mask-aware export.
 - Interactively benchmark Paint, Erase, Soften, and Smear at 4K with 1, 4, and
   8 channels. Treat 8K as experimental until latency, synchronization, undo,
   and memory behavior have been measured. See
@@ -14,9 +12,6 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Workflow and UX
 
-- Add a material preset palette with spherical thumbnails and channel-value
-  tooltips. Recent color swatches, a synchronized material sphere, and stencil
-  thumbnails already exist.
 - Add a pinned SSS Caliper mode that remains available outside an active GPU
   painting session.
 - Improve Smear across rotated UV islands and seams.
@@ -45,3 +40,4 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
   generated material, resident preview, and flattened Normal export.
 - Rebuild automatically imports or refreshes a loose material-level
   `Kiln Bake Target` as the bottom normal layer.
+- Paintable layer masks and persistent brush-material presets are implemented.

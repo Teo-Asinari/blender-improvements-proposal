@@ -146,6 +146,37 @@ def activate_paint_target(context, layer, channel_key=""):
     return repaired
 
 
+def activate_mask_target(context, layer, mask):
+    """Make a layer-mask image Blender's native grayscale paint canvas."""
+    obj = context.object
+    if obj is None or obj.type != 'MESH':
+        raise PaintTargetError("Select the mesh that owns this Impasto stack")
+    image = bpy.data.images.get(mask.image_name) if mask else None
+    if image is None:
+        raise PaintTargetError("The selected mask image is missing")
+    uv_layers = obj.data.uv_layers
+    uv = uv_layers.get(mask.uv_map) if mask.uv_map else uv_layers.active
+    if uv is None:
+        raise PaintTargetError("The mask UV map is missing")
+    uv_layers.active = uv
+    wanted = compat.resolve_colorspace(image, "Non-Color")
+    repaired = image.colorspace_settings.name != wanted
+    if repaired:
+        image.colorspace_settings.name = wanted
+    settings = context.scene.tool_settings.image_paint
+    settings.mode = 'IMAGE'
+    settings.canvas = image
+    layer_tree = bpy.data.node_groups.get(model.layer_tree_name(layer.name))
+    source = (layer_tree.nodes.get(model.n_mask_src(layer.name, mask.name))
+              if layer_tree else None)
+    if source is not None:
+        for node in layer_tree.nodes:
+            node.select = False
+        source.select = True
+        layer_tree.nodes.active = source
+    return repaired
+
+
 def native_stroke_point(x, y, pressure, size, elapsed, is_start=False,
                         x_tilt=0.0, y_tilt=0.0):
     """Return one ``paint.image_paint`` stroke element.

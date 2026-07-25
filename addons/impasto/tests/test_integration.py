@@ -26,8 +26,8 @@ try:
     impasto.register()
     check("package registration",
           hasattr(bpy.types.ShaderNodeTree, "impasto"))
-    check("metadata", impasto.bl_info["version"] == (0, 14, 6))
-    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.14.6")
+    check("metadata", impasto.bl_info["version"] == (0, 15, 0))
+    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.15.0")
     check("extended brush sections collapse by default",
           not impasto.props.ImpastoLayer.bl_rna.properties[
               "ui_show_emission_paint"].default
@@ -134,6 +134,61 @@ try:
           str(engine._last_deltas))
 
     paint_layer = tree.impasto.active_layer()
+    check("add production layer mask",
+          bpy.ops.impasto.mask_add() == {"FINISHED"}
+          and len(paint_layer.masks) == 1
+          and paint_layer.active_mask_index == 0)
+    mask = paint_layer.masks[0]
+    mask_image = bpy.data.images.get(mask.image_name)
+    check("mask owns a white Non-Color canvas at layer resolution",
+          mask_image is not None
+          and tuple(mask_image.size) == tuple(
+              bpy.data.images[paint_layer.image_name].size)
+          and mask_image.colorspace_settings.name
+          == impasto.compat.resolve_colorspace(mask_image, "Non-Color")
+          and min(mask_image.generated_color) == 1.0)
+    check("mask target activates as the native paint canvas",
+          impasto.paint.activate_mask_target(
+              bpy.context, paint_layer, mask) in {True, False}
+          and bpy.context.scene.tool_settings.image_paint.canvas == mask_image)
+    check("mask scope is independently configurable per channel",
+          all(binding.use_masks for binding in paint_layer.bindings))
+    paint_layer.bindings[0].use_masks = False
+    check("mask channel exclusion persists in layer state",
+          not paint_layer.bindings[0].use_masks
+          and all(binding.use_masks for binding in paint_layer.bindings[1:]))
+    kept_mask_name = mask.image_name
+    check("remove mask retains its source image",
+          bpy.ops.impasto.mask_remove() == {"FINISHED"}
+          and len(paint_layer.masks) == 0
+          and bpy.data.images.get(kept_mask_name) is not None)
+
+    paint_layer.paint_color = (0.12, 0.34, 0.56)
+    paint_layer.paint_roughness = 0.23
+    paint_layer.paint_metallic = 0.78
+    paint_layer.paint_emission_color = (1.0, 0.2, 0.05)
+    paint_layer.paint_emission_strength = 7.5
+    check("capture persistent brush material preset",
+          bpy.ops.impasto.material_preset_capture(
+              label="Warm Metal") == {"FINISHED"}
+          and len(tree.impasto.material_presets) == 1)
+    preset = tree.impasto.material_presets[0]
+    paint_targets_before = tuple(paint_layer.paint_channels)
+    paint_layer.paint_color = (0.0, 0.0, 0.0)
+    paint_layer.paint_roughness = 1.0
+    check("material preset restores channel values only",
+          bpy.ops.impasto.material_preset_apply(index=0) == {"FINISHED"}
+          and tuple(round(x, 3) for x in paint_layer.paint_color)
+          == (0.12, 0.34, 0.56)
+          and abs(paint_layer.paint_roughness - 0.23) < 1e-6
+          and abs(paint_layer.paint_metallic - 0.78) < 1e-6
+          and tuple(paint_layer.paint_channels) == paint_targets_before)
+    tooltip = impasto.ops.material_preset_tooltip(preset)
+    check("material preset tooltip identifies useful channel values",
+          "Warm Metal" in tooltip and "Roughness 0.23" in tooltip
+          and "Metallic 0.78" in tooltip and "Emission" in tooltip
+          and "7.5" in tooltip, tooltip)
+
     erase_target_indices = [
         model.CHANNEL_ORDER[key]
         for key, _image in impasto.ops.gpu_paint_targets(paint_layer)

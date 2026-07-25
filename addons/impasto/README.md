@@ -1,6 +1,6 @@
 # Impasto
 
-Impasto 0.14.6 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
+Impasto 0.15.0 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
 painting. It stores material work as ordered Paint and Fill layers, compiles
 the stack into a Principled BSDF material, and provides a GPU-resident painting
 session with immediate material feedback.
@@ -27,6 +27,13 @@ prototype and is not intended for serious work.**
   used in each material stack. Base and Emission histories are separate,
   near-identical colors are consolidated, and the history persists in the
   `.blend`. Expand the menu and click the arrow beside a swatch to reuse it.
+- A persistent, collapsible **Material Presets** palette captures and restores
+  the complete brush material without changing channel targets. Sphere-like
+  color swatches and tooltips summarize Base, Metallic, Roughness, Normal,
+  Height, Emission, and Subsurface values.
+- Paintable per-layer image masks with visibility, inversion, opacity, and
+  independent per-channel scope. Masks drive generated materials and flattened
+  export; their source images are retained when removed from a layer.
 - A GPU-resident **Soften** brush that blurs all enabled active-layer channel
   canvases together; brush strength, falloff, and optional pressure control the
   effect without synchronizing images back to the CPU.
@@ -217,10 +224,9 @@ were recorded.
 - The live preview is an Impasto approximation, not Blender Material Preview.
 - GPU painting currently requires UV-mapped image canvases.
 - Full arbitrary layered-normal composition is not implemented.
-- Image masks are represented in the stack model but are not a complete
-  production mask workflow.
-- A synchronized material sphere and stencil thumbnail are available. A real
-  recent-material preset palette with parameter tooltips remains roadmap work.
+- Resident GPU preview currently enters authoritative Blender material
+  inspection while image masks participate; native mask painting, generated
+  materials, and flattened export remain available.
 - The SSS Caliper is tied to an active GPU paint session; a persistent pinned
   inspection mode remains future work.
 - GPU canvases consume real VRAM. One 4K RGBA16F channel is approximately

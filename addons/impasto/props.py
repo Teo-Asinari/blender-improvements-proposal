@@ -169,6 +169,7 @@ class ImpastoLayer(bpy.types.PropertyGroup):
     uv_map: StringProperty(update=_structural)
     bindings: CollectionProperty(type=ImpastoBinding)
     masks: CollectionProperty(type=ImpastoMask)
+    active_mask_index: IntProperty(name="Active Mask", default=-1)
     paint_color: FloatVectorProperty(
         name="Base Color", subtype='COLOR', size=3, min=0.0, max=1.0,
         default=(0.8, 0.2, 0.1))
@@ -203,6 +204,10 @@ class ImpastoLayer(bpy.types.PropertyGroup):
     ui_show_recent_colors: BoolProperty(
         name="Recent Colors",
         description="Show colors recently used for painting on this layer",
+        default=False)
+    ui_show_material_presets: BoolProperty(
+        name="Material Presets",
+        description="Show the compact brush-material preset palette",
         default=False)
     paint_sss_weight: FloatProperty(
         name="Subsurface Weight",
@@ -430,6 +435,30 @@ def _active_index_update(self, context):
             pass
 
 
+class ImpastoMaterialPreset(bpy.types.PropertyGroup):
+    """One persistent snapshot of brush material values."""
+    label: StringProperty(name="Name", default="Material")
+    base_color: FloatVectorProperty(
+        name="Base Color", subtype='COLOR', size=3,
+        min=0.0, max=1.0, default=(0.8, 0.2, 0.1))
+    roughness: FloatProperty(default=0.5, min=0.0, max=1.0)
+    metallic: FloatProperty(default=0.0, min=0.0, max=1.0)
+    normal: FloatVectorProperty(
+        size=3, min=0.0, max=1.0, default=(0.5, 0.5, 1.0))
+    height_strength: FloatProperty(default=0.05, min=0.0)
+    height_direction: EnumProperty(
+        items=(('RAISE', "Raise", ""), ('LOWER', "Lower", "")),
+        default='RAISE')
+    emission_color: FloatVectorProperty(
+        subtype='COLOR', size=3, min=0.0, max=1.0,
+        default=(1.0, 1.0, 1.0))
+    emission_strength: FloatProperty(default=0.0, min=0.0)
+    sss_weight: FloatProperty(default=0.0, min=0.0, max=1.0)
+    sss_radius: FloatVectorProperty(
+        size=3, min=0.0, default=(1.0, 0.2, 0.1))
+    sss_scale: FloatProperty(default=0.05, min=0.0)
+
+
 class ImpastoStack(bpy.types.PropertyGroup):
     """Root stack state, stored on the generated root node group's
     tree. NO halt/batch flags here — batching is runtime-only
@@ -442,6 +471,7 @@ class ImpastoStack(bpy.types.PropertyGroup):
     # Material-stack palette shared by all of its paint layers.
     recent_base_colors: CollectionProperty(type=ImpastoRecentColor)
     recent_emission_colors: CollectionProperty(type=ImpastoRecentColor)
+    material_presets: CollectionProperty(type=ImpastoMaterialPreset)
     active_layer_uid: StringProperty()
     # presentation-order UI slot for template_list; the uid above is
     # the source of truth for every cross-reference.
@@ -482,6 +512,7 @@ _classes = (
     ImpastoRecentColor,
     ImpastoLayer,
     ImpastoChannel,
+    ImpastoMaterialPreset,
     ImpastoStack,
     ImpastoMaterialState,
     ImpastoPreferences,

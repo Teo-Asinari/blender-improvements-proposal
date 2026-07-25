@@ -50,6 +50,7 @@ try:
         paint.paint_sss_scale = 0.025
         paint.ui_show_emission_paint = True
         paint.ui_show_subsurface_paint = True
+        paint.ui_show_material_presets = True
         paint.erase_channels[model.CHANNEL_ORDER["metallic"]] = False
         paint.paint_channels[model.CHANNEL_ORDER["roughness"]] = False
         paint.soften_channels[model.CHANNEL_ORDER["normal"]] = False
@@ -58,6 +59,9 @@ try:
             paint, "base_color", (0.12, 0.34, 0.56))
         impasto.ops.remember_recent_color(
             paint, "emission_color", (0.9, 0.4, 0.1))
+        material_preset = tree.impasto.material_presets.add()
+        material_preset.label = "Persisted Material"
+        impasto.ops.capture_material_preset(material_preset, paint)
         stencil_image = bpy.data.images.new("Persisted Brush Stencil", 8, 8,
                                             alpha=True)
         paint.brush_stencil_enabled = True
@@ -118,7 +122,8 @@ try:
           and abs(paint.paint_sss_scale - 0.025) < 1e-6)
     check("brush-value section disclosure persists across save/reopen",
           paint.ui_show_emission_paint
-          and paint.ui_show_subsurface_paint)
+          and paint.ui_show_subsurface_paint
+          and paint.ui_show_material_presets)
     check("eraser channel targeting persists across save/reopen",
           not paint.erase_channels[model.CHANNEL_ORDER["metallic"]]
           and paint.erase_channels[model.CHANNEL_ORDER["base_color"]]
@@ -135,6 +140,14 @@ try:
           and all(abs(a - b) < 1e-6 for a, b in zip(
               tree.impasto.recent_emission_colors[0].color,
               (0.9, 0.4, 0.1))))
+    check("brush material presets persist per material stack",
+          len(tree.impasto.material_presets) == 1
+          and tree.impasto.material_presets[0].label
+          == "Persisted Material"
+          and abs(tree.impasto.material_presets[0].roughness
+                  - paint.paint_roughness) < 1e-6
+          and abs(tree.impasto.material_presets[0].emission_strength
+                  - 9.5) < 1e-6)
     check("image stencil state persists across save/reopen",
           paint.brush_stencil_enabled
           and paint.brush_stencil_image is not None

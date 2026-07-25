@@ -4,6 +4,17 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.0
+
+- Added production layer-mask controls: add/remove/select, native grayscale
+  painting, visibility, inversion, opacity, and per-channel participation.
+- Mask canvases match their layer resolution, feed generated materials and
+  flattened exports, and remain available as Blender Images after removal.
+- Added persistent brush-material presets with capture/apply/remove controls,
+  spherical color swatches, and full channel-value tooltips.
+- Applying a preset changes material values without changing brush channel
+  targets or active-layer ownership.
+
 ## 0.14.6
 
 - Added live same-UV post-composition for affine upper Fill layers and one

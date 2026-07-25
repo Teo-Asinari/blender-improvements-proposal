@@ -43,7 +43,7 @@ default `0.1 m` voxel size from triggering a prohibitively expensive operation
 without review. A viewport guide draws grid slices and voxel-sized samples at
 all eight bounding-box corners so scale can be judged visually.
 
-### [Impasto](addons/impasto/) — v0.14.6 (active development)
+### [Impasto](addons/impasto/) — v0.15.0 (active development)
 
 A non-destructive Principled-PBR layer stack with Fill, Paint, and pass-through
 Group layers. One logical Paint layer can own separate Base Color, Metallic,
@@ -96,8 +96,11 @@ Flatten/Export to combined per-channel Blender Images is implemented. Paint,
 Soften, Smear, and Erase have independent per-channel target controls.
 Same-UV visible layers remain composed around an intermediate active layer;
 common affine Fill and single Paint-image upper layers update live while
-brushes still write only to the active layer. Mixed UVs, production image
-masks, complex upper sequences, arbitrary Blender brush textures, and
+brushes still write only to the active layer. Paintable per-layer masks now
+support visibility, inversion, opacity, per-channel scope, generated materials,
+and flattened export. A persistent brush-material preset palette provides
+spherical color swatches and detailed channel-value tooltips. Mixed-UV resident
+preview, complex upper sequences, arbitrary Blender brush textures, and
 specialized brush parity remain future work. Ctrl-S
 safely flushes before saving; menu-driven
 save/export should be preceded by **Flush for Save / Export**.

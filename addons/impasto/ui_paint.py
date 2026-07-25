@@ -111,6 +111,40 @@ def draw_recent_colors(layout, layer, channel_keys):
         box.label(text="Enable Base or Emission Color", icon='INFO')
 
 
+def draw_material_presets(layout, layer):
+    """Compact persistent palette; node sockets provide sphere thumbnails."""
+    box = layout.box()
+    header = box.row(align=True)
+    header.prop(
+        layer, "ui_show_material_presets", text="Material Presets",
+        icon=('TRIA_DOWN' if layer.ui_show_material_presets
+              else 'TRIA_RIGHT'), emboss=False)
+    header.operator(
+        ops.IMPASTO_OT_material_preset_capture.bl_idname,
+        text="", icon='ADD')
+    if not layer.ui_show_material_presets:
+        return
+    presets = layer.id_data.impasto.material_presets
+    if not presets:
+        box.label(text="Save the current brush material", icon='INFO')
+        return
+    grid = box.grid_flow(row_major=True, columns=2, even_columns=True,
+                         even_rows=True, align=True)
+    for index, preset in enumerate(presets):
+        card = grid.box()
+        row = card.row(align=True)
+        row.template_node_socket(
+            color=tuple(preset.base_color) + (1.0,))
+        apply = row.operator(
+            ops.IMPASTO_OT_material_preset_apply.bl_idname,
+            text=preset.label, emboss=False)
+        apply.index = index
+        remove = row.operator(
+            ops.IMPASTO_OT_material_preset_remove.bl_idname,
+            text="", icon='X', emboss=False)
+        remove.index = index
+
+
 class PaintPanelMixin:
     def _draw_paint_tools(self, context, box, layer):
         keys = [key for key, _image in ops.gpu_paint_targets(layer)]
@@ -193,6 +227,7 @@ class PaintPanelMixin:
                     emission.prop(layer, "paint_emission_strength",
                                   text="Strength")
         draw_recent_colors(paint, layer, keys)
+        draw_material_presets(paint, layer)
         if any(k in keys for k in
                ('sss_weight', 'sss_radius', 'sss_scale')):
             subsurface = paint.box()

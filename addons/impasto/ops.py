@@ -503,6 +503,101 @@ class IMPASTO_OT_binding_remove(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class IMPASTO_OT_mask_add(bpy.types.Operator):
+    """Add a paintable grayscale image mask to the active layer."""
+    bl_idname = "impasto.mask_add"
+    bl_label = "Impasto: Add Layer Mask"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        _, tree = _context_stack(context)
+        layer = tree.impasto.active_layer() if tree else None
+        return layer is not None and layer.layer_type != 'GROUP'
+
+    def execute(self, context):
+        _, tree = _context_stack(context)
+        state, layer = tree.impasto, tree.impasto.active_layer()
+        size = _layer_canvas_size(layer)
+        image = new_layer_image(
+            "Impasto %s Mask %s" % (layer.label, len(layer.masks) + 1),
+            "Non-Color", size=size,
+            generated_color=(1.0, 1.0, 1.0, 1.0))
+        with engine.stack_edit_session(tree):
+            mask = layer.masks.add()
+            mask.name = _unique_uid(state)
+            mask.label = "Mask %d" % (len(layer.masks))
+            mask.image_name = image.name
+            mask.uv_map = layer.uv_map or _active_uv_map(context)
+            layer.active_mask_index = len(layer.masks) - 1
+        self.report({'INFO'}, "Added white layer mask (image kept on removal)")
+        return {'FINISHED'}
+
+
+class IMPASTO_OT_mask_remove(bpy.types.Operator):
+    """Remove the selected layer mask while retaining its image."""
+    bl_idname = "impasto.mask_remove"
+    bl_label = "Impasto: Remove Layer Mask"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        _, tree = _context_stack(context)
+        layer = tree.impasto.active_layer() if tree else None
+        return layer is not None and len(layer.masks) > 0
+
+    def execute(self, context):
+        _, tree = _context_stack(context)
+        layer = tree.impasto.active_layer()
+        index = min(max(0, layer.active_mask_index), len(layer.masks) - 1)
+        with engine.stack_edit_session(tree):
+            layer.masks.remove(index)
+            layer.active_mask_index = min(index, len(layer.masks) - 1)
+        return {'FINISHED'}
+
+
+class IMPASTO_OT_mask_select(bpy.types.Operator):
+    """Select a layer mask for editing/removal."""
+    bl_idname = "impasto.mask_select"
+    bl_label = "Impasto: Select Layer Mask"
+    bl_options = {'INTERNAL'}
+    index: IntProperty(default=0, min=0)
+
+    def execute(self, context):
+        _, tree = _context_stack(context)
+        layer = tree.impasto.active_layer() if tree else None
+        if layer is None or self.index >= len(layer.masks):
+            return {'CANCELLED'}
+        layer.active_mask_index = self.index
+        return {'FINISHED'}
+
+
+class IMPASTO_OT_mask_paint(bpy.types.Operator):
+    """Paint the selected layer mask with Blender's native image brush."""
+    bl_idname = "impasto.mask_paint"
+    bl_label = "Impasto: Paint Layer Mask"
+    bl_options = {'REGISTER'}
+
+    def execute(self, context):
+        _, tree = _context_stack(context)
+        layer = tree.impasto.active_layer() if tree else None
+        if layer is None or not layer.masks:
+            return {'CANCELLED'}
+        index = min(max(0, layer.active_mask_index), len(layer.masks) - 1)
+        try:
+            paint.activate_mask_target(context, layer, layer.masks[index])
+            if context.object.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+            bpy.ops.object.mode_set(mode='TEXTURE_PAINT')
+        except (paint.PaintTargetError, RuntimeError) as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        paint.activate_brush_tool(context)
+        paint.maybe_switch_material_preview(context)
+        self.report({'INFO'}, "Painting mask %s" % layer.masks[index].label)
+        return {'FINISHED'}
+
+
 class IMPASTO_OT_stack_rebuild(bpy.types.Operator):
     """Drop caches and rebuild the stack's node trees from scratch —
     the one repair operator for tampered or stale graphs"""
@@ -770,6 +865,118 @@ class IMPASTO_OT_recent_color_apply(bpy.types.Operator):
         else:
             layer.paint_emission_color = value
         remember_recent_color(layer, self.channel_key, value)
+        return {'FINISHED'}
+
+
+_MATERIAL_PRESET_FIELDS = (
+    ("paint_color", "base_color"),
+    ("paint_roughness", "roughness"),
+    ("paint_metallic", "metallic"),
+    ("paint_normal", "normal"),
+    ("paint_height_strength", "height_strength"),
+    ("paint_height_direction", "height_direction"),
+    ("paint_emission_color", "emission_color"),
+    ("paint_emission_strength", "emission_strength"),
+    ("paint_sss_weight", "sss_weight"),
+    ("paint_sss_radius", "sss_radius"),
+    ("paint_sss_scale", "sss_scale"),
+)
+
+
+def capture_material_preset(preset, layer):
+    """Copy every brush-material value into a persistent preset."""
+    for layer_name, preset_name in _MATERIAL_PRESET_FIELDS:
+        value = getattr(layer, layer_name)
+        setattr(preset, preset_name,
+                tuple(value) if not isinstance(value, str)
+                and hasattr(value, "__len__") else value)
+
+
+def apply_material_preset(layer, preset):
+    """Apply material values without changing channel selection/ownership."""
+    for layer_name, preset_name in _MATERIAL_PRESET_FIELDS:
+        value = getattr(preset, preset_name)
+        setattr(layer, layer_name,
+                tuple(value) if not isinstance(value, str)
+                and hasattr(value, "__len__") else value)
+
+
+def material_preset_tooltip(preset):
+    rgb = lambda value: ", ".join("%.2g" % x for x in value)
+    height = ("+%.3g" if preset.height_direction == 'RAISE' else "-%.3g") \
+        % preset.height_strength
+    return (
+        "%s — Base (%s); Roughness %.3g; Metallic %.3g; Normal (%s); "
+        "Height %s; Emission (%s) × %.3g; SSS Weight %.3g, Radius (%s), "
+        "Scale %.3g"
+        % (preset.label, rgb(preset.base_color), preset.roughness,
+           preset.metallic, rgb(preset.normal), height,
+           rgb(preset.emission_color), preset.emission_strength,
+           preset.sss_weight, rgb(preset.sss_radius), preset.sss_scale))
+
+
+class IMPASTO_OT_material_preset_capture(bpy.types.Operator):
+    """Save the active layer's brush material values as a palette preset"""
+    bl_idname = "impasto.material_preset_capture"
+    bl_label = "Save Brush Material Preset"
+    bl_options = {'UNDO'}
+
+    label: StringProperty(name="Name", default="Material")
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context):
+        _mat, tree = _context_stack(context)
+        layer = tree.impasto.active_layer() if tree else None
+        if layer is None or layer.layer_type != 'PAINT':
+            return {'CANCELLED'}
+        preset = tree.impasto.material_presets.add()
+        preset.label = self.label.strip() or "Material"
+        capture_material_preset(preset, layer)
+        return {'FINISHED'}
+
+
+class IMPASTO_OT_material_preset_apply(bpy.types.Operator):
+    """Apply a saved brush material without changing painted channels"""
+    bl_idname = "impasto.material_preset_apply"
+    bl_label = "Apply Brush Material Preset"
+    bl_options = {'UNDO', 'INTERNAL'}
+
+    index: IntProperty(default=-1)
+
+    @classmethod
+    def description(cls, context, properties):
+        _mat, tree = _context_stack(context)
+        presets = tree.impasto.material_presets if tree else ()
+        if 0 <= properties.index < len(presets):
+            return material_preset_tooltip(presets[properties.index])
+        return "Apply the saved brush material values"
+
+    def execute(self, context):
+        _mat, tree = _context_stack(context)
+        layer = tree.impasto.active_layer() if tree else None
+        presets = tree.impasto.material_presets if tree else ()
+        if layer is None or not 0 <= self.index < len(presets):
+            return {'CANCELLED'}
+        apply_material_preset(layer, presets[self.index])
+        return {'FINISHED'}
+
+
+class IMPASTO_OT_material_preset_remove(bpy.types.Operator):
+    """Remove a saved brush material preset"""
+    bl_idname = "impasto.material_preset_remove"
+    bl_label = "Remove Brush Material Preset"
+    bl_options = {'UNDO', 'INTERNAL'}
+
+    index: IntProperty(default=-1)
+
+    def execute(self, context):
+        _mat, tree = _context_stack(context)
+        presets = tree.impasto.material_presets if tree else ()
+        if not 0 <= self.index < len(presets):
+            return {'CANCELLED'}
+        presets.remove(self.index)
         return {'FINISHED'}
 
 
@@ -1732,11 +1939,18 @@ _classes = (
     IMPASTO_OT_channel_add,
     IMPASTO_OT_binding_add,
     IMPASTO_OT_binding_remove,
+    IMPASTO_OT_mask_add,
+    IMPASTO_OT_mask_remove,
+    IMPASTO_OT_mask_select,
+    IMPASTO_OT_mask_paint,
     IMPASTO_OT_stack_rebuild,
     IMPASTO_OT_import_kiln_normal,
     IMPASTO_OT_paint_activate,
     IMPASTO_OT_detail_paint,
     IMPASTO_OT_recent_color_apply,
+    IMPASTO_OT_material_preset_capture,
+    IMPASTO_OT_material_preset_apply,
+    IMPASTO_OT_material_preset_remove,
     IMPASTO_OT_native_multichannel_paint,
     IMPASTO_OT_gpu_paint,
     IMPASTO_OT_gpu_flush,

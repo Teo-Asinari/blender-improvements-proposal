@@ -36,6 +36,9 @@ OPERATOR_IDS = {
     "IMPASTO_OT_paint_activate": "impasto.paint_activate",
     "IMPASTO_OT_detail_paint": "impasto.detail_paint",
     "IMPASTO_OT_recent_color_apply": "impasto.recent_color_apply",
+    "IMPASTO_OT_material_preset_capture": "impasto.material_preset_capture",
+    "IMPASTO_OT_material_preset_apply": "impasto.material_preset_apply",
+    "IMPASTO_OT_material_preset_remove": "impasto.material_preset_remove",
     "IMPASTO_OT_brush_mode_set": "impasto.brush_mode_set",
     "IMPASTO_OT_erase_channels_set": "impasto.erase_channels_set",
     "IMPASTO_OT_brush_channels_set": "impasto.brush_channels_set",
@@ -50,6 +53,11 @@ OPERATOR_IDS = {
 
 PROPERTY_IDS = {
     "ImpastoRecentColor": {"color"},
+    "ImpastoMaterialPreset": {
+        "label", "base_color", "roughness", "metallic", "normal",
+        "height_strength", "height_direction", "emission_color",
+        "emission_strength", "sss_weight", "sss_radius", "sss_scale",
+    },
     "ImpastoBinding": {
         "image_name", "enabled", "mode", "value", "color", "blend_mode",
         "opacity", "use_masks",
@@ -61,6 +69,7 @@ PROPERTY_IDS = {
     "ImpastoLayer": {
         "label", "layer_type", "parent_uid", "visible", "opacity",
         "blend_mode", "image_name", "uv_map", "bindings", "masks",
+        "active_mask_index",
         "paint_color", "paint_roughness", "paint_metallic", "paint_normal",
         "paint_height_strength", "paint_height_direction",
         "paint_emission_color", "paint_emission_strength",
@@ -85,6 +94,7 @@ PROPERTY_IDS = {
         "preview_base_normal_strength", "preview_base_normal_invert_green",
         "paint_workflow", "ui_show_channels", "ui_show_emission_channels",
         "ui_show_subsurface_channels", "ui_show_recent_colors",
+        "ui_show_material_presets",
         "ui_show_emission_paint", "ui_show_subsurface_paint",
         "ui_show_advanced",
     },
@@ -93,6 +103,7 @@ PROPERTY_IDS = {
         "is_stack", "schema_version", "blender_version", "channels",
         "layers", "active_layer_uid", "active_index",
         "recent_base_colors", "recent_emission_colors",
+        "material_presets",
     },
     "ImpastoMaterialState": {"displaced_links", "stack_tree"},
 }
