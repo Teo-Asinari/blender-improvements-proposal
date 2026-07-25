@@ -4,6 +4,15 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.14.6
+
+- Added live same-UV post-composition for affine upper Fill layers and one
+  upper Paint image per active non-normal channel.
+- Intermediate GPU painting now stays in Lit PBR and displays resident strokes
+  immediately while preserving active-layer-only writes.
+- Kept complex upper sequences, masks, nonlinear blends, and upper normals on
+  the explicit authoritative-inspection fallback.
+
 ## 0.14.5
 
 - Fixed intermediate sparse layers—such as emission-only Paint layers—so

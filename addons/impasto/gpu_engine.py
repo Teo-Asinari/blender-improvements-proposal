@@ -692,6 +692,70 @@ void main()
         sss_scale_tex, baseline_sss_scale_tex, baseline_sss_scale_value,
         baseline_sss_scale_is_texture, active_sss_scale,
         active_sss_scale_factor, active_sss_scale_blend, 0.0);
+    base = upper_base_color_c * base + upper_base_color_d;
+    metal_sample = upper_metallic_c * metal_sample + upper_metallic_d;
+    rough_sample = upper_roughness_c * rough_sample + upper_roughness_d;
+    height_sample = upper_height_c * height_sample + upper_height_d;
+    emission_color_sample = upper_emission_color_c * emission_color_sample
+                            + upper_emission_color_d;
+    emission_strength_sample = upper_emission_strength_c
+                               * emission_strength_sample
+                               + upper_emission_strength_d;
+    sss_weight_sample = upper_sss_weight_c * sss_weight_sample
+                        + upper_sss_weight_d;
+    sss_radius_sample = upper_sss_radius_c * sss_radius_sample
+                        + upper_sss_radius_d;
+    sss_scale_sample = upper_sss_scale_c * sss_scale_sample
+                       + upper_sss_scale_d;
+    if (upper_base_color_present > 0.5) {
+        vec4 u = straight_sample(upper_base_color_tex, uvInterp);
+        u.rgb = srgb_to_linear(u.rgb);
+        base = stack_blend(base, u, upper_base_color_factor * u.a,
+                           upper_base_color_blend);
+    }
+    if (upper_metallic_present > 0.5) {
+        vec4 u = straight_sample(upper_metallic_tex, uvInterp);
+        metal_sample = stack_blend(metal_sample, u,
+            upper_metallic_factor * u.a, upper_metallic_blend);
+    }
+    if (upper_roughness_present > 0.5) {
+        vec4 u = straight_sample(upper_roughness_tex, uvInterp);
+        rough_sample = stack_blend(rough_sample, u,
+            upper_roughness_factor * u.a, upper_roughness_blend);
+    }
+    if (upper_height_present > 0.5) {
+        vec4 u = straight_sample(upper_height_tex, uvInterp);
+        height_sample = stack_blend(height_sample, u,
+            upper_height_factor * u.a, upper_height_blend);
+    }
+    if (upper_emission_color_present > 0.5) {
+        vec4 u = straight_sample(upper_emission_color_tex, uvInterp);
+        u.rgb = srgb_to_linear(u.rgb);
+        emission_color_sample = stack_blend(emission_color_sample, u,
+            upper_emission_color_factor * u.a,
+            upper_emission_color_blend);
+    }
+    if (upper_emission_strength_present > 0.5) {
+        vec4 u = straight_sample(upper_emission_strength_tex, uvInterp);
+        emission_strength_sample = stack_blend(emission_strength_sample, u,
+            upper_emission_strength_factor * u.a,
+            upper_emission_strength_blend);
+    }
+    if (upper_sss_weight_present > 0.5) {
+        vec4 u = straight_sample(upper_sss_weight_tex, uvInterp);
+        sss_weight_sample = stack_blend(sss_weight_sample, u,
+            upper_sss_weight_factor * u.a, upper_sss_weight_blend);
+    }
+    if (upper_sss_radius_present > 0.5) {
+        vec4 u = straight_sample(upper_sss_radius_tex, uvInterp);
+        sss_radius_sample = stack_blend(sss_radius_sample, u,
+            upper_sss_radius_factor * u.a, upper_sss_radius_blend);
+    }
+    if (upper_sss_scale_present > 0.5) {
+        vec4 u = straight_sample(upper_sss_scale_tex, uvInterp);
+        sss_scale_sample = stack_blend(sss_scale_sample, u,
+            upper_sss_scale_factor * u.a, upper_sss_scale_blend);
+    }
     if (preview_mode == 3) {
         float h = height_sample.r;
         fragColor = vec4(vec3(h), 1.0);
@@ -1402,6 +1466,12 @@ def preview_shader_create_info():
             info.push_constant('INT', "active_" + name + "_blend")
         info.push_constant('VEC4', "baseline_" + name + "_value")
         info.push_constant('FLOAT', "baseline_" + name + "_is_texture")
+        if name != "normal":
+            info.push_constant('VEC4', "upper_" + name + "_c")
+            info.push_constant('VEC4', "upper_" + name + "_d")
+            info.push_constant('FLOAT', "upper_" + name + "_present")
+            info.push_constant('FLOAT', "upper_" + name + "_factor")
+            info.push_constant('INT', "upper_" + name + "_blend")
     info.sampler(0, 'FLOAT_2D', "base_color_tex")
     info.sampler(1, 'FLOAT_2D', "metallic_tex")
     info.sampler(2, 'FLOAT_2D', "roughness_tex")
@@ -1420,6 +1490,9 @@ def preview_shader_create_info():
                                  16):
         info.sampler(index, 'FLOAT_2D', "baseline_" + name + "_tex")
     info.sampler(21, 'FLOAT_2D', "base_normal_tex")
+    for index, name in enumerate(
+            (key for key in GPU_PAINT_CHANNEL_KEYS if key != "normal"), 22):
+        info.sampler(index, 'FLOAT_2D', "upper_" + name + "_tex")
     info.vertex_in(0, 'VEC3', "pos")
     info.vertex_in(1, 'VEC2', "uv")
     info.vertex_in(2, 'VEC3', "normal")
@@ -1596,6 +1669,8 @@ def resident_stack_runtime_spec(stack_model, active_uid):
             "seed": model.seed_native(channel),
             "lower_steps": tuple(steps),
             "active": active_spec,
+            "upper_affine": (_vec4(1.0), _vec4(0.0)),
+            "upper_image": None,
         }
     unsupported = []
     for layer in composition[active_i + 1:]:
@@ -1606,7 +1681,50 @@ def resident_stack_runtime_spec(stack_model, active_uid):
         for binding in layer.bindings:
             if (binding.enabled and binding.key in channels
                     and channels[binding.key]["active"] is not None):
-                unsupported.append((layer.uid, binding.key))
+                key = binding.key
+                blend = model.effective_blend(layer, binding)
+                image_name = model.binding_image(layer, binding)
+                if not preview_stack.affine_upper_channel_supported(
+                        key, blend):
+                    unsupported.append((layer.uid, key))
+                    continue
+                if layer.layer_type == "PAINT" and image_name:
+                    identity = channels[key]["upper_affine"] == (
+                        _vec4(1.0), _vec4(0.0))
+                    if (channels[key]["upper_image"] is not None
+                            or not identity):
+                        unsupported.append((layer.uid, key))
+                        continue
+                    channels[key]["upper_image"] = {
+                        "image_name": image_name,
+                        "factor": model.const_factor(
+                            stack_model, layer, binding),
+                        "blend": blend,
+                    }
+                    continue
+                if channels[key]["upper_image"] is not None:
+                    unsupported.append((layer.uid, key))
+                    continue
+                channel = model.CHANNEL_MAP[key]
+                if binding.mode == "COLOR":
+                    value = (float(binding.color[0])
+                             if channel.kind == "SCALAR"
+                             else tuple(float(x) for x in binding.color))
+                elif binding.mode == "VALUE":
+                    value = float(binding.value)
+                    if channel.kind != "SCALAR":
+                        value = (value, value, value, 1.0)
+                else:
+                    unsupported.append((layer.uid, key))
+                    continue
+                factor = model.const_factor(stack_model, layer, binding)
+                old_c, old_d = channels[key]["upper_affine"]
+                c, d = preview_stack.affine_coefficients(
+                    _vec4(value), factor, blend)
+                channels[key]["upper_affine"] = (
+                    tuple(a * b for a, b in zip(_vec4(c), old_c)),
+                    tuple(a * b + e for a, b, e in
+                          zip(_vec4(c), old_d, _vec4(d))))
     if unsupported:
         return {
             "enabled": False,
@@ -3967,6 +4085,24 @@ def _draw_composed_preview(s):
         shader.uniform_float("baseline_" + key + "_value", baseline_value)
         shader.uniform_float("baseline_" + key + "_is_texture",
                              1.0 if baseline_tex is not None else 0.0)
+        if key != "normal":
+            upper_c, upper_d = channel_spec.get(
+                "upper_affine", (_vec4(1.0), _vec4(0.0)))
+            shader.uniform_float("upper_" + key + "_c", upper_c)
+            shader.uniform_float("upper_" + key + "_d", upper_d)
+            upper_image = channel_spec.get("upper_image")
+            upper_tex = fallback
+            if upper_image:
+                image = bpy.data.images.get(upper_image["image_name"])
+                if image is not None:
+                    upper_tex = gpu.texture.from_image(image)
+            shader.uniform_float("upper_" + key + "_present",
+                                 1.0 if upper_image else 0.0)
+            shader.uniform_float("upper_" + key + "_factor",
+                                 float((upper_image or {}).get("factor", 1.0)))
+            shader.uniform_int("upper_" + key + "_blend", _BLEND_INDEX.get(
+                (upper_image or {}).get("blend", "MIX"), 0))
+            shader.uniform_sampler("upper_" + key + "_tex", upper_tex)
         shader.uniform_sampler(key + "_tex", by_key.get(key, fallback))
         shader.uniform_sampler("baseline_" + key + "_tex",
                                baseline_tex or fallback)

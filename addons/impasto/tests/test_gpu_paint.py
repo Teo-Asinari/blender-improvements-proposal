@@ -462,6 +462,82 @@ try:
           and gpu_engine._session.base_normal_resources_dirty)
     gpu_engine.stop_session()
 
+    # Reported interactive regression: the active layer may own ordinary
+    # material canvases even when this stroke targets only Emission.  A
+    # same-UV visible layer above it must participate in Lit PBR without
+    # changing resident ownership, write targets, or pausing input.
+    interactive_keys = (
+        "base_color", "roughness", "emission_color", "emission_strength")
+    interactive_images = [
+        bpy.data.images.new("Impasto Intermediate %s" % key, 64, 64,
+                            alpha=True)
+        for key in interactive_keys
+    ]
+    active_bindings = tuple(
+        model.BindingModel(key=key, mode="SHARED",
+                           image_name=image.name)
+        for key, image in zip(interactive_keys, interactive_images))
+    upper_roughness_image = bpy.data.images.new(
+        "Impasto Upper Paint roughness", 64, 64, alpha=True)
+    intermediate_active = model.LayerModel(
+        uid="intermediate", label="Intermediate emission brush",
+        layer_type="PAINT", uv_map="UVMap", bindings=active_bindings)
+    visible_upper = model.LayerModel(
+        uid="visible_upper", label="Visible upper Paint", layer_type="PAINT",
+        uv_map="UVMap", opacity=0.5,
+        bindings=(model.BindingModel(
+            key="roughness", mode="SHARED",
+            image_name=upper_roughness_image.name),))
+    visible_lower = model.LayerModel(
+        uid="visible_lower", label="Visible lower", layer_type="FILL",
+        uv_map="UVMap",
+        bindings=(
+            model.BindingModel(
+                key="base_color", mode="COLOR",
+                color=(0.1, 0.2, 0.3, 1.0)),
+            model.BindingModel(key="roughness", mode="VALUE", value=0.8),
+        ))
+    interactive_stack = model.StackModel(
+        root_tree_name="Interactive intermediate",
+        channels=interactive_keys,
+        layers=(visible_upper, intermediate_active, visible_lower))
+    emission_targets = ("emission_color", "emission_strength")
+    check("intermediate full-stack resident session starts",
+          gpu_engine.start_session(
+              obj, interactive_images, None,
+              payloads=gpu_engine.stroke_payloads(
+                  interactive_keys, brush),
+              settings={
+                  "channel_keys": interactive_keys,
+                  "brush_target_channel_keys": emission_targets,
+                  "preview_mode": "LIT_PBR",
+                  "stack_model": interactive_stack,
+                  "active_layer_uid": "intermediate",
+              }))
+    interactive_spec = gpu_engine._session.stack_spec
+    _payloads, interactive_settings = gpu_engine.stroke_settings_snapshot()
+    check("overlapping same-UV upper layer remains resident Lit PBR",
+          interactive_spec["enabled"]
+          and gpu_engine.current_preview_mode() == "LIT_PBR"
+          and not gpu_engine.material_inspect_active()
+          and not gpu_engine.material_inspect_requested()
+          and not gpu_engine.input_paused(),
+          repr(interactive_spec))
+    check("preview stack does not alter active ownership or write targets",
+          all(interactive_spec["channels"][key]["active"] is not None
+              for key in interactive_keys)
+          and interactive_settings["brush_target_channel_keys"]
+          == emission_targets)
+    rough_channel_spec = interactive_spec["channels"]["roughness"]
+    check("visible upper Paint Roughness follows resident active canvas",
+          rough_channel_spec["upper_image"] == {
+              "image_name": upper_roughness_image.name,
+              "factor": 0.5,
+              "blend": "MIX",
+          },
+          repr(rough_channel_spec))
+    gpu_engine.stop_session()
+
     # ---- operator surface ----------------------------------------------
     check("gpu paint operator registered",
           getattr(bpy.types, "IMPASTO_OT_gpu_paint", None) is not None)

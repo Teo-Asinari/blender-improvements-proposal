@@ -78,6 +78,11 @@ check("different stack UV sets disable the one-UV fast path",
 check("upper Overlay is reported as nonlinear",
       plan.nonlinear_upper == (("top_overlay", "base_color", "OVERLAY"),)
       and not plan.affine_fast_path)
+check("affine upper collapse excludes RNM normals and nonlinear blends",
+      preview_stack.affine_upper_channel_supported("roughness", "MULTIPLY")
+      and not preview_stack.affine_upper_channel_supported("normal", "MIX")
+      and not preview_stack.affine_upper_channel_supported(
+          "base_color", "OVERLAY"))
 reduced_scope = preview_stack.assess_lower_baseline_scope(plan)
 check("reduced baseline scope rejects upper layers and mixed UVs",
       not reduced_scope.supported and len(reduced_scope.reasons) == 2,
@@ -182,6 +187,37 @@ if emission_middle_runtime["enabled"]:
           and emission_middle_runtime["channels"]["emission_strength"]["active"]
           is not None)
 
+upper_rough = layer("upper_rough", "FILL", [
+    binding("roughness", mode="VALUE", value=0.25),
+], blend="MULTIPLY", opacity=0.5, uv_map="UV_A")
+active_rough = layer("active_rough", "PAINT", [
+    binding("roughness", image="Resident Rough"),
+], uv_map="UV_A")
+live_affine_stack = model.StackModel(
+    "Live affine upper", ("roughness",),
+    (upper_rough, active_rough, lower_surface))
+live_affine = gpu_engine.resident_stack_runtime_spec(
+    live_affine_stack, "active_rough")
+check("same-channel affine upper remains in resident Lit preview",
+      live_affine["enabled"], live_affine["status"])
+check("runtime exposes collapsed live upper coefficients",
+      live_affine["channels"]["roughness"]["upper_affine"]
+      == ((0.625, 0.625, 0.625, 1.0),
+          (0.0, 0.0, 0.0, 1.0)),
+      repr(live_affine["channels"]["roughness"]["upper_affine"]))
+upper_rough_paint = layer("upper_rough_paint", "PAINT", [
+    binding("roughness", image="Upper Rough Paint"),
+], uv_map="UV_A")
+live_image_stack = model.StackModel(
+    "Live image upper", ("roughness",),
+    (upper_rough_paint, active_rough, lower_surface))
+live_image = gpu_engine.resident_stack_runtime_spec(
+    live_image_stack, "active_rough")
+check("one same-channel upper Paint image stays resident",
+      live_image["enabled"]
+      and live_image["channels"]["roughness"]["upper_image"]["image_name"]
+      == "Upper Rough Paint", live_image["status"])
+
 emission_samples = {
     "Resident Emission Color":
         preview_stack.PixelSample((0.9, 0.1, 0.0, 1.0), 1.0),
@@ -212,6 +248,11 @@ check("active Base decodes once while baseline stays scene-linear",
       "if (decode_active_srgb > 0.5)" in preview_src
       and "source.rgb = srgb_to_linear(source.rgb)" in preview_src
       and "texture(baseline_tex, uvInterp)" in preview_src)
+check("preview applies affine upper stage after resident resolution",
+      "rough_sample = upper_roughness_c * rough_sample" in preview_src)
+check("preview samples upper Paint after the active canvas",
+      "upper_roughness_factor * u.a" in preview_src
+      and "upper_roughness_tex" in preview_src)
 draw_src = __import__("inspect").getsource(gpu_engine._draw_composed_preview)
 check("resolved channels remain enabled without active paint targets",
       'resolved or active or (key == "normal" and base_normal_enabled)'

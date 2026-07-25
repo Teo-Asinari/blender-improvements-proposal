@@ -22,6 +22,17 @@ AFFINE_BLEND_MODES = frozenset({
 })
 
 
+def affine_upper_channel_supported(channel_key, blend_mode):
+    """Whether an upper step is safe for component-wise ``C*A+D`` collapse.
+
+    Tangent normals compose through RNM, not component-wise arithmetic, even
+    when their UI blend mode is labelled MIX. Piecewise modes such as Overlay
+    likewise require a live post-pass.
+    """
+    return (str(channel_key) != "normal"
+            and str(blend_mode).upper() in AFFINE_BLEND_MODES)
+
+
 @dataclass(frozen=True)
 class PixelSample:
     value: object
