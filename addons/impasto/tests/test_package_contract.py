@@ -39,6 +39,7 @@ OPERATOR_IDS = {
     "IMPASTO_OT_material_preset_capture": "impasto.material_preset_capture",
     "IMPASTO_OT_material_preset_apply": "impasto.material_preset_apply",
     "IMPASTO_OT_material_preset_remove": "impasto.material_preset_remove",
+    "IMPASTO_OT_stencil_image_open": "impasto.stencil_image_open",
     "IMPASTO_OT_brush_mode_set": "impasto.brush_mode_set",
     "IMPASTO_OT_erase_channels_set": "impasto.erase_channels_set",
     "IMPASTO_OT_brush_channels_set": "impasto.brush_channels_set",

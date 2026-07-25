@@ -501,9 +501,16 @@ class ImpastoPreferences(bpy.types.AddonPreferences):
                     "only the invoking 3D Viewport to Material Preview so the "
                     "composed PBR material is visible",
         default=True)
+    stencil_directory: StringProperty(
+        name="Default Stencil Directory",
+        description="Folder opened by Impasto's stencil image browser; the "
+                    "last successfully loaded stencil folder is remembered",
+        subtype='DIR_PATH',
+        default="")
 
     def draw(self, context):
         self.layout.prop(self, "auto_material_preview")
+        self.layout.prop(self, "stencil_directory")
 
 
 _classes = (

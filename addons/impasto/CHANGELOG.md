@@ -4,6 +4,13 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.1
+
+- Added a persistent add-on preference for the default stencil directory and
+  remember the folder of each successfully loaded stencil.
+- Replaced the generic image opener with an image-filtered stencil browser that
+  opens in thumbnail view and assigns the selected image directly.
+
 ## 0.15.0
 
 - Added production layer-mask controls: add/remove/select, native grayscale

@@ -1,6 +1,6 @@
 # Impasto roadmap
 
-This is the authoritative list of open work for Impasto 0.15.0. Shipped work
+This is the authoritative list of open work for Impasto 0.15.1. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Near-term
@@ -41,3 +41,5 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 - Rebuild automatically imports or refreshes a loose material-level
   `Kiln Bake Target` as the bottom normal layer.
 - Paintable layer masks and persistent brush-material presets are implemented.
+- The stencil browser has a persistent add-on-level default directory and
+  opens in thumbnail view.

@@ -296,7 +296,8 @@ class PaintPanelMixin:
         # when the selected Image datablock changes without an Impasto GPU
         # allocation or pixel readback.
         col.template_ID_preview(
-            layer, "brush_stencil_image", open="image.open",
+            layer, "brush_stencil_image",
+            open=ops.IMPASTO_OT_stencil_image_open.bl_idname,
             rows=3, cols=4, hide_buttons=False)
 
         col.separator()

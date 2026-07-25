@@ -5,6 +5,7 @@ all are REGISTER | UNDO. Bulk edits run inside stack_edit_session so a
 whole operator costs exactly one compile+reconcile (design §4.7)."""
 
 import json
+import os
 import time
 from dataclasses import replace
 
@@ -595,6 +596,72 @@ class IMPASTO_OT_mask_paint(bpy.types.Operator):
         paint.activate_brush_tool(context)
         paint.maybe_switch_material_preview(context)
         self.report({'INFO'}, "Painting mask %s" % layer.masks[index].label)
+        return {'FINISHED'}
+
+
+def impasto_preferences(context):
+    addon = context.preferences.addons.get(__package__)
+    return addon.preferences if addon is not None else None
+
+
+class IMPASTO_OT_stencil_image_open(bpy.types.Operator):
+    """Load a stencil from the persistent thumbnail browser."""
+    bl_idname = "impasto.stencil_image_open"
+    bl_label = "Impasto: Load Stencil Image"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    filepath: StringProperty(subtype='FILE_PATH')
+    filter_glob: StringProperty(
+        default="*.bmp;*.cin;*.dds;*.dpx;*.exr;*.hdr;*.jpeg;*.jpg;*.png;"
+                "*.psd;*.rgb;*.sgi;*.tga;*.tif;*.tiff;*.webp",
+        options={'HIDDEN'})
+    @classmethod
+    def poll(cls, context):
+        _mat, tree = _context_stack(context)
+        layer = tree.impasto.active_layer() if tree else None
+        return layer is not None and layer.layer_type == 'PAINT'
+
+    def invoke(self, context, event):
+        preferences = impasto_preferences(context)
+        directory = (bpy.path.abspath(preferences.stencil_directory)
+                     if preferences and preferences.stencil_directory else "")
+        if directory and os.path.isdir(directory):
+            self.filepath = os.path.join(directory, "")
+        window = context.window
+        context.window_manager.fileselect_add(self)
+        # The File Browser replaces the invoking area after this method
+        # returns. Set its view on the next UI tick rather than relying on the
+        # user's last global browser mode.
+        def thumbnail_view():
+            if window is not None and window.screen is not None:
+                for area in window.screen.areas:
+                    if area.type == 'FILE_BROWSER':
+                        space = area.spaces.active
+                        if space.params is not None:
+                            space.params.display_type = 'THUMBNAIL'
+                        break
+            return None
+        bpy.app.timers.register(thumbnail_view, first_interval=0.0)
+        return {'RUNNING_MODAL'}
+
+    def execute(self, context):
+        _mat, tree = _context_stack(context)
+        layer = tree.impasto.active_layer() if tree else None
+        path = bpy.path.abspath(self.filepath)
+        if layer is None or not path or not os.path.isfile(path):
+            self.report({'ERROR'}, "Choose an existing stencil image")
+            return {'CANCELLED'}
+        try:
+            image = bpy.data.images.load(path, check_existing=True)
+        except RuntimeError as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        layer.brush_stencil_image = image
+        preferences = impasto_preferences(context)
+        if preferences is not None:
+            preferences.stencil_directory = os.path.join(
+                os.path.dirname(path), "")
+        self.report({'INFO'}, "Loaded stencil %s" % image.name)
         return {'FINISHED'}
 
 
@@ -1943,6 +2010,7 @@ _classes = (
     IMPASTO_OT_mask_remove,
     IMPASTO_OT_mask_select,
     IMPASTO_OT_mask_paint,
+    IMPASTO_OT_stencil_image_open,
     IMPASTO_OT_stack_rebuild,
     IMPASTO_OT_import_kiln_normal,
     IMPASTO_OT_paint_activate,

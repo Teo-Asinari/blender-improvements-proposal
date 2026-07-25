@@ -3,6 +3,7 @@
 
 import inspect
 import sys
+import tempfile
 import traceback
 from pathlib import Path
 
@@ -26,8 +27,8 @@ try:
     impasto.register()
     check("package registration",
           hasattr(bpy.types.ShaderNodeTree, "impasto"))
-    check("metadata", impasto.bl_info["version"] == (0, 15, 0))
-    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.15.0")
+    check("metadata", impasto.bl_info["version"] == (0, 15, 1))
+    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.15.1")
     check("extended brush sections collapse by default",
           not impasto.props.ImpastoLayer.bl_rna.properties[
               "ui_show_emission_paint"].default
@@ -134,6 +135,25 @@ try:
           str(engine._last_deltas))
 
     paint_layer = tree.impasto.active_layer()
+    stencil_path = Path(tempfile.gettempdir()) / "impasto_stencil_browser.png"
+    stencil_source = bpy.data.images.new(
+        "Impasto Stencil Browser Source", 4, 4)
+    stencil_source.generated_color = (0.25, 0.5, 0.75, 1.0)
+    stencil_source.save_render(str(stencil_path))
+    bpy.data.images.remove(stencil_source)
+    check("stencil browser defaults to thumbnail view",
+          "display_type = 'THUMBNAIL'" in inspect.getsource(
+              impasto.ops.IMPASTO_OT_stencil_image_open.invoke)
+          and "IMPASTO_OT_stencil_image_open"
+          in inspect.getsource(impasto.ui_paint.PaintPanelMixin))
+    check("stencil loader selects the chosen image",
+          bpy.ops.impasto.stencil_image_open(
+              filepath=str(stencil_path)) == {"FINISHED"}
+          and paint_layer.brush_stencil_image is not None)
+    check("add-on preferences expose a persistent stencil directory",
+          impasto.props.ImpastoPreferences.bl_rna.properties[
+              "stencil_directory"].subtype == 'DIR_PATH')
+
     check("add production layer mask",
           bpy.ops.impasto.mask_add() == {"FINISHED"}
           and len(paint_layer.masks) == 1
