@@ -255,7 +255,8 @@ check("preview samples upper Paint after the active canvas",
       and "upper_roughness_tex" in preview_src)
 draw_src = __import__("inspect").getsource(gpu_engine._draw_composed_preview)
 check("resolved channels remain enabled without active paint targets",
-      'resolved or active or (key == "normal" and base_normal_enabled)'
+      '"has": 1.0 if (resolved or active or (' in draw_src
+      and 'key == "normal" and base_normal_enabled)) else 0.0'
       in draw_src)
 baseline_build_src = __import__("inspect").getsource(
     gpu_engine._build_stack_baselines)

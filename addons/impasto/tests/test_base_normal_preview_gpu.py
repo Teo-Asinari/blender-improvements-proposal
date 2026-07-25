@@ -60,6 +60,11 @@ try:
           not np.allclose(session.base_normal_uvs, session.uvs))
     # This creates/compiles the real preview shader and uploads the image.
     gpu_engine._ensure_gpu(session)
+    check("real preview shader allocates its packed uniform block",
+          session.preview_shader is not None
+          and session.preview_ubo is not None
+          and session.preview_ubo_data.shape
+          == (gpu_engine.PREVIEW_UBO_VEC4_COUNT, 4))
     uploaded = np.asarray(
         session.base_normal_tex.read().to_list(), dtype=np.float32).reshape(-1, 4)[0]
     check("known normal RGB survives preview upload with opaque coverage",

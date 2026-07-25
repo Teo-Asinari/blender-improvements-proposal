@@ -183,7 +183,81 @@ try:
           and all(abs(float(a) - b) < 1e-6 for a, b in zip(
               packed[gpu_engine.DAB_UBO_BRUSH_VALUES],
               (0.1, 0.2, 0.3, 0.9))))
+    preview_records = {
+        "base_color": {
+            "has": 1.0, "active": 1.0, "active_factor": 0.75,
+            "active_blend": 3,
+            "baseline_value": (0.1, 0.2, 0.3, 1.0),
+            "baseline_is_texture": 1.0,
+            "upper_c": (0.5, 0.5, 0.5, 0.5),
+            "upper_d": (0.2, 0.2, 0.2, 0.2),
+            "upper_present": 1.0, "upper_factor": 0.4,
+            "upper_blend": 2,
+        },
+        "roughness": {
+            "has": 1.0, "active_factor": 0.25,
+            "baseline_value": (0.6, 0.6, 0.6, 1.0),
+        },
+    }
+    preview_packed = gpu_engine.pack_preview_ubo(preview_records)
+    base_offset = (gpu_engine.PREVIEW_UBO_CHANNEL_BASE
+                   + gpu_engine.GPU_PAINT_CHANNEL_KEYS.index("base_color")
+                   * gpu_engine.PREVIEW_UBO_STRIDE)
+    rough_offset = (gpu_engine.PREVIEW_UBO_CHANNEL_BASE
+                    + gpu_engine.GPU_PAINT_CHANNEL_KEYS.index("roughness")
+                    * gpu_engine.PREVIEW_UBO_STRIDE)
+    check("preview UBO pack is contiguous std140 vec4 data",
+          preview_packed.shape == (gpu_engine.PREVIEW_UBO_VEC4_COUNT, 4)
+          and preview_packed.dtype.name == "float32"
+          and preview_packed.flags.c_contiguous)
+    check("preview UBO preserves active, baseline and upper stack values",
+          all(abs(float(a) - b) < 1e-6 for a, b in zip(
+              preview_packed[base_offset], (1.0, 1.0, 0.75, 3.0)))
+          and all(abs(float(a) - b) < 1e-6 for a, b in zip(
+              preview_packed[base_offset + 1], (0.1, 0.2, 0.3, 1.0)))
+          and preview_packed[base_offset + 2, 0] == 1.0
+          and all(abs(float(a) - b) < 1e-6 for a, b in zip(
+              preview_packed[base_offset + 3], (0.5,) * 4))
+          and all(abs(float(a) - b) < 1e-6 for a, b in zip(
+              preview_packed[base_offset + 4], (0.2,) * 4))
+          and all(abs(float(a) - b) < 1e-6 for a, b in zip(
+              preview_packed[base_offset + 5], (1.0, 0.4, 2.0, 0.0)))
+          and preview_packed[rough_offset, 2] == 0.25)
+    check("missing preview records retain safe neutral upper transform",
+          all(preview_packed[
+              gpu_engine.PREVIEW_UBO_CHANNEL_BASE
+              + gpu_engine.GPU_PAINT_CHANNEL_KEYS.index("metallic")
+              * gpu_engine.PREVIEW_UBO_STRIDE + 3] == 1.0)
+          and not any(preview_packed[
+              gpu_engine.PREVIEW_UBO_CHANNEL_BASE
+              + gpu_engine.GPU_PAINT_CHANNEL_KEYS.index("metallic")
+              * gpu_engine.PREVIEW_UBO_STRIDE + 4]))
     preview_info = gpu_engine.preview_shader_create_info()
+    preview_pack = gpu_engine.pack_preview_ubo({
+        "roughness": {
+            "has": 1.0, "active": 1.0, "active_factor": 0.75,
+            "active_blend": 4, "baseline_value": (0.2, 0.2, 0.2, 1.0),
+            "baseline_is_texture": 1.0,
+            "upper_c": (0.5, 0.5, 0.5, 1.0),
+            "upper_d": (0.1, 0.1, 0.1, 0.0),
+            "upper_present": 1.0, "upper_factor": 0.6,
+            "upper_blend": 3,
+        },
+    })
+    roughness_slot = (
+        gpu_engine.PREVIEW_UBO_CHANNEL_BASE
+        + gpu_engine.GPU_PAINT_CHANNEL_KEYS.index("roughness")
+        * gpu_engine.PREVIEW_UBO_STRIDE)
+    check("preview UBO is a compact std140 vec4 array",
+          preview_pack.shape == (gpu_engine.PREVIEW_UBO_VEC4_COUNT, 4)
+          and preview_pack.dtype.name == "float32"
+          and preview_pack.flags.c_contiguous
+          and preview_pack.nbytes
+          == gpu_engine.PREVIEW_UBO_VEC4_COUNT * 16)
+    check("preview UBO float flags preserve shader-side integer fields",
+          tuple(preview_pack[roughness_slot]) == (1.0, 1.0, 0.75, 4.0)
+          and tuple(preview_pack[roughness_slot + 5]) ==
+          (1.0, 0.6000000238418579, 3.0, 0.0))
     check("composed preview create-info covers every PBR paint channel",
           preview_info is not None
           and all((key + "_tex") in gpu_engine.PREVIEW_FRAG_SRC

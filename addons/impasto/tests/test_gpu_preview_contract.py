@@ -51,6 +51,27 @@ check("invalid preview mode safely normalizes to Lit PBR",
 
 src = gpu_engine.PREVIEW_FRAG_SRC
 main = src.split("void main()", 1)[1]
+create_info_source = inspect.getsource(gpu_engine.preview_shader_create_info)
+draw_preview_source = inspect.getsource(gpu_engine._draw_composed_preview)
+check("large per-channel preview state uses one uniform block",
+      "uniform_buf(PREVIEW_UBO_SLOT" in create_info_source
+      and '"ImpastoPreviewParams"' in create_info_source
+      and "typedef_source(PREVIEW_UBO_TYPEDEF)" in create_info_source
+      and "for name in GPU_PAINT_CHANNEL_KEYS" not in create_info_source
+      and "push_constant" not in create_info_source)
+check("preview UBO layout covers every registry channel exactly once",
+      gpu_engine.PREVIEW_UBO_VEC4_COUNT
+      == (gpu_engine.PREVIEW_UBO_CHANNEL_BASE
+          + len(gpu_engine.GPU_PAINT_CHANNEL_KEYS)
+          * gpu_engine.PREVIEW_UBO_STRIDE)
+      and "vec4 values[%d]" % gpu_engine.PREVIEW_UBO_VEC4_COUNT
+      in gpu_engine.PREVIEW_UBO_TYPEDEF)
+check("draw path updates and binds packed preview state",
+      "pack_preview_ubo(" in draw_preview_source
+      and "s.preview_ubo.update(s.preview_ubo_data)" in draw_preview_source
+      and "shader.uniform_block(PREVIEW_UBO_NAME, s.preview_ubo)"
+      in draw_preview_source
+      and 'shader.uniform_float("has_" + key' not in draw_preview_source)
 raw_normal_at = main.index("if (preview_mode == 1)")
 raw_height_at = main.index("if (preview_mode == 3)")
 detail_at = main.index("vec3 dpdx")
@@ -73,9 +94,9 @@ check("Lit PBR adds normal- and roughness-sensitive studio keys",
       "preview_key_light" in src
       and "distribution = a2" in src
       and "n, v, normalize(vec3" in main)
-check("Lit PBR lighting is driven by compact live preview uniforms",
-      'push_constant(\'VEC4\', "preview_lighting")' in
-      inspect.getsource(gpu_engine.preview_shader_create_info)
+check("Lit PBR lighting is driven by packed live preview parameters",
+      "#define preview_lighting preview_params.values[10]"
+      in gpu_engine._preview_ubo_aliases()
       and "environment_intensity = exp2(preview_lighting.x)" in main
       and "rotate_around_z(reflection, preview_lighting.y)" in main
       and "preview_lighting.z" in main
@@ -133,7 +154,6 @@ check("Lit preview uses Blender corner normals instead of triangle normals",
       "surfaceNormal" in gpu_engine.PREVIEW_VERT_SRC
       and "geometric_n = normalize(surfaceNormal)" in src
       and "cross(dpdx, dpdy)" not in src)
-draw_preview_source = inspect.getsource(gpu_engine._draw_composed_preview)
 check("resident preview uses biased framebuffer depth without prepass cracks",
       "gl_Position.z -=" in gpu_engine.PREVIEW_VERT_SRC
       and "impasto_visible_surface" not in src
@@ -192,8 +212,10 @@ check("mode switch performs no synchronization",
       not any(word in mode_source for word in forbidden), mode_source)
 check("preview draw performs no synchronization",
       not any(word in draw_source for word in forbidden), draw_source)
-check("preview mode is a draw-time integer uniform",
-      'uniform_int("preview_mode"' in draw_source)
+check("preview mode is packed into the draw-time UBO",
+      '"preview_mode": preview_mode_index' in draw_source
+      and "#define preview_mode int(preview_params.values[9].x)"
+      in gpu_engine._preview_ubo_aliases())
 check("preview does not upload optimized-away resolved-stack uniform",
       "resolved_stack" not in draw_source
       and "resolved_stack" not in

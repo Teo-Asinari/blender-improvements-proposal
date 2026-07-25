@@ -1,6 +1,6 @@
 # Impasto roadmap
 
-This is the authoritative list of open work for Impasto 0.15.1. Shipped work
+This is the authoritative list of open work for Impasto 0.15.2. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Near-term
@@ -21,8 +21,6 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 - Expand live upper-layer post-composition beyond one affine Paint image per
   non-normal channel: multiple images, masks, nonlinear blends, RNM normals,
   and mixed UV layouts.
-- Move the enlarged Lit PBR preview parameter block to a UBO for backend
-  portability; OpenGL currently accepts it but reports push-constant warnings.
 - Continue decomposing `gpu_engine.py` and `ops.py` compatibility facades into
   focused, regression-guarded modules.
 - Continue qualification across supported GPU backends and drivers.

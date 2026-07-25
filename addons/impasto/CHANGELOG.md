@@ -4,6 +4,13 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.2
+
+- Migrated every Lit PBR preview parameter from oversized push constants to
+  one std140 uniform buffer for portable GPU-backend behavior.
+- Kept live preview updates allocation-free and added layout, lifecycle, and
+  real-GPU regression coverage.
+
 ## 0.15.1
 
 - Added a persistent add-on preference for the default stencil directory and

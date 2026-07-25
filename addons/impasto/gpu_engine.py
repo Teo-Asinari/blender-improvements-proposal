@@ -175,6 +175,48 @@ struct ImpastoDabParams {
 };
 """
 
+PREVIEW_UBO_NAME = "preview_params"
+PREVIEW_UBO_SLOT = 1
+PREVIEW_UBO_CHANNEL_BASE = 13
+PREVIEW_UBO_STRIDE = 6
+PREVIEW_UBO_VEC4_COUNT = PREVIEW_UBO_CHANNEL_BASE + 60
+PREVIEW_UBO_TYPEDEF = """
+struct ImpastoPreviewParams {
+    vec4 values[73];
+};
+"""
+
+
+def _preview_ubo_aliases():
+    lines = [
+        "#define model_matrix mat4(preview_params.values[0], preview_params.values[1], preview_params.values[2], preview_params.values[3])",
+        "#define view_proj_matrix mat4(preview_params.values[4], preview_params.values[5], preview_params.values[6], preview_params.values[7])",
+        "#define camera_position preview_params.values[8].xyz",
+        "#define preview_opacity preview_params.values[8].w",
+        "#define preview_mode int(preview_params.values[9].x)",
+        "#define environment_ready preview_params.values[9].y",
+        "#define base_normal_enabled preview_params.values[9].z",
+        "#define preview_lighting preview_params.values[10]",
+        "#define preview_fill preview_params.values[11]",
+        "#define base_normal_options preview_params.values[12].xy",
+    ]
+    for i, name in enumerate(GPU_PAINT_CHANNEL_KEYS):
+        n = PREVIEW_UBO_CHANNEL_BASE + i * PREVIEW_UBO_STRIDE
+        lines.extend((
+            "#define has_%s preview_params.values[%d].x" % (name, n),
+            "#define active_%s preview_params.values[%d].y" % (name, n),
+            "#define active_%s_factor preview_params.values[%d].z" % (name, n),
+            "#define active_%s_blend int(preview_params.values[%d].w)" % (name, n),
+            "#define baseline_%s_value preview_params.values[%d]" % (name, n + 1),
+            "#define baseline_%s_is_texture preview_params.values[%d].x" % (name, n + 2),
+            "#define upper_%s_c preview_params.values[%d]" % (name, n + 3),
+            "#define upper_%s_d preview_params.values[%d]" % (name, n + 4),
+            "#define upper_%s_present preview_params.values[%d].x" % (name, n + 5),
+            "#define upper_%s_factor preview_params.values[%d].y" % (name, n + 5),
+            "#define upper_%s_blend int(preview_params.values[%d].z)" % (name, n + 5),
+        ))
+    return "\n".join(lines) + "\n"
+
 # Stable engine/UI contract for diagnostic live-preview display modes.
 PREVIEW_MODES = (
     "LIT_PBR",
@@ -1448,30 +1490,9 @@ def preview_shader_create_info():
     iface.smooth('VEC3', "worldPos")
     iface.smooth('VEC3', "surfaceNormal")
     info = gpu.types.GPUShaderCreateInfo()
-    info.push_constant('MAT4', "model_matrix")
-    info.push_constant('MAT4', "view_proj_matrix")
-    info.push_constant('VEC3', "camera_position")
-    info.push_constant('FLOAT', "preview_opacity")
-    info.push_constant('INT', "preview_mode")
-    info.push_constant('FLOAT', "environment_ready")
-    info.push_constant('VEC4', "preview_lighting")
-    info.push_constant('VEC4', "preview_fill")
-    info.push_constant('FLOAT', "base_normal_enabled")
-    info.push_constant('VEC2', "base_normal_options")
-    for name in GPU_PAINT_CHANNEL_KEYS:
-        info.push_constant('FLOAT', "has_" + name)
-        info.push_constant('FLOAT', "active_" + name)
-        info.push_constant('FLOAT', "active_" + name + "_factor")
-        if name != "normal":
-            info.push_constant('INT', "active_" + name + "_blend")
-        info.push_constant('VEC4', "baseline_" + name + "_value")
-        info.push_constant('FLOAT', "baseline_" + name + "_is_texture")
-        if name != "normal":
-            info.push_constant('VEC4', "upper_" + name + "_c")
-            info.push_constant('VEC4', "upper_" + name + "_d")
-            info.push_constant('FLOAT', "upper_" + name + "_present")
-            info.push_constant('FLOAT', "upper_" + name + "_factor")
-            info.push_constant('INT', "upper_" + name + "_blend")
+    info.typedef_source(PREVIEW_UBO_TYPEDEF)
+    info.uniform_buf(PREVIEW_UBO_SLOT, "ImpastoPreviewParams",
+                     PREVIEW_UBO_NAME)
     info.sampler(0, 'FLOAT_2D', "base_color_tex")
     info.sampler(1, 'FLOAT_2D', "metallic_tex")
     info.sampler(2, 'FLOAT_2D', "roughness_tex")
@@ -1499,8 +1520,8 @@ def preview_shader_create_info():
     info.vertex_in(3, 'VEC2', "base_uv")
     info.vertex_out(iface)
     info.fragment_out(0, 'VEC4', "fragColor")
-    info.vertex_source(PREVIEW_VERT_SRC)
-    info.fragment_source(PREVIEW_FRAG_SRC)
+    info.vertex_source(_preview_ubo_aliases() + PREVIEW_VERT_SRC)
+    info.fragment_source(_preview_ubo_aliases() + PREVIEW_FRAG_SRC)
     return info
 
 
@@ -1606,6 +1627,7 @@ def resident_stack_runtime_spec(stack_model, active_uid):
     channels = {}
     composition = tuple(reversed(stack_model.layers))
     active_i = composition.index(active)
+    preview_records = {}
     for key in GPU_PAINT_CHANNEL_KEYS:
         channel = model.CHANNEL_MAP[key]
         active_binding = next(
@@ -1875,6 +1897,8 @@ class _Session:
         self.smear_last_point = None
         self.prepass_shader = None
         self.preview_shader = None
+        self.preview_ubo = None
+        self.preview_ubo_data = None
         self.paint_texs = None         # list of N RGBA16F GPUTextures
         self.paint_fbs = None
         self.depth_color_tex = None    # R32F: prepass NDC depth
@@ -2320,7 +2344,8 @@ def _release_gpu_references(s):
         "soften_ubo", "soften_scratch", "soften_scratch_fb",
         "batch_soften", "batch_smear",
         "prepass_shader",
-        "preview_shader", "paint_texs", "paint_fbs", "depth_color_tex",
+        "preview_shader", "preview_ubo", "preview_ubo_data",
+        "paint_texs", "paint_fbs", "depth_color_tex",
         "depth_depth_tex", "depth_fb", "batch_dabs", "batch_prepass",
         "batch_preview", "neutral_tex", "copy_shader", "copy_batch",
         "single_fbs", "environment_tex", "base_normal_tex",
@@ -2759,6 +2784,9 @@ def _ensure_gpu(s):
     s.soften_ubo = gpu.types.GPUUniformBuf(s.soften_ubo_data)
     s.preview_shader = gpu.shader.create_from_info(
         preview_shader_create_info())
+    s.preview_ubo_data = np.zeros(
+        (PREVIEW_UBO_VEC4_COUNT, 4), dtype=np.float32)
+    s.preview_ubo = gpu.types.GPUUniformBuf(s.preview_ubo_data)
     s.copy_shader = gpu.shader.create_from_info(copy_shader_create_info())
     s.baseline_shader = gpu.shader.create_from_info(
         baseline_shader_create_info())
@@ -2884,6 +2912,54 @@ def _vec4(value):
             return (values[0], values[0], values[0], 1.0)
     v = float(value)
     return (v, v, v, 1.0)
+
+
+def pack_preview_ubo(records, globals=None, data=None):
+    """Pack all preview parameters into std140-safe contiguous vec4s.
+
+    ``data`` may be the session's existing array for allocation-free updates.
+    Matrices are transposed into GLSL column-major vec4 columns.
+    """
+    import numpy as np
+    if data is None:
+        data = np.zeros((PREVIEW_UBO_VEC4_COUNT, 4), dtype=np.float32)
+    else:
+        data.fill(0.0)
+    globals = globals or {}
+    for offset, name in ((0, "model_matrix"), (4, "view_proj_matrix")):
+        matrix = globals.get(name)
+        if matrix is not None:
+            data[offset:offset + 4] = np.asarray(
+                matrix, dtype=np.float32).reshape(4, 4).T
+    camera = tuple(globals.get("camera_position", (0.0, 0.0, 10.0)))
+    data[8] = camera[:3] + (float(globals.get("preview_opacity", 1.0)),)
+    data[9] = (float(globals.get("preview_mode", 0)),
+               float(globals.get("environment_ready", 0.0)),
+               float(globals.get("base_normal_enabled", 0.0)), 0.0)
+    data[10] = _vec4(globals.get("preview_lighting", (0.0, 0.0, 1.0, 0.0)))
+    data[11] = _vec4(globals.get("preview_fill", (1.0, 0.0, 0.0, 0.0)))
+    options = tuple(globals.get("base_normal_options", (1.0, 0.0)))
+    data[12, :2] = options[:2]
+    for i, key in enumerate(GPU_PAINT_CHANNEL_KEYS):
+        record = records.get(key, {})
+        n = PREVIEW_UBO_CHANNEL_BASE + i * PREVIEW_UBO_STRIDE
+        data[n] = (float(record.get("has", 0.0)),
+                   float(record.get("active", 0.0)),
+                   float(record.get("active_factor", 1.0)),
+                   float(record.get("active_blend", 0)))
+        data[n + 1] = _vec4(record.get("baseline_value", 0.0))
+        data[n + 2, 0] = float(record.get("baseline_is_texture", 0.0))
+        # Affine coefficients are literal four-component vectors. _vec4's
+        # scalar helper deliberately supplies alpha=1 for material values,
+        # which is not the additive identity required by upper D.
+        data[n + 3] = _vec4(record.get(
+            "upper_c", (1.0, 1.0, 1.0, 1.0)))
+        data[n + 4] = _vec4(record.get(
+            "upper_d", (0.0, 0.0, 0.0, 0.0)))
+        data[n + 5] = (float(record.get("upper_present", 0.0)),
+                       float(record.get("upper_factor", 1.0)),
+                       float(record.get("upper_blend", 0)), 0.0)
+    return data
 
 
 def _build_stack_baselines(s):
@@ -4037,32 +4113,33 @@ def _draw_composed_preview(s):
     fallback = s.paint_texs[0]
     shader = s.preview_shader
     shader.bind()
-    shader.uniform_float("model_matrix", s.model)
-    shader.uniform_float("view_proj_matrix", s.view_proj)
     try:
         camera_position = s.view.inverted().translation
     except Exception:
         camera_position = (0.0, 0.0, 10.0)
-    shader.uniform_float("camera_position", camera_position)
-    shader.uniform_float("preview_opacity", 1.0)
-    shader.uniform_int("preview_mode", preview_mode_index(
-        s.settings.get("preview_mode")))
-    shader.uniform_float("environment_ready",
-                         1.0 if s.environment_tex is not None else 0.0)
-    shader.uniform_float("preview_lighting", (
+    preview_globals = {
+        "model_matrix": s.model,
+        "view_proj_matrix": s.view_proj,
+        "camera_position": tuple(camera_position),
+        "preview_opacity": 1.0,
+        "preview_mode": preview_mode_index(s.settings.get("preview_mode")),
+        "environment_ready": 1.0 if s.environment_tex is not None else 0.0,
+        "preview_lighting": (
         float(s.settings.get("preview_environment_exposure", 0.0)),
         float(s.settings.get("preview_environment_rotation", 0.0)),
         float(s.settings.get("preview_key_strength", 1.0)),
-        float(s.settings.get("preview_key_rotation", 0.0))))
-    shader.uniform_float("preview_fill", (
-        float(s.settings.get("preview_fill_strength", 1.0)), 0.0, 0.0, 0.0))
+        float(s.settings.get("preview_key_rotation", 0.0))),
+        "preview_fill": (
+            float(s.settings.get("preview_fill_strength", 1.0)),
+            0.0, 0.0, 0.0),
+    }
     resolved = bool(s.stack_spec and s.stack_spec.get("enabled"))
     base_normal_enabled = s.base_normal_tex is not None
-    shader.uniform_float("base_normal_enabled",
-                         1.0 if base_normal_enabled else 0.0)
-    shader.uniform_float("base_normal_options", (
+    preview_globals["base_normal_enabled"] = (
+        1.0 if base_normal_enabled else 0.0)
+    preview_globals["base_normal_options"] = (
         max(0.0, float(s.settings.get("base_normal_strength", 1.0))),
-        1.0 if s.settings.get("base_normal_invert_green", False) else 0.0))
+        1.0 if s.settings.get("base_normal_invert_green", False) else 0.0)
     for key in GPU_PAINT_CHANNEL_KEYS:
         channel_spec = (s.stack_spec.get("channels", {}).get(key, {})
                         if resolved else {})
@@ -4073,39 +4150,41 @@ def _draw_composed_preview(s):
                               "seed", model.seed_native(
                                   model.CHANNEL_MAP[key]))))
         baseline_tex = s.baseline_texs.get(key)
-        shader.uniform_float("has_" + key, 1.0 if (
-            resolved or active or (key == "normal" and base_normal_enabled))
-            else 0.0)
-        shader.uniform_float("active_" + key, 1.0 if active else 0.0)
-        shader.uniform_float("active_" + key + "_factor",
-                             float(active_spec.get("factor", 1.0)))
-        if key != "normal":
-            shader.uniform_int("active_" + key + "_blend", _BLEND_INDEX.get(
-                active_spec.get("blend", "MIX"), 0))
-        shader.uniform_float("baseline_" + key + "_value", baseline_value)
-        shader.uniform_float("baseline_" + key + "_is_texture",
-                             1.0 if baseline_tex is not None else 0.0)
+        record = {
+            "has": 1.0 if (resolved or active or (
+                key == "normal" and base_normal_enabled)) else 0.0,
+            "active": 1.0 if active else 0.0,
+            "active_factor": float(active_spec.get("factor", 1.0)),
+            "active_blend": _BLEND_INDEX.get(
+                active_spec.get("blend", "MIX"), 0),
+            "baseline_value": baseline_value,
+            "baseline_is_texture": 1.0 if baseline_tex is not None else 0.0,
+        }
         if key != "normal":
             upper_c, upper_d = channel_spec.get(
                 "upper_affine", (_vec4(1.0), _vec4(0.0)))
-            shader.uniform_float("upper_" + key + "_c", upper_c)
-            shader.uniform_float("upper_" + key + "_d", upper_d)
             upper_image = channel_spec.get("upper_image")
             upper_tex = fallback
             if upper_image:
                 image = bpy.data.images.get(upper_image["image_name"])
                 if image is not None:
                     upper_tex = gpu.texture.from_image(image)
-            shader.uniform_float("upper_" + key + "_present",
-                                 1.0 if upper_image else 0.0)
-            shader.uniform_float("upper_" + key + "_factor",
-                                 float((upper_image or {}).get("factor", 1.0)))
-            shader.uniform_int("upper_" + key + "_blend", _BLEND_INDEX.get(
-                (upper_image or {}).get("blend", "MIX"), 0))
+            record.update({
+                "upper_c": upper_c, "upper_d": upper_d,
+                "upper_present": 1.0 if upper_image else 0.0,
+                "upper_factor": float(
+                    (upper_image or {}).get("factor", 1.0)),
+                "upper_blend": _BLEND_INDEX.get(
+                    (upper_image or {}).get("blend", "MIX"), 0),
+            })
             shader.uniform_sampler("upper_" + key + "_tex", upper_tex)
+        preview_records[key] = record
         shader.uniform_sampler(key + "_tex", by_key.get(key, fallback))
         shader.uniform_sampler("baseline_" + key + "_tex",
                                baseline_tex or fallback)
+    pack_preview_ubo(preview_records, preview_globals, s.preview_ubo_data)
+    s.preview_ubo.update(s.preview_ubo_data)
+    shader.uniform_block(PREVIEW_UBO_NAME, s.preview_ubo)
     shader.uniform_sampler("environment_atlas",
                            (s.environment_tex
                             if s.environment_tex is not None else fallback))
