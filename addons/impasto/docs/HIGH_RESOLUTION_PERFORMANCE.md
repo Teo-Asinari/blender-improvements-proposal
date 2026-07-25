@@ -39,11 +39,11 @@ resolution paths. Four-channel 4K painting is expected to be viable on a
 modern discrete GPU, though mesh density, brush footprint, stencil sampling,
 and dab spacing remain important. Eight active 4K channels need measurement.
 
-Soften and Smear are substantially more expensive. Their correctness-first
-implementation copies a complete texture for every enabled channel and every
-dab before applying the effect. At 4K this already creates heavy memory-
-bandwidth traffic; at 8K it is not expected to be interactive. Dirty-region
-copying is required before either tool should be advertised for 8K work.
+Soften and Smear remain more expensive than Paint and Erase, but now copy only
+the conservative padded UV region affected by each dab. Large brushes, dense
+or widely scattered UV layouts, and unprojectable geometry can still expand
+that region substantially. The implementation falls back to a full texture
+when projection bounds are unavailable.
 
 Explicit synchronization previously measured about 417 ms for four 4K
 channels. A simple pixel-count projection puts four 8K channels near 1.7
@@ -58,6 +58,11 @@ not ordinary resident pen-up latency.
   record is rejected rather than partially retained.
 - Before exposing 8K, benchmark Paint, Erase, Soften, Smear, preview orbiting,
   explicit flush, save, undo, and session teardown across 1/4/8 channels.
+
+The headless analytic benchmark matrix covers Paint, Erase, Soften, and Smear
+at 1, 4, and 8 channels. Real timing still requires an interactive GPU context:
+use a fixed mesh, viewport and brush, warm the session, record three identical
+20-dab strokes, and compare median stroke telemetry.
 
 All figures are architectural estimates unless explicitly described as a
 measurement. Actual performance depends strongly on GPU bandwidth, driver,

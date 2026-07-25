@@ -1,6 +1,6 @@
 # Impasto
 
-Impasto 0.14.3 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
+Impasto 0.14.4 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
 painting. It stores material work as ordered Paint and Fill layers, compiles
 the stack into a Principled BSDF material, and provides a GPU-resident painting
 session with immediate material feedback.
@@ -230,9 +230,8 @@ were recorded.
   `(channels + 1) × 128 MiB` at 4K and `(channels + 1) × 512 MiB` at 8K,
   before baseline textures, viewport depth, Blender's own image textures, and
   up to 256 MiB of tile undo snapshots.
-- 8K creation is not currently exposed in the UI. Soften and Smear perform a
-  full texture copy per enabled channel per dab, making them especially poor
-  8K candidates until dirty-region copies are implemented.
+- 8K creation is not currently exposed in the UI. Soften and Smear use
+  conservative dirty-region copies, but 8K remains unqualified.
 
 See [High-resolution painting estimates](docs/HIGH_RESOLUTION_PERFORMANCE.md)
 for formulas, VRAM/RAM tables, expected responsiveness, and qualification

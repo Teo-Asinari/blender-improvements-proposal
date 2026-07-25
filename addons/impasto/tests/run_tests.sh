@@ -45,6 +45,7 @@ run_one "$TESTS_DIR/test_ibl_preview.py" "IMPASTO_IBL_PREVIEW_PASSED" || status=
 run_one "$TESTS_DIR/test_preview_stack.py" "IMPASTO_PREVIEW_STACK_PASSED" || status=1
 run_one "$TESTS_DIR/test_preview_hardening.py" "preview hardening tests PASSED" || status=1
 run_one "$TESTS_DIR/test_brush_undo.py" "IMPASTO_BRUSH_UNDO_PASSED" || status=1
+run_one "$TESTS_DIR/test_performance.py" "IMPASTO_PERFORMANCE_ESTIMATES_PASSED" || status=1
 run_one "$TESTS_DIR/test_visibility.py" "IMPASTO_VISIBILITY_PASSED" || status=1
 run_one "$TESTS_DIR/test_scalar_channels.py" "IMPASTO_SCALAR_CHANNELS_PASSED" || status=1
 run_one "$TESTS_DIR/test_rendered_semantics.py" "IMPASTO_RENDERED_SEMANTICS_PASSED" || status=1

@@ -14,6 +14,7 @@ import traceback
 from pathlib import Path
 
 import bpy
+import numpy as np
 
 ADDONS = str(Path(__file__).resolve().parents[2])
 if ADDONS not in sys.path:
@@ -342,6 +343,24 @@ try:
     check("union_bbox tolerates None",
           gpu_engine.union_bbox(None, (0, 0, 1, 1)) == (0, 0, 1, 1)
           and gpu_engine.union_bbox((0, 0, 1, 1), None) == (0, 0, 1, 1))
+    screen_boxes = np.array(
+        [[8.0, 8.0, 24.0, 24.0], [200.0, 200.0, 220.0, 220.0]],
+        dtype=np.float32)
+    uv_boxes = np.array(
+        [[0.25, 0.25, 0.5, 0.5], [0.75, 0.75, 1.0, 1.0]],
+        dtype=np.float32)
+    work = gpu_engine.dab_dirty_pixel_rects(
+        screen_boxes, np.array([False, False]), uv_boxes,
+        [(16.0, 16.0, 1.0), (100.0, 100.0, 1.0)], 4.0, 64,
+        sample_pad=3)
+    check("neighbour brushes bound each dab to padded UV work",
+          work == ((11, 11, 26, 26), None), str(work))
+    engine_source = Path(gpu_engine.__file__).read_text(encoding="utf-8")
+    check("soften and smear use bounded copies and scissored in-place draws",
+          engine_source.count("gpu.state.scissor_set(*work_rect)") == 2
+          and "s.soften_scratch_fb, work_rect" in engine_source
+          and "s.paint_texs[index], s.soften_scratch = target, source"
+          not in engine_source)
 
     # ---- headless session round-trip (harmless no-op contract) --------
     bpy.ops.mesh.primitive_plane_add(size=2.0)

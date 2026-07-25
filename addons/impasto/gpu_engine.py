@@ -1110,6 +1110,18 @@ def uv_bbox_to_pixel_rect(bbox, size, pad=DIRTY_RECT_PAD_PX):
     return (x0, y0, x1 - x0, y1 - y0)
 
 
+def dab_dirty_pixel_rects(screen_bboxes, unprojectable, uv_bboxes, dabs,
+                          radius, size, sample_pad=0):
+    """Return one conservative texture-space work rect per dab."""
+    pad = DIRTY_RECT_PAD_PX + max(0, int(math.ceil(sample_pad)))
+    return tuple(
+        uv_bbox_to_pixel_rect(
+            dirty_uv_bbox(screen_bboxes, unprojectable, uv_bboxes,
+                          dab_rect_union((dab,), radius)),
+            size, pad=pad)
+        for dab in dabs)
+
+
 # ---------------------------------------------------------------------------
 # Buffer -> numpy conversion ladder (stroke-end readback)
 #
@@ -1710,6 +1722,7 @@ class _Session:
         self.soften_ubo = None
         self.soften_ubo_data = None
         self.soften_scratch = None
+        self.soften_scratch_fb = None
         self.batch_soften = None
         self.batch_smear = None
         self.smear_last_point = None
@@ -2141,7 +2154,8 @@ def _release_gpu_references(s):
     """
     names = (
         "dab_shaders", "dab_ubos", "soften_shader", "smear_shader",
-        "soften_ubo", "soften_scratch", "batch_soften", "batch_smear",
+        "soften_ubo", "soften_scratch", "soften_scratch_fb",
+        "batch_soften", "batch_smear",
         "prepass_shader",
         "preview_shader", "paint_texs", "paint_fbs", "depth_color_tex",
         "depth_depth_tex", "depth_fb", "batch_dabs", "batch_prepass",
@@ -2649,6 +2663,8 @@ def _ensure_gpu(s):
     s.single_fbs = [gpu.types.GPUFrameBuffer(color_slots=(tex,))
                     for tex in s.paint_texs]
     s.soften_scratch = gpu.types.GPUTexture((size, size), format='RGBA16F')
+    s.soften_scratch_fb = gpu.types.GPUFrameBuffer(
+        color_slots=(s.soften_scratch,))
     seed_line = "paint_tex_seeded_images=%d/%d" % (seeded_count, n)
     s.probe_lines.append(seed_line)
     _log_line("GPU_PAINT_SPIKE_PROBE %s" % seed_line)
@@ -3336,12 +3352,19 @@ def _flush_dabs(s, region):
     # Conservative dirty-rect accumulation (pure numpy; timed so the
     # stats show what the tracking itself costs).
     t_dirty = time.perf_counter()
+    dab_work_rects = None
     if (s.tri_screen_bboxes is not None and s.tri_uv_bboxes is not None
             and queue):
         rect = dab_rect_union(queue, radius)
         bb = dirty_uv_bbox(s.tri_screen_bboxes, s.tri_unprojectable,
                            s.tri_uv_bboxes, rect)
         s.stroke_dirty = union_bbox(s.stroke_dirty, bb)
+        mode = s.settings.get("brush_mode", "PAINT")
+        sample_pad = (1.0 if mode == "SOFTEN" else
+                      radius * 0.35 if mode == "SMEAR" else 0.0)
+        dab_work_rects = dab_dirty_pixel_rects(
+            s.tri_screen_bboxes, s.tri_unprojectable, s.tri_uv_bboxes,
+            queue, radius, s.size, sample_pad)
     elif queue:
         s.stroke_dirty_full = True   # no projection cache: full read
     s.dirty_ms += time.perf_counter() - t_dirty
@@ -3368,13 +3391,13 @@ def _flush_dabs(s, region):
 
     if s.settings.get("brush_mode", "PAINT") == "SOFTEN":
         _flush_soften_dabs(s, region, queue, radius, hardness, occlusion,
-                           stamp, stencil_tex, use_stencil)
+                           stamp, stencil_tex, use_stencil, dab_work_rects)
         s.dab_count += len(queue)
         s.last_dab_t = time.perf_counter()
         return
     if s.settings.get("brush_mode", "PAINT") == "SMEAR":
         _flush_smear_dabs(s, region, queue, radius, hardness, occlusion,
-                          stamp, stencil_tex, use_stencil)
+                          stamp, stencil_tex, use_stencil, dab_work_rects)
         s.dab_count += len(queue)
         s.last_dab_t = time.perf_counter()
         return
@@ -3466,7 +3489,7 @@ def _flush_dabs(s, region):
 
 
 def _flush_soften_dabs(s, region, queue, radius, hardness, occlusion, stamp,
-                       stencil_tex, use_stencil):
+                       stencil_tex, use_stencil, dirty_rects=None):
     """Blur enabled resident targets without sampling a render attachment.
 
     Each dab copies a target into the spare texture, overwrites only covered
@@ -3483,7 +3506,11 @@ def _flush_soften_dabs(s, region, queue, radius, hardness, occlusion, stamp,
     stencil_scale = tuple(s.settings.get("stencil_scale", (0.35, 0.35)))
     stencil_opacity = float(s.settings.get("stencil_opacity", 1.0))
     stencil_rotation = float(s.settings.get("stencil_rotation", 0.0))
-    for x, y, pressure in queue:
+    work_rects = (dirty_rects if dirty_rects is not None else
+                  ((0, 0, s.size, s.size),) * len(queue))
+    for (x, y, pressure), work_rect in zip(queue, work_rects):
+        if work_rect is None:
+            continue
         dab_radius, dab_opacity = (stamp.values_at_pressure(pressure)
                                    if stamp is not None
                                    else (radius, pressure))
@@ -3511,35 +3538,33 @@ def _flush_soften_dabs(s, region, queue, radius, hardness, occlusion, stamp,
                 continue
             source = s.paint_texs[index]
             target = s.soften_scratch
-            target_fb = gpu.types.GPUFrameBuffer(color_slots=(target,))
             s.history_backend._draw_copy(
-                source, target_fb, (0, 0, s.size, s.size),
-                (0.0, 0.0), (1.0, 1.0))
-            with target_fb.bind():
-                target_fb.viewport_set(0, 0, s.size, s.size)
+                source, s.soften_scratch_fb, work_rect,
+                (work_rect[0] / s.size, work_rect[1] / s.size),
+                (work_rect[2] / s.size, work_rect[3] / s.size))
+            with s.single_fbs[index].bind():
+                s.single_fbs[index].viewport_set(0, 0, s.size, s.size)
                 gpu.state.blend_set('NONE')
                 gpu.state.depth_test_set('NONE')
                 gpu.state.depth_mask_set(False)
                 gpu.state.face_culling_set('NONE')
-                sh.bind()
-                sh.uniform_block(DAB_UBO_NAME, ubo)
-                sh.uniform_sampler("scene_depth_tex", s.depth_color_tex)
-                sh.uniform_sampler("stencil_tex", stencil_tex if use_stencil
-                                   else s.depth_color_tex)
-                sh.uniform_sampler("source_tex", source)
-                s.batch_soften.draw(sh)
-            s.paint_texs[index] = target
-            s.soften_scratch = source
-        # Swaps invalidate every framebuffer attachment wrapper.
-        s.single_fbs = [gpu.types.GPUFrameBuffer(color_slots=(tex,))
-                        for tex in s.paint_texs]
-        s.paint_fbs = [gpu.types.GPUFrameBuffer(
-            color_slots=tuple(s.paint_texs[i] for i in indices))
-            for _blend, indices in s.target_batches]
+                gpu.state.scissor_set(*work_rect)
+                gpu.state.scissor_test_set(True)
+                try:
+                    sh.bind()
+                    sh.uniform_block(DAB_UBO_NAME, ubo)
+                    sh.uniform_sampler("scene_depth_tex", s.depth_color_tex)
+                    sh.uniform_sampler(
+                        "stencil_tex",
+                        stencil_tex if use_stencil else s.depth_color_tex)
+                    sh.uniform_sampler("source_tex", target)
+                    s.batch_soften.draw(sh)
+                finally:
+                    gpu.state.scissor_test_set(False)
 
 
 def _flush_smear_dabs(s, region, queue, radius, hardness, occlusion, stamp,
-                      stencil_tex, use_stencil):
+                      stencil_tex, use_stencil, dirty_rects=None):
     """Transport resident pixels in stroke direction without readback.
 
     This first usable version maps screen direction onto texture axes. It is
@@ -3550,8 +3575,13 @@ def _flush_smear_dabs(s, region, queue, radius, hardness, occlusion, stamp,
     data = s.soften_ubo_data
     ubo = s.soften_ubo
     previous = s.smear_last_point
-    for x, y, pressure in queue:
+    work_rects = (dirty_rects if dirty_rects is not None else
+                  ((0, 0, s.size, s.size),) * len(queue))
+    for (x, y, pressure), work_rect in zip(queue, work_rects):
         if previous is None:
+            previous = (x, y)
+            continue
+        if work_rect is None:
             previous = (x, y)
             continue
         dx, dy = float(x - previous[0]), float(y - previous[1])
@@ -3586,31 +3616,33 @@ def _flush_smear_dabs(s, region, queue, radius, hardness, occlusion, stamp,
                     or channel_keys[index] not in target_keys):
                 continue
             source, target = s.paint_texs[index], s.soften_scratch
-            target_fb = gpu.types.GPUFrameBuffer(color_slots=(target,))
-            s.history_backend._draw_copy(source, target_fb,
-                                         (0, 0, s.size, s.size),
-                                         (0.0, 0.0), (1.0, 1.0))
-            with target_fb.bind():
-                target_fb.viewport_set(0, 0, s.size, s.size)
+            s.history_backend._draw_copy(source, s.soften_scratch_fb,
+                                         work_rect,
+                                         (work_rect[0] / s.size,
+                                          work_rect[1] / s.size),
+                                         (work_rect[2] / s.size,
+                                          work_rect[3] / s.size))
+            with s.single_fbs[index].bind():
+                s.single_fbs[index].viewport_set(0, 0, s.size, s.size)
                 gpu.state.blend_set('NONE')
                 gpu.state.depth_test_set('NONE')
                 gpu.state.depth_mask_set(False)
                 gpu.state.face_culling_set('NONE')
-                sh.bind()
-                sh.uniform_block(DAB_UBO_NAME, ubo)
-                sh.uniform_sampler("scene_depth_tex", s.depth_color_tex)
-                sh.uniform_sampler("stencil_tex", stencil_tex if use_stencil
-                                   else s.depth_color_tex)
-                sh.uniform_sampler("source_tex", source)
-                s.batch_smear.draw(sh)
-            s.paint_texs[index], s.soften_scratch = target, source
+                gpu.state.scissor_set(*work_rect)
+                gpu.state.scissor_test_set(True)
+                try:
+                    sh.bind()
+                    sh.uniform_block(DAB_UBO_NAME, ubo)
+                    sh.uniform_sampler("scene_depth_tex", s.depth_color_tex)
+                    sh.uniform_sampler(
+                        "stencil_tex",
+                        stencil_tex if use_stencil else s.depth_color_tex)
+                    sh.uniform_sampler("source_tex", target)
+                    s.batch_smear.draw(sh)
+                finally:
+                    gpu.state.scissor_test_set(False)
         previous = (x, y)
     s.smear_last_point = previous
-    s.single_fbs = [gpu.types.GPUFrameBuffer(color_slots=(tex,))
-                    for tex in s.paint_texs]
-    s.paint_fbs = [gpu.types.GPUFrameBuffer(
-        color_slots=tuple(s.paint_texs[i] for i in indices))
-        for _blend, indices in s.target_batches]
 
 
 # ---------------------------------------------------------------------------
@@ -3621,9 +3653,13 @@ def _flush_smear_dabs(s, region, queue, radius, hardness, occlusion, stamp,
 def _stroke_stats(s):
     """Cheap GPU-submission statistics; never forces GPU completion."""
     stats = {
+        "mode": s.settings.get("brush_mode", "PAINT"),
         "size": s.size,
         "dabs": s.dab_count,
         "channels": s.channels,
+        "target_channels": len(set(s.settings.get(
+            "brush_target_channel_keys",
+            s.settings.get("channel_keys", ())))),
         "prepass_ms": s.prepass_ms,
         "dirty_ms": s.dirty_ms * 1000.0,
         "deferred": 1,

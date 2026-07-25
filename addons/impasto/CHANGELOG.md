@@ -4,6 +4,15 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.14.4
+
+- Soften and Smear now copy only conservative, padded per-dab UV regions and
+  render them back through a GPU scissor instead of copying whole textures.
+- Reused one persistent scratch framebuffer and removed per-dab texture swaps
+  and framebuffer reconstruction.
+- Added exact 4K memory/copy estimates, a stable 1/4/8-channel benchmark
+  matrix, and brush mode/target count in stroke telemetry.
+
 ## 0.14.3
 
 - Removed the redundant Lit PBR depth-texture comparison that could reject thin

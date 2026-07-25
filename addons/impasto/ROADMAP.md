@@ -1,15 +1,12 @@
 # Impasto roadmap
 
-This is the authoritative list of open work for Impasto 0.14.3. Shipped work
+This is the authoritative list of open work for Impasto 0.14.4. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Near-term
 
 - Implement production layer masks: paintable mask canvases, visibility and
   invert controls, predictable layer/channel scope, and mask-aware export.
-- Optimize Soften and Smear with dirty-region copies. Their current full
-  texture copy per selected channel per dab is unsuitable for 8K and can be
-  expensive at 4K.
 - Interactively benchmark Paint, Erase, Soften, and Smear at 4K with 1, 4, and
   8 channels. Treat 8K as experimental until latency, synchronization, undo,
   and memory behavior have been measured. See
