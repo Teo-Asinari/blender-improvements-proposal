@@ -1559,8 +1559,12 @@ class IMPASTO_OT_gpu_material_inspect_toggle(bpy.types.Operator):
     def execute(self, context):
         if (gpu_engine.material_inspect_active()
                 or gpu_engine.material_inspect_requested()):
-            gpu_engine.leave_material_inspect()
-            message = "Resident GPU preview resumed"
+            if gpu_engine.leave_material_inspect():
+                message = "Resident GPU preview resumed"
+            else:
+                message = ("Blender material inspection retained: this "
+                           "stack cannot be represented safely by resident "
+                           "preview")
         elif not gpu_engine.request_material_inspect():
             return {'CANCELLED'}
         else:

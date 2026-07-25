@@ -43,7 +43,7 @@ default `0.1 m` voxel size from triggering a prohibitively expensive operation
 without review. A viewport guide draws grid slices and voxel-sized samples at
 all eight bounding-box corners so scale can be judged visually.
 
-### [Impasto](addons/impasto/) — v0.14.4 (active development)
+### [Impasto](addons/impasto/) — v0.14.5 (active development)
 
 A non-destructive Principled-PBR layer stack with Fill, Paint, and pass-through
 Group layers. One logical Paint layer can own separate Base Color, Metallic,
@@ -93,9 +93,11 @@ Rebuild automatically discovers a material-level `Kiln Bake Target` image and
 imports it as the bottom normal layer; the explicit Base Normal picker remains
 the authoritative preview-only manual override.
 Flatten/Export to combined per-channel Blender Images is implemented. Paint,
-Soften, Smear, and Erase have independent per-channel target controls. Mixed
-UVs, production image masks, participating upper layers, arbitrary Blender
-brush textures, and specialized brush parity remain future work. Ctrl-S
+Soften, Smear, and Erase have independent per-channel target controls.
+Same-UV visible layers on channels not owned by an intermediate active layer
+remain composed in Lit PBR. Mixed UVs, production image masks, same-channel
+upper post-composition, arbitrary Blender brush textures, and specialized
+brush parity remain future work. Ctrl-S
 safely flushes before saving; menu-driven
 save/export should be preceded by **Flush for Save / Export**.
 

@@ -1,6 +1,6 @@
 # Impasto
 
-Impasto 0.14.4 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
+Impasto 0.14.5 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
 painting. It stores material work as ordered Paint and Fill layers, compiles
 the stack into a Principled BSDF material, and provides a GPU-resident painting
 session with immediate material feedback.
@@ -137,11 +137,11 @@ The resident preview offers:
 - **Height Grayscale** for inspecting the height canvas.
 
 Lit PBR uses Impasto's own configurable studio lighting. It is not Blender
-Material Preview. For common same-UV stacks with the active layer on top, it
-can include eligible lower Paint/Fill layers. Upper participating layers,
-mixed UV layouts, image masks, and other unsupported stack structures may fall
-back to an active-layer-only preview. Use **Inspect Material** when Blender's
-actual shader evaluation is required.
+Material Preview. Same-UV visible layers remain composed when an intermediate
+active layer does not own their channels; brushes still write only to the
+active layer. Mixed UV layouts, image masks, and upper layers affecting a
+resident-painted channel automatically retain authoritative Blender material
+inspection rather than displaying a misleading active-only preview.
 
 The preview-only **Base Normal Map** picker can display an existing tangent
 normal image while painting. This manual fallback has been user-validated and

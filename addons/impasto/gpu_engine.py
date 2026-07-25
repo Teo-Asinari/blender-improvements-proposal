@@ -1512,7 +1512,8 @@ def resident_stack_runtime_spec(stack_model, active_uid):
     active = next(layer for layer in stack_model.layers
                   if layer.uid == active_uid)
     by_uid = {layer.uid: layer for layer in stack_model.layers}
-    relevant_uids = set(plan.lower_layer_uids) | {active_uid}
+    relevant_uids = (set(plan.lower_layer_uids)
+                     | set(plan.upper_layer_uids) | {active_uid})
     has_image_masks = any(
         mask.visible and mask.image_name
         for layer in stack_model.layers if layer.uid in relevant_uids
@@ -1520,20 +1521,41 @@ def resident_stack_runtime_spec(stack_model, active_uid):
     if has_image_masks:
         return {"enabled": False,
                 "status": "fallback: image masks require material preview",
-                "channels": {}, "plan": plan}
-    scope = preview_stack.assess_lower_baseline_scope(plan)
-    if not scope.supported:
+                "channels": {}, "plan": plan,
+                "safe_fallback": "MATERIAL_INSPECT"}
+    if not plan.single_uv_fast_path:
         return {"enabled": False,
-                "status": "fallback: %s" % "; ".join(scope.reasons),
-                "channels": {}, "plan": plan}
+                "status": ("fallback: participating layers do not share one "
+                           "resolved UV map"),
+                "channels": {}, "plan": plan,
+                "safe_fallback": "MATERIAL_INSPECT"}
 
     channels = {}
     composition = tuple(reversed(stack_model.layers))
     active_i = composition.index(active)
     for key in GPU_PAINT_CHANNEL_KEYS:
         channel = model.CHANNEL_MAP[key]
+        active_binding = next(
+            (b for b in active.bindings if b.key == key), None)
+        active_spec = None
+        if (active_binding is not None and active_binding.enabled
+                and active.visible
+                and all(g.visible for g in model._ancestors(
+                    stack_model, active))):
+            active_spec = {
+                "factor": model.const_factor(
+                    stack_model, active, active_binding),
+                "blend": model.effective_blend(active, active_binding),
+                "use_alpha": True,
+            }
+        # Sparse active layers do not interrupt unrelated channels. Those
+        # channels are wholly static and can include every visible layer.
+        static_layers = (composition if active_spec is None
+                         else composition[:active_i])
         steps = []
-        for layer in composition[:active_i]:
+        for layer in static_layers:
+            if layer.uid == active_uid:
+                continue
             binding = next((b for b in layer.bindings if b.key == key), None)
             if (binding is None or layer.layer_type == "GROUP"
                     or not binding.enabled or not layer.visible
@@ -1570,24 +1592,31 @@ def resident_stack_runtime_spec(stack_model, active_uid):
                 "factor": model.const_factor(stack_model, layer, binding),
                 "blend": model.effective_blend(layer, binding),
             })
-        active_binding = next(
-            (b for b in active.bindings if b.key == key), None)
-        active_spec = None
-        if active_binding is not None and active_binding.enabled:
-            active_spec = {
-                "factor": model.const_factor(
-                    stack_model, active, active_binding),
-                "blend": model.effective_blend(active, active_binding),
-                # Resident alpha is the live stroke coverage and is applied
-                # exactly once in the preview shader.
-                "use_alpha": True,
-            }
         channels[key] = {
             "seed": model.seed_native(channel),
             "lower_steps": tuple(steps),
             "active": active_spec,
         }
-    status = "resolved: same-UV lower stack + active"
+    unsupported = []
+    for layer in composition[active_i + 1:]:
+        if (not layer.visible or layer.layer_type == "GROUP"
+                or any(not g.visible for g in model._ancestors(
+                    stack_model, layer))):
+            continue
+        for binding in layer.bindings:
+            if (binding.enabled and binding.key in channels
+                    and channels[binding.key]["active"] is not None):
+                unsupported.append((layer.uid, binding.key))
+    if unsupported:
+        return {
+            "enabled": False,
+            "status": ("fallback: upper layers affect resident channels "
+                       "(live post-pass required)"),
+            "channels": channels, "plan": plan,
+            "safe_fallback": "MATERIAL_INSPECT",
+            "unsupported_upper": tuple(unsupported),
+        }
+    status = "resolved: same-UV full visible stack + active isolation"
     return {"enabled": True, "status": status, "channels": channels,
             "plan": plan}
 
@@ -2015,6 +2044,13 @@ def preview_runtime_stats():
     }
 
 
+def stack_preview_requires_material_inspect(stack_spec):
+    """Whether resident composition cannot represent the material safely."""
+    return bool(stack_spec
+                and not stack_spec.get("enabled", False)
+                and stack_spec.get("safe_fallback") == "MATERIAL_INSPECT")
+
+
 def set_input_paused(paused):
     """Pause viewport dab capture without ending or synchronizing a session."""
     if _session is None:
@@ -2058,6 +2094,14 @@ def complete_material_inspect():
 
 def leave_material_inspect():
     if _session is None:
+        return False
+    if stack_preview_requires_material_inspect(_session.stack_spec):
+        # There is no truthful resident overlay for this topology. Keep the
+        # authoritative Blender material visible rather than exposing the
+        # active layer as though it were the complete stack.
+        _session.settings["material_inspect_requested"] = False
+        _session.settings["material_inspect"] = True
+        _session.settings["input_paused"] = True
         return False
     if (_session.settings.get("material_inspect_requested", False)
             and not _session.flush_in_flight
@@ -2108,8 +2152,9 @@ def start_session(obj, images, region, channels=None, payloads=None,
             s.settings.get("active_layer_uid", ""))
     s.settings["preview_mode"] = normalize_preview_mode(
         s.settings.get("preview_mode"))
-    s.settings["input_paused"] = False
-    s.settings["material_inspect"] = False
+    safe_inspect = stack_preview_requires_material_inspect(s.stack_spec)
+    s.settings["input_paused"] = safe_inspect
+    s.settings["material_inspect"] = safe_inspect
     s.settings["material_inspect_requested"] = False
     s.coords = coords
     s.uvs = uvs

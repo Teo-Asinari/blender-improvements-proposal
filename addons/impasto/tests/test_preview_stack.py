@@ -134,6 +134,73 @@ check("resident Kiln baseline ignores non-authoritative bake alpha",
       not runtime["channels"]["normal"]["lower_steps"][0]["source"]
       ["use_alpha"])
 
+unsafe_runtime = gpu_engine.resident_stack_runtime_spec(stack, "active")
+check("mixed-UV/nonlinear upper stacks require authoritative inspection",
+      not unsafe_runtime["enabled"]
+      and unsafe_runtime["safe_fallback"] == "MATERIAL_INSPECT"
+      and gpu_engine.stack_preview_requires_material_inspect(unsafe_runtime),
+      repr(unsafe_runtime))
+check("ordinary supported resident stacks do not force inspection",
+      not gpu_engine.stack_preview_requires_material_inspect(runtime))
+
+# Regression: selecting an intermediate emission-only Paint layer must not
+# turn Lit PBR into an active-layer solo preview.  Visible material channels
+# below and above remain part of the resolved stack, while only channels
+# actually bound to the active layer may source resident paint.
+emission_active = layer("emission_active", "PAINT", [
+    binding("emission_color", image="Resident Emission Color"),
+    binding("emission_strength", image="Resident Emission Strength"),
+], uv_map="UV_A")
+upper_surface = layer("upper_surface", "FILL", [
+    binding("roughness", mode="VALUE", value=0.2),
+], opacity=0.5, uv_map="UV_A")
+lower_surface = layer("lower_surface", "FILL", [
+    binding("base_color", mode="COLOR", color=(0.1, 0.2, 0.3, 1.0)),
+    binding("roughness", mode="VALUE", value=0.8),
+], uv_map="UV_A")
+emission_middle_stack = model.StackModel(
+    "Emission middle",
+    ("base_color", "roughness", "emission_color", "emission_strength"),
+    (upper_surface, emission_active, lower_surface))
+emission_middle_plan = preview_stack.plan_resident_preview(
+    emission_middle_stack, "emission_active")
+check("emission-only intermediate active keeps visible layers on both sides",
+      emission_middle_plan.lower_layer_uids == ("lower_surface",)
+      and emission_middle_plan.upper_layer_uids == ("upper_surface",),
+      repr(emission_middle_plan))
+emission_middle_runtime = gpu_engine.resident_stack_runtime_spec(
+    emission_middle_stack, "emission_active")
+check("same-UV intermediate emission-only stack has resident preview",
+      emission_middle_runtime["enabled"],
+      emission_middle_runtime["status"])
+if emission_middle_runtime["enabled"]:
+    check("preview participation does not create active brush ownership",
+          emission_middle_runtime["channels"]["base_color"]["active"] is None
+          and emission_middle_runtime["channels"]["roughness"]["active"] is None
+          and emission_middle_runtime["channels"]["emission_color"]["active"]
+          is not None
+          and emission_middle_runtime["channels"]["emission_strength"]["active"]
+          is not None)
+
+emission_samples = {
+    "Resident Emission Color":
+        preview_stack.PixelSample((0.9, 0.1, 0.0, 1.0), 1.0),
+    "Resident Emission Strength": preview_stack.PixelSample(4.0, 1.0),
+}
+emission_resident = {"emission_active": {
+    "emission_color":
+        preview_stack.PixelSample((0.9, 0.1, 0.0, 1.0), 1.0),
+    "emission_strength": preview_stack.PixelSample(4.0, 1.0),
+}}
+check("lower Base remains visible under emission-only active layer",
+      preview_stack.compose_channel_pixel(
+          emission_middle_stack, "base_color", emission_samples,
+          emission_resident) == (0.1, 0.2, 0.3, 1.0))
+check("upper Roughness remains visible over emission-only active layer",
+      abs(preview_stack.compose_channel_pixel(
+          emission_middle_stack, "roughness", emission_samples,
+          emission_resident) - 0.5) < 1e-12)
+
 preview_src = gpu_engine.PREVIEW_FRAG_SRC
 check("resolved active alpha is applied exactly once",
       "active_factor * source.a" in preview_src

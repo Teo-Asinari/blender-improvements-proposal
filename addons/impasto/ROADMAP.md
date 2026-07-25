@@ -1,6 +1,6 @@
 # Impasto roadmap
 
-This is the authoritative list of open work for Impasto 0.14.4. Shipped work
+This is the authoritative list of open work for Impasto 0.14.5. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Near-term
@@ -23,8 +23,8 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Architecture and compatibility
 
-- Expand resident full-stack preview beyond the common same-UV arrangement,
-  including participating upper layers and mixed UV layouts.
+- Add live post-composition for upper layers affecting an actively painted
+  channel, then expand resident preview to mixed UV layouts and image masks.
 - Continue decomposing `gpu_engine.py` and `ops.py` compatibility facades into
   focused, regression-guarded modules.
 - Continue qualification across supported GPU backends and drivers.

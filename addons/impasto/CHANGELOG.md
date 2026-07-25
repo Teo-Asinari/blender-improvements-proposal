@@ -4,6 +4,15 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.14.5
+
+- Fixed intermediate sparse layers—such as emission-only Paint layers—so
+  unrelated visible channels above and below remain composed in Lit PBR.
+- Kept brush ownership isolated to channels on the active layer.
+- Unsupported mixed-UV, masked, or same-channel upper compositions now retain
+  authoritative Blender material inspection instead of showing active-only
+  preview data as though it were the complete stack.
+
 ## 0.14.4
 
 - Soften and Smear now copy only conservative, padded per-dab UV regions and
