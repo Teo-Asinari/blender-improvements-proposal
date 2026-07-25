@@ -4,6 +4,13 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.4
+
+- Kept every visible active-layer channel in Lit PBR even when its brush
+  target is disabled; brush targeting continues to control writes only.
+- Made the complete preview mesh write depth during its draw so front
+  triangles reject nearly coincident rear geometry.
+
 ## 0.15.3
 
 - Fixed a misplaced initialization that suspended the Lit PBR draw callback

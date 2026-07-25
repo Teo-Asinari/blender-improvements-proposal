@@ -1641,6 +1641,7 @@ def resident_stack_runtime_spec(stack_model, active_uid):
                     stack_model, active, active_binding),
                 "blend": model.effective_blend(active, active_binding),
                 "use_alpha": True,
+                "image_name": model.binding_image(active, active_binding),
             }
         # Sparse active layers do not interrupt unrelated channels. Those
         # channels are wholly static and can include every visible layer.
@@ -1925,6 +1926,8 @@ class _Session:
         self.baseline_texs = {}
         self.baseline_values = {}
         self.baseline_gpu_refs = []
+        self.active_preview_texs = {}
+        self.active_preview_gpu_refs = []
         self.baseline_build_ms = 0.0
         self.environment_build_ms = 0.0
         self.preview_submit_ms = 0.0
@@ -2350,12 +2353,14 @@ def _release_gpu_references(s):
         "single_fbs", "environment_tex", "base_normal_tex",
         "base_normal_gpu_ref", "stencil_tex", "stencil_preview_shader",
         "baseline_shader", "baseline_batch", "baseline_texs",
-        "baseline_gpu_refs", "overlay_circle_batch", "overlay_color_shader",
+        "baseline_gpu_refs", "active_preview_texs",
+        "active_preview_gpu_refs", "overlay_circle_batch",
+        "overlay_color_shader",
     )
     for name in names:
-        if name == "baseline_texs":
+        if name in {"baseline_texs", "active_preview_texs"}:
             setattr(s, name, {})
-        elif name == "baseline_gpu_refs":
+        elif name in {"baseline_gpu_refs", "active_preview_gpu_refs"}:
             setattr(s, name, [])
         else:
             setattr(s, name, None)
@@ -2892,6 +2897,7 @@ def _ensure_gpu(s):
             "uv": [(0.0, 0.0), (1.0, 0.0),
                    (1.0, 1.0), (0.0, 1.0)]})
     _build_stack_baselines(s)
+    _build_active_preview_textures(s)
     _ensure_base_normal_texture(s)
     s.history_backend = _GPUTileBackend(s)
     s.gpu_ready = True
@@ -3050,6 +3056,32 @@ def _build_stack_baselines(s):
         spec["enabled"] = False
         spec["status"] = "fallback: lower baseline build failed: %s" % exc
         traceback.print_exc()
+
+
+def _build_active_preview_textures(s):
+    """Upload visible active-layer channels that are not writable targets.
+
+    Brush targeting controls writes, not visibility. Resident writable
+    channels already live in ``paint_texs``; the remaining active-layer
+    images are read-only preview inputs.
+    """
+    s.active_preview_texs.clear()
+    s.active_preview_gpu_refs.clear()
+    spec = s.stack_spec
+    if not spec or not spec.get("enabled"):
+        return
+    writable = set(s.settings.get("channel_keys", ()))
+    for key, channel in spec["channels"].items():
+        active = channel.get("active") or {}
+        image_name = active.get("image_name")
+        if key in writable or not image_name:
+            continue
+        image = bpy.data.images.get(image_name)
+        if image is None:
+            continue
+        tex = gpu.texture.from_image(image)
+        s.active_preview_texs[key] = tex
+        s.active_preview_gpu_refs.append(tex)
 
 
 def _ensure_base_normal_texture(s):
@@ -4144,7 +4176,8 @@ def _draw_composed_preview(s):
         channel_spec = (s.stack_spec.get("channels", {}).get(key, {})
                         if resolved else {})
         active_spec = channel_spec.get("active") or {}
-        active = key in by_key and bool(active_spec or not resolved)
+        active_tex = by_key.get(key) or s.active_preview_texs.get(key)
+        active = bool(active_tex) and bool(active_spec or not resolved)
         baseline_value = (s.baseline_values.get(key)
                           or _vec4(channel_spec.get(
                               "seed", model.seed_native(
@@ -4179,7 +4212,7 @@ def _draw_composed_preview(s):
             })
             shader.uniform_sampler("upper_" + key + "_tex", upper_tex)
         preview_records[key] = record
-        shader.uniform_sampler(key + "_tex", by_key.get(key, fallback))
+        shader.uniform_sampler(key + "_tex", active_tex or fallback)
         shader.uniform_sampler("baseline_" + key + "_tex",
                                baseline_tex or fallback)
     pack_preview_ubo(preview_records, preview_globals, s.preview_ubo_data)
@@ -4191,7 +4224,11 @@ def _draw_composed_preview(s):
     shader.uniform_sampler("base_normal_tex", s.base_normal_tex or fallback)
     gpu.state.blend_set('ALPHA')
     gpu.state.depth_test_set('LESS_EQUAL')
-    gpu.state.depth_mask_set(False)
+    # The preview is a second draw of the complete mesh. It must write depth
+    # while drawing so its front triangles reject its own nearly coincident
+    # rear triangles; testing only against Blender's earlier mesh depth lets
+    # every bias-shifted shell pass independently.
+    gpu.state.depth_mask_set(True)
     gpu.state.face_culling_set('BACK')
     s.batch_preview.draw(shader)
     elapsed = (time.perf_counter() - t0) * 1000.0

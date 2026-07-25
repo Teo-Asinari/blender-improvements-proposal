@@ -138,6 +138,9 @@ check("runtime preserves Kiln as baseline-only Normal channel",
 check("resident Kiln baseline ignores non-authoritative bake alpha",
       not runtime["channels"]["normal"]["lower_steps"][0]["source"]
       ["use_alpha"])
+check("active bindings retain images independently of brush targets",
+      runtime["channels"]["base_color"]["active"]["image_name"]
+      == "Resident Base")
 
 unsafe_runtime = gpu_engine.resident_stack_runtime_spec(stack, "active")
 check("mixed-UV/nonlinear upper stacks require authoritative inspection",
@@ -258,6 +261,10 @@ check("resolved channels remain enabled without active paint targets",
       '"has": 1.0 if (resolved or active or (' in draw_src
       and 'key == "normal" and base_normal_enabled)) else 0.0'
       in draw_src)
+check("preview samples read-only active channels without granting writes",
+      "s.active_preview_texs.get(key)" in draw_src)
+check("preview self-occludes nearly coincident rear geometry",
+      "gpu.state.depth_mask_set(True)" in draw_src)
 baseline_build_src = __import__("inspect").getsource(
     gpu_engine._build_stack_baselines)
 check("opaque lower images preserve raw RGB despite bake alpha",
