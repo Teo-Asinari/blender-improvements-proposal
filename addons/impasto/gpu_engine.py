@@ -178,12 +178,12 @@ struct ImpastoDabParams {
 PREVIEW_UBO_NAME = "preview_params"
 PREVIEW_UBO_SLOT = 1
 PREVIEW_UBO_CHANNEL_BASE = 13
-PREVIEW_UBO_STRIDE = 7
+PREVIEW_UBO_STRIDE = 6
 PREVIEW_UBO_VEC4_COUNT = (
     PREVIEW_UBO_CHANNEL_BASE + 10 * PREVIEW_UBO_STRIDE)
 PREVIEW_UBO_TYPEDEF = """
 struct ImpastoPreviewParams {
-    vec4 values[83];
+    vec4 values[73];
 };
 """
 
@@ -215,9 +215,6 @@ def _preview_ubo_aliases():
             "#define upper_%s_present preview_params.values[%d].x" % (name, n + 5),
             "#define upper_%s_factor preview_params.values[%d].y" % (name, n + 5),
             "#define upper_%s_blend int(preview_params.values[%d].z)" % (name, n + 5),
-            "#define upper2_%s_present preview_params.values[%d].x" % (name, n + 6),
-            "#define upper2_%s_factor preview_params.values[%d].y" % (name, n + 6),
-            "#define upper2_%s_blend int(preview_params.values[%d].z)" % (name, n + 6),
         ))
     return "\n".join(lines) + "\n"
 
@@ -694,6 +691,14 @@ vec3 aces_fitted(vec3 color)
                  (color * (2.43 * color + 0.59) + 0.14), 0.0, 1.0);
 }
 
+vec4 apply_upper_transform(vec4 value, sampler2D coefficients)
+{
+    vec4 transform = texture(coefficients, uvInterp);
+    value.rgb = transform.a * value.rgb + transform.rgb;
+    value.a = 1.0;
+    return value;
+}
+
 void main()
 {
     vec4 base = resolve_stack_channel(
@@ -738,76 +743,32 @@ void main()
         sss_scale_tex, baseline_sss_scale_tex, baseline_sss_scale_value,
         baseline_sss_scale_is_texture, active_sss_scale,
         active_sss_scale_factor, active_sss_scale_blend, 0.0);
-    base = upper_base_color_c * base + upper_base_color_d;
-    metal_sample = upper_metallic_c * metal_sample + upper_metallic_d;
-    rough_sample = upper_roughness_c * rough_sample + upper_roughness_d;
-    height_sample = upper_height_c * height_sample + upper_height_d;
-    emission_color_sample = upper_emission_color_c * emission_color_sample
-                            + upper_emission_color_d;
-    emission_strength_sample = upper_emission_strength_c
-                               * emission_strength_sample
-                               + upper_emission_strength_d;
-    sss_weight_sample = upper_sss_weight_c * sss_weight_sample
-                        + upper_sss_weight_d;
-    sss_radius_sample = upper_sss_radius_c * sss_radius_sample
-                        + upper_sss_radius_d;
-    sss_scale_sample = upper_sss_scale_c * sss_scale_sample
-                       + upper_sss_scale_d;
-    if (upper_base_color_present > 0.5) {
-        vec4 u = straight_sample(upper_base_color_tex, uvInterp);
-        u.rgb = srgb_to_linear(u.rgb);
-        base = stack_blend(base, u, upper_base_color_factor * u.a,
-                           upper_base_color_blend);
-    }
-    if (upper2_base_color_present > 0.5) {
-        vec4 u = straight_sample(upper2_base_color_tex, uvInterp);
-        u.rgb = srgb_to_linear(u.rgb);
-        base = stack_blend(base, u, upper2_base_color_factor * u.a,
-                           upper2_base_color_blend);
-    }
-    if (upper_metallic_present > 0.5) {
-        vec4 u = straight_sample(upper_metallic_tex, uvInterp);
-        metal_sample = stack_blend(metal_sample, u,
-            upper_metallic_factor * u.a, upper_metallic_blend);
-    }
-    if (upper_roughness_present > 0.5) {
-        vec4 u = straight_sample(upper_roughness_tex, uvInterp);
-        rough_sample = stack_blend(rough_sample, u,
-            upper_roughness_factor * u.a, upper_roughness_blend);
-    }
-    if (upper_height_present > 0.5) {
-        vec4 u = straight_sample(upper_height_tex, uvInterp);
-        height_sample = stack_blend(height_sample, u,
-            upper_height_factor * u.a, upper_height_blend);
-    }
-    if (upper_emission_color_present > 0.5) {
-        vec4 u = straight_sample(upper_emission_color_tex, uvInterp);
-        u.rgb = srgb_to_linear(u.rgb);
-        emission_color_sample = stack_blend(emission_color_sample, u,
-            upper_emission_color_factor * u.a,
-            upper_emission_color_blend);
-    }
-    if (upper_emission_strength_present > 0.5) {
-        vec4 u = straight_sample(upper_emission_strength_tex, uvInterp);
-        emission_strength_sample = stack_blend(emission_strength_sample, u,
-            upper_emission_strength_factor * u.a,
-            upper_emission_strength_blend);
-    }
-    if (upper_sss_weight_present > 0.5) {
-        vec4 u = straight_sample(upper_sss_weight_tex, uvInterp);
-        sss_weight_sample = stack_blend(sss_weight_sample, u,
-            upper_sss_weight_factor * u.a, upper_sss_weight_blend);
-    }
-    if (upper_sss_radius_present > 0.5) {
-        vec4 u = straight_sample(upper_sss_radius_tex, uvInterp);
-        sss_radius_sample = stack_blend(sss_radius_sample, u,
-            upper_sss_radius_factor * u.a, upper_sss_radius_blend);
-    }
-    if (upper_sss_scale_present > 0.5) {
-        vec4 u = straight_sample(upper_sss_scale_tex, uvInterp);
-        sss_scale_sample = stack_blend(sss_scale_sample, u,
-            upper_sss_scale_factor * u.a, upper_sss_scale_blend);
-    }
+    if (upper_base_color_present > 0.5)
+        base = apply_upper_transform(base, upper_base_color_tex);
+    if (upper_metallic_present > 0.5)
+        metal_sample = apply_upper_transform(
+            metal_sample, upper_metallic_tex);
+    if (upper_roughness_present > 0.5)
+        rough_sample = apply_upper_transform(
+            rough_sample, upper_roughness_tex);
+    if (upper_height_present > 0.5)
+        height_sample = apply_upper_transform(
+            height_sample, upper_height_tex);
+    if (upper_emission_color_present > 0.5)
+        emission_color_sample = apply_upper_transform(
+            emission_color_sample, upper_emission_color_tex);
+    if (upper_emission_strength_present > 0.5)
+        emission_strength_sample = apply_upper_transform(
+            emission_strength_sample, upper_emission_strength_tex);
+    if (upper_sss_weight_present > 0.5)
+        sss_weight_sample = apply_upper_transform(
+            sss_weight_sample, upper_sss_weight_tex);
+    if (upper_sss_radius_present > 0.5)
+        sss_radius_sample = apply_upper_transform(
+            sss_radius_sample, upper_sss_radius_tex);
+    if (upper_sss_scale_present > 0.5)
+        sss_scale_sample = apply_upper_transform(
+            sss_scale_sample, upper_sss_scale_tex);
     if (preview_mode == 3) {
         float h = height_sample.r;
         fragColor = vec4(vec3(h), 1.0);
@@ -1039,6 +1000,36 @@ void main()
     fragColor = is_normal > 0.5
         ? vec4(rnm_blend(a.rgb, b.rgb, f), a.a)
         : blend_step(a, b, f, blend_mode);
+}
+"""
+
+UPPER_TRANSFORM_FRAG_SRC = """
+void main()
+{
+    vec4 a = texture(current_tex, uvInterp);
+    vec4 b = source_is_texture > 0.5
+        ? texture(source_tex, uvInterp) : source_value;
+    float f = clamp(factor * (source_uses_alpha > 0.5 ? b.a : 1.0),
+                    0.0, 1.0);
+    vec3 d = a.rgb;
+    float c = a.a;
+    if (blend_mode == 1) d += b.rgb * f;
+    else if (blend_mode == 2) d -= b.rgb * f;
+    else if (blend_mode == 3) {
+        float k = mix(1.0, b.r, f);
+        c *= k;
+        d *= k;
+    }
+    else if (blend_mode == 4) {
+        float add = b.r * f;
+        float k = 1.0 - add;
+        c *= k;
+        d = d * k + vec3(add);
+    } else {
+        c *= 1.0 - f;
+        d = d * (1.0 - f) + b.rgb * f;
+    }
+    fragColor = vec4(d, c);
 }
 """
 
@@ -1524,9 +1515,6 @@ def preview_shader_create_info():
     for index, name in enumerate(
             (key for key in GPU_PAINT_CHANNEL_KEYS if key != "normal"), 22):
         info.sampler(index, 'FLOAT_2D', "upper_" + name + "_tex")
-    # A second Base Color image covers the common material-stack topology
-    # without pushing the preview beyond the portable 32-sampler budget.
-    info.sampler(31, 'FLOAT_2D', "upper2_base_color_tex")
     info.vertex_in(0, 'VEC3', "pos")
     info.vertex_in(1, 'VEC2', "uv")
     info.vertex_in(2, 'VEC3', "normal")
@@ -1574,6 +1562,27 @@ def baseline_shader_create_info():
     info.fragment_out(0, 'VEC4', "fragColor")
     info.vertex_source(COPY_VERT_SRC)
     info.fragment_source(BASELINE_FRAG_SRC)
+    return info
+
+
+def upper_transform_shader_create_info():
+    iface = gpu.types.GPUStageInterfaceInfo("impasto_upper_transform_iface")
+    iface.smooth('VEC2', "uvInterp")
+    info = gpu.types.GPUShaderCreateInfo()
+    for kind, name in (('VEC2', "uv_origin"), ('VEC2', "uv_scale"),
+                       ('VEC4', "source_value")):
+        info.push_constant(kind, name)
+    for name in ("source_is_texture", "source_uses_alpha", "factor"):
+        info.push_constant('FLOAT', name)
+    info.push_constant('INT', "blend_mode")
+    info.sampler(0, 'FLOAT_2D', "current_tex")
+    info.sampler(1, 'FLOAT_2D', "source_tex")
+    info.vertex_in(0, 'VEC3', "pos")
+    info.vertex_in(1, 'VEC2', "uv")
+    info.vertex_out(iface)
+    info.fragment_out(0, 'VEC4', "fragColor")
+    info.vertex_source(COPY_VERT_SRC)
+    info.fragment_source(UPPER_TRANSFORM_FRAG_SRC)
     return info
 
 
@@ -1705,8 +1714,7 @@ def resident_stack_runtime_spec(stack_model, active_uid):
             "lower_steps": tuple(steps),
             "active": active_spec,
             "upper_affine": (_vec4(1.0), _vec4(0.0)),
-            "upper_image": None,
-            "upper_image_2": None,
+            "upper_steps": [],
         }
     unsupported = []
     for layer in composition[active_i + 1:]:
@@ -1724,26 +1732,22 @@ def resident_stack_runtime_spec(stack_model, active_uid):
                         key, blend):
                     unsupported.append((layer.uid, key))
                     continue
+                channel = model.CHANNEL_MAP[key]
+                if (blend in {"MULTIPLY", "SCREEN"}
+                        and channel.kind != "SCALAR"):
+                    unsupported.append((layer.uid, key))
+                    continue
                 if layer.layer_type == "PAINT" and image_name:
                     image_spec = {
+                        "kind": "IMAGE",
                         "image_name": image_name,
                         "factor": model.const_factor(
                             stack_model, layer, binding),
                         "blend": blend,
+                        "use_alpha": True,
                     }
-                    if channels[key]["upper_image"] is None:
-                        channels[key]["upper_image"] = image_spec
-                    elif (key == "base_color"
-                          and channels[key]["upper_image_2"] is None):
-                        channels[key]["upper_image_2"] = image_spec
-                    else:
-                        unsupported.append((layer.uid, key))
+                    channels[key]["upper_steps"].append(image_spec)
                     continue
-                if (channels[key]["upper_image"] is not None
-                        or channels[key]["upper_image_2"] is not None):
-                    unsupported.append((layer.uid, key))
-                    continue
-                channel = model.CHANNEL_MAP[key]
                 if binding.mode == "COLOR":
                     value = (float(binding.color[0])
                              if channel.kind == "SCALAR"
@@ -1756,6 +1760,9 @@ def resident_stack_runtime_spec(stack_model, active_uid):
                     unsupported.append((layer.uid, key))
                     continue
                 factor = model.const_factor(stack_model, layer, binding)
+                channels[key]["upper_steps"].append({
+                    "kind": "CONSTANT", "value": value,
+                    "factor": factor, "blend": blend})
                 old_c, old_d = channels[key]["upper_affine"]
                 c, d = preview_stack.affine_coefficients(
                     _vec4(value), factor, blend)
@@ -1942,6 +1949,10 @@ class _Session:
         self.baseline_texs = {}
         self.baseline_values = {}
         self.baseline_gpu_refs = []
+        self.upper_transform_shader = None
+        self.upper_transform_batch = None
+        self.upper_transform_texs = {}
+        self.upper_transform_gpu_refs = []
         self.active_preview_texs = {}
         self.active_preview_gpu_refs = []
         self.baseline_build_ms = 0.0
@@ -2370,13 +2381,17 @@ def _release_gpu_references(s):
         "base_normal_gpu_ref", "stencil_tex", "stencil_preview_shader",
         "baseline_shader", "baseline_batch", "baseline_texs",
         "baseline_gpu_refs", "active_preview_texs",
+        "upper_transform_shader", "upper_transform_batch",
+        "upper_transform_texs", "upper_transform_gpu_refs",
         "active_preview_gpu_refs", "overlay_circle_batch",
         "overlay_color_shader",
     )
     for name in names:
-        if name in {"baseline_texs", "active_preview_texs"}:
+        if name in {"baseline_texs", "active_preview_texs",
+                    "upper_transform_texs"}:
             setattr(s, name, {})
-        elif name in {"baseline_gpu_refs", "active_preview_gpu_refs"}:
+        elif name in {"baseline_gpu_refs", "active_preview_gpu_refs",
+                      "upper_transform_gpu_refs"}:
             setattr(s, name, [])
         else:
             setattr(s, name, None)
@@ -2810,6 +2825,8 @@ def _ensure_gpu(s):
     s.copy_shader = gpu.shader.create_from_info(copy_shader_create_info())
     s.baseline_shader = gpu.shader.create_from_info(
         baseline_shader_create_info())
+    s.upper_transform_shader = gpu.shader.create_from_info(
+        upper_transform_shader_create_info())
 
     # Blender does not expose Material Preview's prefiltered studio texture as
     # a public GPU handle. Upload Impasto's deterministic linear-HDR atlas;
@@ -2912,7 +2929,9 @@ def _ensure_gpu(s):
                     (1.0, 1.0, 0.0), (-1.0, 1.0, 0.0)],
             "uv": [(0.0, 0.0), (1.0, 0.0),
                    (1.0, 1.0), (0.0, 1.0)]})
+    s.upper_transform_batch = s.baseline_batch
     _build_stack_baselines(s)
+    _build_upper_transforms(s)
     _build_active_preview_textures(s)
     _ensure_base_normal_texture(s)
     s.history_backend = _GPUTileBackend(s)
@@ -2980,9 +2999,6 @@ def pack_preview_ubo(records, globals=None, data=None):
         data[n + 5] = (float(record.get("upper_present", 0.0)),
                        float(record.get("upper_factor", 1.0)),
                        float(record.get("upper_blend", 0)), 0.0)
-        data[n + 6] = (float(record.get("upper2_present", 0.0)),
-                       float(record.get("upper2_factor", 1.0)),
-                       float(record.get("upper2_blend", 0)), 0.0)
     return data
 
 
@@ -3074,6 +3090,79 @@ def _build_stack_baselines(s):
         s.baseline_values.clear()
         spec["enabled"] = False
         spec["status"] = "fallback: lower baseline build failed: %s" % exc
+        spec["safe_fallback"] = "MATERIAL_INSPECT"
+        s.settings["material_inspect"] = True
+        s.settings["input_paused"] = True
+        traceback.print_exc()
+
+
+def _build_upper_transforms(s):
+    """Collapse arbitrary ordered upper steps into one C/D texture per channel.
+
+    Each texel stores ``D.rgb`` and scalar ``C`` in alpha, representing the
+    affine transform ``result.rgb = C * active.rgb + D``. This keeps preview
+    sampler use constant regardless of layer count.
+    """
+    s.upper_transform_texs.clear()
+    s.upper_transform_gpu_refs.clear()
+    spec = s.stack_spec
+    if not spec or not spec.get("enabled"):
+        return
+    size = s.size
+    try:
+        for key, channel_spec in spec["channels"].items():
+            if key == "normal":
+                continue
+            steps = tuple(channel_spec.get("upper_steps", ()))
+            if not steps:
+                continue
+            ping = gpu.types.GPUTexture((size, size), format='RGBA16F')
+            pong = gpu.types.GPUTexture((size, size), format='RGBA16F')
+            # D=0, C=1 is the identity transform.
+            ping.clear(format='FLOAT', value=(0.0, 0.0, 0.0, 1.0))
+            current, target = ping, pong
+            for step in steps:
+                source_tex = current
+                if step["kind"] == "IMAGE":
+                    image = bpy.data.images.get(step["image_name"])
+                    if image is None:
+                        raise RuntimeError("missing upper image %r" %
+                                           step["image_name"])
+                    source_tex = gpu.texture.from_image(image)
+                    s.upper_transform_gpu_refs.append(source_tex)
+                fb = gpu.types.GPUFrameBuffer(color_slots=(target,))
+                with fb.bind():
+                    gpu.state.viewport_set(0, 0, size, size)
+                    gpu.state.blend_set('NONE')
+                    shader = s.upper_transform_shader
+                    shader.bind()
+                    shader.uniform_float("uv_origin", (0.0, 0.0))
+                    shader.uniform_float("uv_scale", (1.0, 1.0))
+                    shader.uniform_float(
+                        "source_value", _vec4(step.get("value", 0.0)))
+                    shader.uniform_float(
+                        "source_is_texture",
+                        1.0 if step["kind"] == "IMAGE" else 0.0)
+                    shader.uniform_float(
+                        "source_uses_alpha",
+                        1.0 if step.get("use_alpha") else 0.0)
+                    shader.uniform_float("factor", float(step["factor"]))
+                    shader.uniform_int(
+                        "blend_mode", _BLEND_INDEX.get(step["blend"], 0))
+                    shader.uniform_sampler("current_tex", current)
+                    shader.uniform_sampler("source_tex", source_tex)
+                    s.upper_transform_batch.draw(shader)
+                current, target = target, current
+            s.upper_transform_texs[key] = current
+            s.upper_transform_gpu_refs.append(current)
+    except Exception as exc:
+        s.upper_transform_texs.clear()
+        s.upper_transform_gpu_refs.clear()
+        spec["enabled"] = False
+        spec["status"] = "fallback: upper transform build failed: %s" % exc
+        spec["safe_fallback"] = "MATERIAL_INSPECT"
+        s.settings["material_inspect"] = True
+        s.settings["input_paused"] = True
         traceback.print_exc()
 
 
@@ -4213,38 +4302,15 @@ def _draw_composed_preview(s):
             "baseline_is_texture": 1.0 if baseline_tex is not None else 0.0,
         }
         if key != "normal":
-            upper_c, upper_d = channel_spec.get(
-                "upper_affine", (_vec4(1.0), _vec4(0.0)))
-            upper_image = channel_spec.get("upper_image")
-            upper_image_2 = channel_spec.get("upper_image_2")
-            upper_tex = fallback
-            if upper_image:
-                image = bpy.data.images.get(upper_image["image_name"])
-                if image is not None:
-                    upper_tex = gpu.texture.from_image(image)
+            upper_tex = s.upper_transform_texs.get(key)
             record.update({
-                "upper_c": upper_c, "upper_d": upper_d,
-                "upper_present": 1.0 if upper_image else 0.0,
-                "upper_factor": float(
-                    (upper_image or {}).get("factor", 1.0)),
-                "upper_blend": _BLEND_INDEX.get(
-                    (upper_image or {}).get("blend", "MIX"), 0),
-                "upper2_present": 1.0 if upper_image_2 else 0.0,
-                "upper2_factor": float(
-                    (upper_image_2 or {}).get("factor", 1.0)),
-                "upper2_blend": _BLEND_INDEX.get(
-                    (upper_image_2 or {}).get("blend", "MIX"), 0),
+                "upper_c": _vec4(1.0), "upper_d": _vec4(0.0),
+                "upper_present": 1.0 if upper_tex is not None else 0.0,
+                "upper_factor": 1.0,
+                "upper_blend": 0,
             })
-            shader.uniform_sampler("upper_" + key + "_tex", upper_tex)
-            if key == "base_color":
-                upper_tex_2 = fallback
-                if upper_image_2:
-                    image = bpy.data.images.get(
-                        upper_image_2["image_name"])
-                    if image is not None:
-                        upper_tex_2 = gpu.texture.from_image(image)
-                shader.uniform_sampler(
-                    "upper2_base_color_tex", upper_tex_2)
+            shader.uniform_sampler(
+                "upper_" + key + "_tex", upper_tex or fallback)
         preview_records[key] = record
         shader.uniform_sampler(key + "_tex", active_tex or fallback)
         shader.uniform_sampler("baseline_" + key + "_tex",

@@ -65,6 +65,57 @@ try:
           and session.preview_ubo is not None
           and session.preview_ubo_data.shape
           == (gpu_engine.PREVIEW_UBO_VEC4_COUNT, 4))
+    upper_images = []
+    for index in range(3):
+        image = bpy.data.images.new(
+            "Upper Roughness %d" % index, size, size, alpha=True)
+        image.colorspace_settings.name = "Non-Color"
+        image.pixels.foreach_set((0.8, 0.8, 0.8, 0.5) * (size * size))
+        image.update()
+        upper_images.append(image)
+    session.stack_spec = {
+        "enabled": True,
+        "channels": {
+            "roughness": {
+                "upper_steps": tuple({
+                    "kind": "IMAGE", "image_name": image.name,
+                    "factor": 0.5, "blend": "MIX", "use_alpha": True,
+                } for image in upper_images),
+            },
+        },
+    }
+    gpu_engine._build_upper_transforms(session)
+    coefficients = np.asarray(
+        session.upper_transform_texs["roughness"].read().to_list(),
+        dtype=np.float32).reshape(-1, 4)[0]
+    expected_c = 0.75 ** 3
+    expected_d = 0.8 * (1.0 - expected_c)
+    check("three upper images collapse to one ordered GPU transform",
+          np.allclose(coefficients[:3], expected_d, atol=3e-3)
+          and abs(float(coefficients[3]) - expected_c) < 3e-3,
+          repr(coefficients))
+    color_image = bpy.data.images.new(
+        "Upper Base Color", size, size, alpha=True)
+    color_image.colorspace_settings.name = "sRGB"
+    color_image.pixels.foreach_set((0.8, 0.8, 0.8, 0.5) * (size * size))
+    color_image.update()
+    session.stack_spec["channels"] = {
+        "base_color": {
+            "upper_steps": ({
+                "kind": "IMAGE", "image_name": color_image.name,
+                "factor": 1.0, "blend": "MIX", "use_alpha": True,
+            },),
+        },
+    }
+    gpu_engine._build_upper_transforms(session)
+    color_coefficients = np.asarray(
+        session.upper_transform_texs["base_color"].read().to_list(),
+        dtype=np.float32).reshape(-1, 4)[0]
+    linear_08 = ((0.8 + 0.055) / 1.055) ** 2.4
+    check("upper Base images decode sRGB before ordered composition",
+          np.allclose(color_coefficients[:3], linear_08 * 0.5, atol=3e-3)
+          and abs(float(color_coefficients[3]) - 0.5) < 3e-3,
+          repr(color_coefficients))
     uploaded = np.asarray(
         session.base_normal_tex.read().to_list(), dtype=np.float32).reshape(-1, 4)[0]
     check("known normal RGB survives preview upload with opaque coverage",

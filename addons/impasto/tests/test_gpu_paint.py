@@ -604,11 +604,13 @@ try:
           == emission_targets)
     rough_channel_spec = interactive_spec["channels"]["roughness"]
     check("visible upper Paint Roughness follows resident active canvas",
-          rough_channel_spec["upper_image"] == {
+          rough_channel_spec["upper_steps"] == [{
+              "kind": "IMAGE",
               "image_name": upper_roughness_image.name,
               "factor": 0.5,
               "blend": "MIX",
-          },
+              "use_alpha": True,
+          }],
           repr(rough_channel_spec))
     gpu_engine.stop_session()
 
@@ -682,7 +684,7 @@ try:
           == (0.5, 0.5, 0.5)
           and ordered_spec["channels"]["base_color"]["upper_affine"][1][:3]
           == (0.2, 0.2, 0.2)
-          and ordered_spec["channels"]["base_color"]["upper_image"]
+          and ordered_spec["channels"]["base_color"]["upper_steps"][-1]
           ["image_name"] == ordered_upper_images["base_color"].name,
           repr(ordered_spec["channels"]["base_color"]))
     gpu_engine.stop_session()

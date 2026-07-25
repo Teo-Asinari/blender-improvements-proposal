@@ -218,7 +218,7 @@ live_image = gpu_engine.resident_stack_runtime_spec(
     live_image_stack, "active_rough")
 check("one same-channel upper Paint image stays resident",
       live_image["enabled"]
-      and live_image["channels"]["roughness"]["upper_image"]["image_name"]
+      and live_image["channels"]["roughness"]["upper_steps"][0]["image_name"]
       == "Upper Rough Paint", live_image["status"])
 
 upper_base_a = layer("upper_base_a", "PAINT", [
@@ -247,10 +247,10 @@ multi_upper = gpu_engine.resident_stack_runtime_spec(
     multi_upper_stack, "active_material")
 check("two upper Base Color Paint images stay in Lit PBR",
       multi_upper["enabled"]
-      and multi_upper["channels"]["base_color"]["upper_image"]["image_name"]
-      == "Upper Base A"
-      and multi_upper["channels"]["base_color"]["upper_image_2"]["image_name"]
-      == "Upper Base B", multi_upper["status"])
+      and [step["image_name"] for step in
+           multi_upper["channels"]["base_color"]["upper_steps"]
+           if step["kind"] == "IMAGE"]
+      == ["Upper Base A", "Upper Base B"], multi_upper["status"])
 check("sparse upper channels remain part of the static baseline",
       multi_upper["channels"]["emission_color"]["active"] is None
       and multi_upper["channels"]["emission_strength"]["active"] is None,
@@ -328,6 +328,74 @@ check("B+Emission channels survive sparse active ownership",
           ordered_upper_stack, "emission_strength",
           ordered_samples, ordered_resident) == 1.5)
 
+# Generality regression: resident composition is an ordered sequence, not a
+# pair of special-case samplers. Exercise three upper Paint images on both a
+# color and scalar channel.
+n_active = layer("n_active", "PAINT", [
+    binding("base_color", image="N Active Base"),
+    binding("roughness", image="N Active Rough"),
+], uv_map="UV_A")
+n_upper_1 = layer("n_upper_1", "PAINT", [
+    binding("base_color", image="N1 Base"),
+    binding("roughness", image="N1 Rough"),
+], uv_map="UV_A")
+n_upper_2 = layer("n_upper_2", "PAINT", [
+    binding("base_color", image="N2 Base"),
+    binding("roughness", image="N2 Rough"),
+], uv_map="UV_A")
+n_upper_3 = layer("n_upper_3", "PAINT", [
+    binding("base_color", image="N3 Base"),
+    binding("roughness", image="N3 Rough"),
+], uv_map="UV_A")
+n_upper_stack = model.StackModel(
+    "N ordered uppers", ("base_color", "roughness"),
+    (n_upper_3, n_upper_2, n_upper_1, n_active))
+n_runtime = gpu_engine.resident_stack_runtime_spec(n_upper_stack, "n_active")
+check("three ordered upper Paint layers remain resident for color and scalar",
+      n_runtime["enabled"], n_runtime["status"])
+check("N-upper preview keeps ownership on active canvases",
+      n_runtime["channels"]["base_color"]["active"] is not None
+      and n_runtime["channels"]["roughness"]["active"] is not None)
+n_samples = {
+    "N1 Base": preview_stack.PixelSample((0.3, 0.3, 0.3, 1.0), 0.5),
+    "N2 Base": preview_stack.PixelSample((0.7, 0.7, 0.7, 1.0), 0.25),
+    "N3 Base": preview_stack.PixelSample((0.9, 0.9, 0.9, 1.0), 0.5),
+    "N1 Rough": preview_stack.PixelSample(0.4, 0.5),
+    "N2 Rough": preview_stack.PixelSample(0.8, 0.25),
+    "N3 Rough": preview_stack.PixelSample(0.1, 0.5),
+}
+n_resident = {"n_active": {
+    "base_color": preview_stack.PixelSample(
+        (0.1, 0.1, 0.1, 1.0), 1.0),
+    "roughness": preview_stack.PixelSample(0.2, 1.0),
+}}
+n_base = preview_stack.compose_channel_pixel(
+    n_upper_stack, "base_color", n_samples, n_resident)
+n_rough = preview_stack.compose_channel_pixel(
+    n_upper_stack, "roughness", n_samples, n_resident)
+check("three upper Paint layers preserve bottom-to-top numerical order",
+      all(abs(component - 0.6125) < 1e-12
+          for component in n_base[:3])
+      and abs(n_rough - 0.2625) < 1e-12,
+      "base=%r roughness=%r" % (n_base, n_rough))
+normal_active_n = layer("normal_active_n", "PAINT", [
+    binding("normal", image="N Active Normal"),
+], uv_map="UV_A")
+normal_upper_n = layer("normal_upper_n", "PAINT", [
+    binding("normal", image="N Upper Normal"),
+], uv_map="UV_A")
+normal_n_runtime = gpu_engine.resident_stack_runtime_spec(
+    model.StackModel(
+        "Unsupported ordered normals", ("normal",),
+        (normal_upper_n, normal_active_n)),
+    "normal_active_n")
+check("ordered RNM upper images retain authoritative fallback boundary",
+      not normal_n_runtime["enabled"]
+      and normal_n_runtime.get("safe_fallback") == "MATERIAL_INSPECT"
+      and gpu_engine.stack_preview_requires_material_inspect(
+          normal_n_runtime),
+      repr(normal_n_runtime))
+
 preview_src = gpu_engine.PREVIEW_FRAG_SRC
 check("resolved active alpha is applied exactly once",
       "active_factor * source.a" in preview_src
@@ -339,12 +407,29 @@ check("active Base decodes once while baseline stays scene-linear",
       "if (decode_active_srgb > 0.5)" in preview_src
       and "source.rgb = srgb_to_linear(source.rgb)" in preview_src
       and "texture(baseline_tex, uvInterp)" in preview_src)
-check("preview applies affine upper stage after resident resolution",
-      "rough_sample = upper_roughness_c * rough_sample" in preview_src)
-check("preview samples upper Paint after the active canvas",
-      "upper_roughness_factor * u.a" in preview_src
+check("preview applies composed upper transform after resident resolution",
+      "rough_sample = apply_upper_transform(" in preview_src
       and "upper_roughness_tex" in preview_src)
+runtime_src = __import__("inspect").getsource(
+    gpu_engine.resident_stack_runtime_spec)
+create_info_src = __import__("inspect").getsource(
+    gpu_engine.preview_shader_create_info)
+check("upper preview schema has no hard-coded second sampler contract",
+      "upper_image_2" not in runtime_src
+      and "upper2_" not in preview_src
+      and "upper2_" not in create_info_src)
 draw_src = __import__("inspect").getsource(gpu_engine._draw_composed_preview)
+baseline_build_src = __import__("inspect").getsource(
+    gpu_engine._build_stack_baselines)
+upper_build_src = __import__("inspect").getsource(
+    gpu_engine._build_upper_transforms)
+check("live preview consumes the general ordered upper-step plan",
+      "upper_steps" in upper_build_src
+      and "s.upper_transform_texs.get(key)" in draw_src)
+check("upper-transform build failure enters authoritative inspection",
+      'spec["safe_fallback"] = "MATERIAL_INSPECT"' in upper_build_src
+      and 's.settings["material_inspect"] = True' in upper_build_src
+      and 's.settings["input_paused"] = True' in upper_build_src)
 check("resolved channels remain enabled without active paint targets",
       '"has": 1.0 if (resolved or active or (' in draw_src
       and 'key == "normal" and base_normal_enabled)) else 0.0'
@@ -353,8 +438,6 @@ check("preview samples read-only active channels without granting writes",
       "s.active_preview_texs.get(key)" in draw_src)
 check("preview self-occludes nearly coincident rear geometry",
       "gpu.state.depth_mask_set(True)" in draw_src)
-baseline_build_src = __import__("inspect").getsource(
-    gpu_engine._build_stack_baselines)
 check("opaque lower images preserve raw RGB despite bake alpha",
       'image.pixels.foreach_get(pixels)' in baseline_build_src
       and 'pixels.reshape(-1, 4)[:, 3] = 1.0' in baseline_build_src

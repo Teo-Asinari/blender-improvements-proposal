@@ -4,6 +4,14 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.6
+
+- Replaced the two-upper-Base special case with arbitrary-depth ordered upper
+  composition for compatible non-normal layers.
+- Precompose every supported upper sequence into one GPU affine-transform
+  texture per channel, keeping sampler use and live-preview draw cost fixed
+  as layer count grows.
+
 ## 0.15.5
 
 - Kept Lit PBR resident for an active material layer beneath ordered
