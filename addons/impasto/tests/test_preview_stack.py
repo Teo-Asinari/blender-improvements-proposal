@@ -221,6 +221,41 @@ check("one same-channel upper Paint image stays resident",
       and live_image["channels"]["roughness"]["upper_image"]["image_name"]
       == "Upper Rough Paint", live_image["status"])
 
+upper_base_a = layer("upper_base_a", "PAINT", [
+    binding("base_color", image="Upper Base A"),
+    binding("emission_color", image="Upper Emission Color"),
+    binding("emission_strength", image="Upper Emission Strength"),
+], uv_map="UV_A")
+upper_base_b = layer("upper_base_b", "PAINT", [
+    binding("base_color", image="Upper Base B"),
+    binding("metallic", image="Upper Metallic"),
+    binding("roughness", image="Upper Roughness"),
+], uv_map="UV_A")
+active_material = layer("active_material", "PAINT", [
+    binding("base_color", image="Active Base"),
+    binding("metallic", image="Active Metallic"),
+    binding("roughness", image="Active Roughness"),
+    binding("normal", image="Active Normal"),
+    binding("sss_weight", image="Active SSS Weight"),
+    binding("sss_radius", image="Active SSS Radius"),
+    binding("sss_scale", image="Active SSS Scale"),
+], uv_map="UV_A")
+multi_upper_stack = model.StackModel(
+    "Two upper material images", tuple(model.CHANNEL_MAP),
+    (upper_base_b, upper_base_a, active_material, lower_surface))
+multi_upper = gpu_engine.resident_stack_runtime_spec(
+    multi_upper_stack, "active_material")
+check("two upper Base Color Paint images stay in Lit PBR",
+      multi_upper["enabled"]
+      and multi_upper["channels"]["base_color"]["upper_image"]["image_name"]
+      == "Upper Base A"
+      and multi_upper["channels"]["base_color"]["upper_image_2"]["image_name"]
+      == "Upper Base B", multi_upper["status"])
+check("sparse upper channels remain part of the static baseline",
+      multi_upper["channels"]["emission_color"]["active"] is None
+      and multi_upper["channels"]["emission_strength"]["active"] is None,
+      repr(multi_upper["channels"]["emission_color"]))
+
 emission_samples = {
     "Resident Emission Color":
         preview_stack.PixelSample((0.9, 0.1, 0.0, 1.0), 1.0),
@@ -239,6 +274,59 @@ check("upper Roughness remains visible over emission-only active layer",
       abs(preview_stack.compose_channel_pixel(
           emission_middle_stack, "roughness", emission_samples,
           emission_resident) - 0.5) < 1e-12)
+
+# Ordering regression from the interactive material stack: Base is resident
+# on the active layer, then a B+Emission Fill modifies it, then a farther
+# upper BMR Paint image modifies Base again.  The image must not jump below
+# the nearer affine step or force Material Inspect.
+ordered_active = layer("ordered_active", "PAINT", [
+    binding("base_color", image="Ordered Active Base"),
+], uv_map="UV_A")
+upper_b_emission = layer("upper_b_emission", "FILL", [
+    binding("base_color", mode="COLOR", color=(0.4, 0.4, 0.4, 1.0)),
+    binding("emission_color", mode="COLOR", color=(1.0, 0.2, 0.1, 1.0)),
+    binding("emission_strength", mode="VALUE", value=3.0),
+], opacity=0.5, uv_map="UV_A")
+upper_bmr_paint = layer("upper_bmr_paint", "PAINT", [
+    binding("base_color", image="Upper BMR Base"),
+    binding("metallic", image="Upper BMR Metallic"),
+    binding("roughness", image="Upper BMR Roughness"),
+], opacity=0.8, uv_map="UV_A")
+ordered_upper_stack = model.StackModel(
+    "Ordered upper stack",
+    ("base_color", "metallic", "roughness",
+     "emission_color", "emission_strength"),
+    (upper_bmr_paint, upper_b_emission, ordered_active))
+ordered_runtime = gpu_engine.resident_stack_runtime_spec(
+    ordered_upper_stack, "ordered_active")
+check("ordered Fill then Paint upper stack remains resident",
+      ordered_runtime["enabled"], ordered_runtime["status"])
+check("only active Base owns a resident write canvas",
+      ordered_runtime["channels"]["base_color"]["active"] is not None
+      and all(ordered_runtime["channels"][key]["active"] is None
+              for key in ("metallic", "roughness",
+                          "emission_color", "emission_strength")))
+ordered_samples = {
+    "Ordered Active Base":
+        preview_stack.PixelSample((0.2, 0.2, 0.2, 1.0), 1.0),
+    "Upper BMR Base":
+        preview_stack.PixelSample((0.8, 0.8, 0.8, 1.0), 0.25),
+    "Upper BMR Metallic": preview_stack.PixelSample(0.9, 1.0),
+    "Upper BMR Roughness": preview_stack.PixelSample(0.1, 1.0),
+}
+ordered_resident = {"ordered_active": {
+    "base_color":
+        preview_stack.PixelSample((0.2, 0.2, 0.2, 1.0), 1.0),
+}}
+ordered_base = preview_stack.compose_channel_pixel(
+    ordered_upper_stack, "base_color", ordered_samples, ordered_resident)
+check("upper composition order is active, B Fill, then BMR Paint",
+      all(abs(component - 0.4) < 1e-12
+          for component in ordered_base[:3]), repr(ordered_base))
+check("B+Emission channels survive sparse active ownership",
+      preview_stack.compose_channel_pixel(
+          ordered_upper_stack, "emission_strength",
+          ordered_samples, ordered_resident) == 1.5)
 
 preview_src = gpu_engine.PREVIEW_FRAG_SRC
 check("resolved active alpha is applied exactly once",

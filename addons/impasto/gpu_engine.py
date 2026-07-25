@@ -178,11 +178,12 @@ struct ImpastoDabParams {
 PREVIEW_UBO_NAME = "preview_params"
 PREVIEW_UBO_SLOT = 1
 PREVIEW_UBO_CHANNEL_BASE = 13
-PREVIEW_UBO_STRIDE = 6
-PREVIEW_UBO_VEC4_COUNT = PREVIEW_UBO_CHANNEL_BASE + 60
+PREVIEW_UBO_STRIDE = 7
+PREVIEW_UBO_VEC4_COUNT = (
+    PREVIEW_UBO_CHANNEL_BASE + 10 * PREVIEW_UBO_STRIDE)
 PREVIEW_UBO_TYPEDEF = """
 struct ImpastoPreviewParams {
-    vec4 values[73];
+    vec4 values[83];
 };
 """
 
@@ -214,6 +215,9 @@ def _preview_ubo_aliases():
             "#define upper_%s_present preview_params.values[%d].x" % (name, n + 5),
             "#define upper_%s_factor preview_params.values[%d].y" % (name, n + 5),
             "#define upper_%s_blend int(preview_params.values[%d].z)" % (name, n + 5),
+            "#define upper2_%s_present preview_params.values[%d].x" % (name, n + 6),
+            "#define upper2_%s_factor preview_params.values[%d].y" % (name, n + 6),
+            "#define upper2_%s_blend int(preview_params.values[%d].z)" % (name, n + 6),
         ))
     return "\n".join(lines) + "\n"
 
@@ -754,6 +758,12 @@ void main()
         u.rgb = srgb_to_linear(u.rgb);
         base = stack_blend(base, u, upper_base_color_factor * u.a,
                            upper_base_color_blend);
+    }
+    if (upper2_base_color_present > 0.5) {
+        vec4 u = straight_sample(upper2_base_color_tex, uvInterp);
+        u.rgb = srgb_to_linear(u.rgb);
+        base = stack_blend(base, u, upper2_base_color_factor * u.a,
+                           upper2_base_color_blend);
     }
     if (upper_metallic_present > 0.5) {
         vec4 u = straight_sample(upper_metallic_tex, uvInterp);
@@ -1514,6 +1524,9 @@ def preview_shader_create_info():
     for index, name in enumerate(
             (key for key in GPU_PAINT_CHANNEL_KEYS if key != "normal"), 22):
         info.sampler(index, 'FLOAT_2D', "upper_" + name + "_tex")
+    # A second Base Color image covers the common material-stack topology
+    # without pushing the preview beyond the portable 32-sampler budget.
+    info.sampler(31, 'FLOAT_2D', "upper2_base_color_tex")
     info.vertex_in(0, 'VEC3', "pos")
     info.vertex_in(1, 'VEC2', "uv")
     info.vertex_in(2, 'VEC3', "normal")
@@ -1693,6 +1706,7 @@ def resident_stack_runtime_spec(stack_model, active_uid):
             "active": active_spec,
             "upper_affine": (_vec4(1.0), _vec4(0.0)),
             "upper_image": None,
+            "upper_image_2": None,
         }
     unsupported = []
     for layer in composition[active_i + 1:]:
@@ -1711,20 +1725,22 @@ def resident_stack_runtime_spec(stack_model, active_uid):
                     unsupported.append((layer.uid, key))
                     continue
                 if layer.layer_type == "PAINT" and image_name:
-                    identity = channels[key]["upper_affine"] == (
-                        _vec4(1.0), _vec4(0.0))
-                    if (channels[key]["upper_image"] is not None
-                            or not identity):
-                        unsupported.append((layer.uid, key))
-                        continue
-                    channels[key]["upper_image"] = {
+                    image_spec = {
                         "image_name": image_name,
                         "factor": model.const_factor(
                             stack_model, layer, binding),
                         "blend": blend,
                     }
+                    if channels[key]["upper_image"] is None:
+                        channels[key]["upper_image"] = image_spec
+                    elif (key == "base_color"
+                          and channels[key]["upper_image_2"] is None):
+                        channels[key]["upper_image_2"] = image_spec
+                    else:
+                        unsupported.append((layer.uid, key))
                     continue
-                if channels[key]["upper_image"] is not None:
+                if (channels[key]["upper_image"] is not None
+                        or channels[key]["upper_image_2"] is not None):
                     unsupported.append((layer.uid, key))
                     continue
                 channel = model.CHANNEL_MAP[key]
@@ -2964,6 +2980,9 @@ def pack_preview_ubo(records, globals=None, data=None):
         data[n + 5] = (float(record.get("upper_present", 0.0)),
                        float(record.get("upper_factor", 1.0)),
                        float(record.get("upper_blend", 0)), 0.0)
+        data[n + 6] = (float(record.get("upper2_present", 0.0)),
+                       float(record.get("upper2_factor", 1.0)),
+                       float(record.get("upper2_blend", 0)), 0.0)
     return data
 
 
@@ -4197,6 +4216,7 @@ def _draw_composed_preview(s):
             upper_c, upper_d = channel_spec.get(
                 "upper_affine", (_vec4(1.0), _vec4(0.0)))
             upper_image = channel_spec.get("upper_image")
+            upper_image_2 = channel_spec.get("upper_image_2")
             upper_tex = fallback
             if upper_image:
                 image = bpy.data.images.get(upper_image["image_name"])
@@ -4209,8 +4229,22 @@ def _draw_composed_preview(s):
                     (upper_image or {}).get("factor", 1.0)),
                 "upper_blend": _BLEND_INDEX.get(
                     (upper_image or {}).get("blend", "MIX"), 0),
+                "upper2_present": 1.0 if upper_image_2 else 0.0,
+                "upper2_factor": float(
+                    (upper_image_2 or {}).get("factor", 1.0)),
+                "upper2_blend": _BLEND_INDEX.get(
+                    (upper_image_2 or {}).get("blend", "MIX"), 0),
             })
             shader.uniform_sampler("upper_" + key + "_tex", upper_tex)
+            if key == "base_color":
+                upper_tex_2 = fallback
+                if upper_image_2:
+                    image = bpy.data.images.get(
+                        upper_image_2["image_name"])
+                    if image is not None:
+                        upper_tex_2 = gpu.texture.from_image(image)
+                shader.uniform_sampler(
+                    "upper2_base_color_tex", upper_tex_2)
         preview_records[key] = record
         shader.uniform_sampler(key + "_tex", active_tex or fallback)
         shader.uniform_sampler("baseline_" + key + "_tex",

@@ -4,6 +4,13 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.5
+
+- Kept Lit PBR resident for an active material layer beneath ordered
+  `Base + Emission` and `Base + Metallic + Roughness` Paint layers.
+- Added a second ordered upper Base Color image path while preserving
+  active-layer-only brush writes and the other sparse upper channels.
+
 ## 0.15.4
 
 - Kept every visible active-layer channel in Lit PBR even when its brush

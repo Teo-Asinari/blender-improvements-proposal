@@ -612,6 +612,81 @@ try:
           repr(rough_channel_spec))
     gpu_engine.stop_session()
 
+    # Full reported ordering: active Base canvas, B+Emission Fill, then a
+    # farther upper BMR Paint layer. Preview reads every visible participant,
+    # but the live stroke remains owned solely by active Base.
+    ordered_active_image = bpy.data.images.new(
+        "Impasto Ordered Active Base", 64, 64, alpha=True)
+    ordered_upper_images = {
+        key: bpy.data.images.new("Impasto Ordered Upper " + key, 64, 64,
+                                 alpha=True)
+        for key in ("base_color", "metallic", "roughness")
+    }
+    ordered_active = model.LayerModel(
+        uid="ordered_active", layer_type="PAINT", uv_map="UVMap",
+        bindings=(model.BindingModel(
+            key="base_color", mode="SHARED",
+            image_name=ordered_active_image.name),))
+    ordered_b_emission = model.LayerModel(
+        uid="ordered_b_emission", layer_type="FILL", uv_map="UVMap",
+        opacity=0.5, bindings=(
+            model.BindingModel(
+                key="base_color", mode="COLOR",
+                color=(0.4, 0.4, 0.4, 1.0)),
+            model.BindingModel(
+                key="emission_color", mode="COLOR",
+                color=(1.0, 0.2, 0.1, 1.0)),
+            model.BindingModel(
+                key="emission_strength", mode="VALUE", value=3.0),
+        ))
+    ordered_upper_bmr = model.LayerModel(
+        uid="ordered_upper_bmr", layer_type="PAINT", uv_map="UVMap",
+        opacity=0.8, bindings=tuple(
+            model.BindingModel(
+                key=key, mode="SHARED", image_name=image.name)
+            for key, image in ordered_upper_images.items()))
+    ordered_model = model.StackModel(
+        "Ordered interactive",
+        ("base_color", "metallic", "roughness",
+         "emission_color", "emission_strength"),
+        (ordered_upper_bmr, ordered_b_emission, ordered_active))
+    check("ordered upper-stack resident session starts",
+          gpu_engine.start_session(
+              obj, [ordered_active_image], None,
+              payloads=gpu_engine.stroke_payloads(
+                  ("base_color",), brush),
+              settings={
+                  "channel_keys": ("base_color",),
+                  "brush_target_channel_keys": ("base_color",),
+                  "preview_mode": "LIT_PBR",
+                  "stack_model": ordered_model,
+                  "active_layer_uid": "ordered_active",
+              }))
+    ordered_spec = gpu_engine._session.stack_spec
+    _ordered_payloads, ordered_settings = \
+        gpu_engine.stroke_settings_snapshot()
+    check("B+Emission then upper BMR remain in resident Lit preview",
+          ordered_spec["enabled"]
+          and gpu_engine.current_preview_mode() == "LIT_PBR"
+          and not gpu_engine.material_inspect_active()
+          and not gpu_engine.input_paused(),
+          repr(ordered_spec))
+    check("ordered preview leaves writes on active Base only",
+          ordered_settings["brush_target_channel_keys"] == ("base_color",)
+          and ordered_spec["channels"]["base_color"]["active"] is not None
+          and all(ordered_spec["channels"][key]["active"] is None
+                  for key in ("metallic", "roughness",
+                              "emission_color", "emission_strength")))
+    check("Base upper stages preserve Fill-before-Paint order",
+          ordered_spec["channels"]["base_color"]["upper_affine"][0][:3]
+          == (0.5, 0.5, 0.5)
+          and ordered_spec["channels"]["base_color"]["upper_affine"][1][:3]
+          == (0.2, 0.2, 0.2)
+          and ordered_spec["channels"]["base_color"]["upper_image"]
+          ["image_name"] == ordered_upper_images["base_color"].name,
+          repr(ordered_spec["channels"]["base_color"]))
+    gpu_engine.stop_session()
+
     # ---- operator surface ----------------------------------------------
     check("gpu paint operator registered",
           getattr(bpy.types, "IMPASTO_OT_gpu_paint", None) is not None)
