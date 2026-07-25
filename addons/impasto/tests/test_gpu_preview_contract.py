@@ -67,7 +67,8 @@ check("preview UBO layout covers every registry channel exactly once",
       and "vec4 values[%d]" % gpu_engine.PREVIEW_UBO_VEC4_COUNT
       in gpu_engine.PREVIEW_UBO_TYPEDEF)
 check("draw path updates and binds packed preview state",
-      "pack_preview_ubo(" in draw_preview_source
+      "preview_records = {}" in draw_preview_source
+      and "pack_preview_ubo(" in draw_preview_source
       and "s.preview_ubo.update(s.preview_ubo_data)" in draw_preview_source
       and "shader.uniform_block(PREVIEW_UBO_NAME, s.preview_ubo)"
       in draw_preview_source

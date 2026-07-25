@@ -1627,7 +1627,6 @@ def resident_stack_runtime_spec(stack_model, active_uid):
     channels = {}
     composition = tuple(reversed(stack_model.layers))
     active_i = composition.index(active)
-    preview_records = {}
     for key in GPU_PAINT_CHANNEL_KEYS:
         channel = model.CHANNEL_MAP[key]
         active_binding = next(
@@ -4140,6 +4139,7 @@ def _draw_composed_preview(s):
     preview_globals["base_normal_options"] = (
         max(0.0, float(s.settings.get("base_normal_strength", 1.0))),
         1.0 if s.settings.get("base_normal_invert_green", False) else 0.0)
+    preview_records = {}
     for key in GPU_PAINT_CHANNEL_KEYS:
         channel_spec = (s.stack_spec.get("channels", {}).get(key, {})
                         if resolved else {})

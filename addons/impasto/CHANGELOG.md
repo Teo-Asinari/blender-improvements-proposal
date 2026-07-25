@@ -4,6 +4,11 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.3
+
+- Fixed a misplaced initialization that suspended the Lit PBR draw callback
+  when starting GPU painting after the preview UBO migration.
+
 ## 0.15.2
 
 - Migrated every Lit PBR preview parameter from oversized push constants to
