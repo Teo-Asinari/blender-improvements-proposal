@@ -4,6 +4,16 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.7
+
+- Added exact upper-layer mask composition for one visible same-UV image mask
+  per affine non-normal layer, including opacity, inversion, and per-channel
+  participation.
+- Added exact named-UV reprojection for arbitrary ordered unmasked affine
+  upper Paint layers while keeping active-layer-only writes.
+- Kept nonlinear, independently mapped/multiple-mask, lower mixed-UV, and
+  exact dynamic upper-RNM cases on authoritative Material Preview fallback.
+
 ## 0.15.6
 
 - Replaced the two-upper-Base special case with arbitrary-depth ordered upper

@@ -116,6 +116,35 @@ try:
           np.allclose(color_coefficients[:3], linear_08 * 0.5, atol=3e-3)
           and abs(float(color_coefficients[3]) - 0.5) < 3e-3,
           repr(color_coefficients))
+    mask_image = bpy.data.images.new(
+        "Upper Roughness Mask", size, size, alpha=False)
+    mask_image.colorspace_settings.name = "Non-Color"
+    mask_image.pixels.foreach_set((0.25, 0.25, 0.25, 1.0)
+                                  * (size * size))
+    mask_image.update()
+    session.stack_spec["channels"] = {
+        "roughness": {
+            "upper_steps": ({
+                "kind": "CONSTANT", "value": 0.8,
+                "factor": 0.5, "blend": "MIX",
+                "mask": {
+                    "image_name": mask_image.name,
+                    "invert": True, "opacity": 0.8,
+                },
+            },),
+        },
+    }
+    gpu_engine._build_upper_transforms(session)
+    masked_coefficients = np.asarray(
+        session.upper_transform_texs["roughness"].read().to_list(),
+        dtype=np.float32).reshape(-1, 4)[0]
+    masked_factor = 0.5 * (1.0 - 0.25 * 0.8)
+    check("upper GPU transform applies mask inversion and opacity",
+          np.allclose(masked_coefficients[:3],
+                      0.8 * masked_factor, atol=3e-3)
+          and abs(float(masked_coefficients[3])
+                  - (1.0 - masked_factor)) < 3e-3,
+          repr(masked_coefficients))
     uploaded = np.asarray(
         session.base_normal_tex.read().to_list(), dtype=np.float32).reshape(-1, 4)[0]
     check("known normal RGB survives preview upload with opaque coverage",

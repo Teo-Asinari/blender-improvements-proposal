@@ -1,6 +1,6 @@
 # Impasto roadmap
 
-This is the authoritative list of open work for Impasto 0.15.6. Shipped work
+This is the authoritative list of open work for Impasto 0.15.7. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Near-term
@@ -19,8 +19,10 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 ## Architecture and compatibility
 
 - Expand live upper-layer post-composition beyond arbitrary ordered affine
-  non-normal layers: masks, nonlinear blends, RNM normals, and mixed UV
-  layouts.
+  non-normal layers, one same-UV mask per upper layer, and named-UV
+  reprojection for unmasked upper Paint layers. Remaining boundaries are
+  multiple or independently mapped masks, nonlinear blends, exact dynamic
+  upper RNM normals, and mixed-UV lower/static-only channels.
 - Continue decomposing `gpu_engine.py` and `ops.py` compatibility facades into
   focused, regression-guarded modules.
 - Continue qualification across supported GPU backends and drivers.

@@ -18,7 +18,9 @@ def check(name, condition, detail=""):
 
 
 def binding(key, mode="SHARED", image="", value=0.0, color=(0, 0, 0, 1),
-            blend="LAYER", opacity=1.0, use_masks=True):
+            blend="LAYER", opacity=1.0, use_masks=True, factor=None):
+    if factor is not None:
+        opacity = factor
     return model.BindingModel(key=key, mode=mode, image_name=image,
                               value=value, color=color,
                               blend_mode=blend, opacity=opacity,
@@ -240,6 +242,39 @@ active_material = layer("active_material", "PAINT", [
     binding("sss_radius", image="Active SSS Radius"),
     binding("sss_scale", image="Active SSS Scale"),
 ], uv_map="UV_A")
+upper_mask = model.MaskModel(
+    uid="upper-mask", image_name="Upper Mask", uv_map="UV_A",
+    opacity=0.6, invert=True)
+masked_upper_paint = layer("masked_upper_paint", "PAINT", [
+    binding("roughness", image="Masked Upper Rough"),
+    binding("metallic", image="Masked Upper Metal", use_masks=False),
+], masks=(upper_mask,), uv_map="UV_A")
+masked_upper_stack = model.StackModel(
+    "Masked upper Paint", ("roughness", "metallic"),
+    (masked_upper_paint, active_material, lower_surface))
+masked_upper = gpu_engine.resident_stack_runtime_spec(
+    masked_upper_stack, "active_material")
+check("one same-UV upper image mask remains resident",
+      masked_upper["enabled"], masked_upper["status"])
+check("upper mask records opacity and inversion per participating channel",
+      masked_upper["channels"]["roughness"]["upper_steps"][0]["mask"] == {
+          "image_name": "Upper Mask", "invert": True, "opacity": 0.6}
+      and "mask" not in
+      masked_upper["channels"]["metallic"]["upper_steps"][0],
+      repr(masked_upper["channels"]["roughness"]["upper_steps"]))
+mixed_mask_uv = model.MaskModel(
+    uid="mixed-mask", image_name="Mixed Mask", uv_map="UV_B")
+mixed_mask_layer = layer("mixed_mask_layer", "PAINT", [
+    binding("roughness", image="Mixed Mask Rough"),
+], masks=(mixed_mask_uv,), uv_map="UV_A")
+mixed_mask_stack = model.StackModel(
+    "Mixed mask UV", ("roughness",),
+    (mixed_mask_layer, active_material, lower_surface))
+mixed_mask_runtime = gpu_engine.resident_stack_runtime_spec(
+    mixed_mask_stack, "active_material")
+check("independently mapped upper masks retain authoritative fallback",
+      not mixed_mask_runtime["enabled"]
+      and mixed_mask_runtime["safe_fallback"] == "MATERIAL_INSPECT")
 multi_upper_stack = model.StackModel(
     "Two upper material images", tuple(model.CHANNEL_MAP),
     (upper_base_b, upper_base_a, active_material, lower_surface))
@@ -575,6 +610,35 @@ check("inverted mask applies opacity-folded factor",
 check("use_masks false bypasses image masks",
       preview_stack.compose_channel_pixel(
           unmasked_stack, "roughness", mask_samples) == 1.0)
+
+mixed_uv_upper = layer("mixed_uv_upper", "PAINT", [
+    binding("base_color", image="Detail UV Color")
+], uv_map="DetailUV")
+mixed_uv_active = layer("mixed_uv_active", "PAINT", [
+    binding("base_color", image="Paint UV Color")
+], uv_map="PaintUV")
+mixed_uv_upper_runtime = gpu_engine.resident_stack_runtime_spec(
+    model.StackModel("Mixed upper", ("base_color",),
+                     (mixed_uv_upper, mixed_uv_active)),
+    "mixed_uv_active")
+check("named mixed-UV upper image remains resident",
+      mixed_uv_upper_runtime["enabled"], mixed_uv_upper_runtime["status"])
+check("mixed-UV upper plan preserves destination and source maps",
+      mixed_uv_upper_runtime["active_uv_map"] == "PaintUV"
+      and mixed_uv_upper_runtime["channels"]["base_color"]["upper_steps"][0]
+      ["uv_map"] == "DetailUV")
+mixed_uv_lower_runtime = gpu_engine.resident_stack_runtime_spec(
+    model.StackModel("Mixed lower", ("base_color",),
+                     (mixed_uv_active, mixed_uv_upper)),
+    "mixed_uv_active")
+check("mixed-UV lower image retains explicit safe fallback",
+      not mixed_uv_lower_runtime["enabled"]
+      and "lower layers do not share" in mixed_uv_lower_runtime["status"])
+check("mixed-UV shader samples source and destination independently",
+      "texture(current_tex, targetUvInterp)" in
+      gpu_engine.UPPER_REPROJECT_FRAG_SRC
+      and "texture(source_tex, sourceUvInterp)" in
+      gpu_engine.UPPER_REPROJECT_FRAG_SRC)
 
 # A Paint binding may use a constant VALUE while retaining its image as the
 # per-channel paint-alpha gate. The compiler reads that image's Alpha even

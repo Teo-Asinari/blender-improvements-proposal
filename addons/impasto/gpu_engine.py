@@ -1011,6 +1011,52 @@ void main()
         ? texture(source_tex, uvInterp) : source_value;
     float f = clamp(factor * (source_uses_alpha > 0.5 ? b.a : 1.0),
                     0.0, 1.0);
+    if (mask_present > 0.5) {
+        vec3 mask_rgb = texture(mask_tex, uvInterp).rgb;
+        /* Match the stack compiler/exporter's implicit Color-to-Value
+         * conversion instead of assuming imported masks are perfectly gray. */
+        float m = dot(mask_rgb, vec3(0.2126, 0.7152, 0.0722));
+        m = mask_invert > 0.5 ? 1.0 - m : m;
+        f *= mix(1.0, m, clamp(mask_opacity, 0.0, 1.0));
+    }
+    vec3 d = a.rgb;
+    float c = a.a;
+    if (blend_mode == 1) d += b.rgb * f;
+    else if (blend_mode == 2) d -= b.rgb * f;
+    else if (blend_mode == 3) {
+        float k = mix(1.0, b.r, f);
+        c *= k;
+        d *= k;
+    }
+    else if (blend_mode == 4) {
+        float add = b.r * f;
+        float k = 1.0 - add;
+        c *= k;
+        d = d * k + vec3(add);
+    } else {
+        c *= 1.0 - f;
+        d = d * (1.0 - f) + b.rgb * f;
+    }
+    fragColor = vec4(d, c);
+}
+"""
+
+UPPER_REPROJECT_VERT_SRC = """
+void main()
+{
+    targetUvInterp = target_uv;
+    sourceUvInterp = source_uv;
+    gl_Position = vec4(target_uv * 2.0 - 1.0, 0.0, 1.0);
+}
+"""
+
+UPPER_REPROJECT_FRAG_SRC = """
+void main()
+{
+    vec4 a = texture(current_tex, targetUvInterp);
+    vec4 b = texture(source_tex, sourceUvInterp);
+    float f = clamp(factor * (source_uses_alpha > 0.5 ? b.a : 1.0),
+                    0.0, 1.0);
     vec3 d = a.rgb;
     float c = a.a;
     if (blend_mode == 1) d += b.rgb * f;
@@ -1572,17 +1618,38 @@ def upper_transform_shader_create_info():
     for kind, name in (('VEC2', "uv_origin"), ('VEC2', "uv_scale"),
                        ('VEC4', "source_value")):
         info.push_constant(kind, name)
-    for name in ("source_is_texture", "source_uses_alpha", "factor"):
+    for name in ("source_is_texture", "source_uses_alpha", "factor",
+                 "mask_present", "mask_invert", "mask_opacity"):
         info.push_constant('FLOAT', name)
     info.push_constant('INT', "blend_mode")
     info.sampler(0, 'FLOAT_2D', "current_tex")
     info.sampler(1, 'FLOAT_2D', "source_tex")
+    info.sampler(2, 'FLOAT_2D', "mask_tex")
     info.vertex_in(0, 'VEC3', "pos")
     info.vertex_in(1, 'VEC2', "uv")
     info.vertex_out(iface)
     info.fragment_out(0, 'VEC4', "fragColor")
     info.vertex_source(COPY_VERT_SRC)
     info.fragment_source(UPPER_TRANSFORM_FRAG_SRC)
+    return info
+
+
+def upper_reproject_shader_create_info():
+    iface = gpu.types.GPUStageInterfaceInfo("impasto_upper_reproject_iface")
+    iface.smooth('VEC2', "targetUvInterp")
+    iface.smooth('VEC2', "sourceUvInterp")
+    info = gpu.types.GPUShaderCreateInfo()
+    info.push_constant('FLOAT', "source_uses_alpha")
+    info.push_constant('FLOAT', "factor")
+    info.push_constant('INT', "blend_mode")
+    info.sampler(0, 'FLOAT_2D', "current_tex")
+    info.sampler(1, 'FLOAT_2D', "source_tex")
+    info.vertex_in(0, 'VEC2', "target_uv")
+    info.vertex_in(1, 'VEC2', "source_uv")
+    info.vertex_out(iface)
+    info.fragment_out(0, 'VEC4', "fragColor")
+    info.vertex_source(UPPER_REPROJECT_VERT_SRC)
+    info.fragment_source(UPPER_REPROJECT_FRAG_SRC)
     return info
 
 
@@ -1630,25 +1697,42 @@ def resident_stack_runtime_spec(stack_model, active_uid):
     by_uid = {layer.uid: layer for layer in stack_model.layers}
     relevant_uids = (set(plan.lower_layer_uids)
                      | set(plan.upper_layer_uids) | {active_uid})
-    has_image_masks = any(
-        mask.visible and mask.image_name
-        for layer in stack_model.layers if layer.uid in relevant_uids
-        for mask in layer.masks)
-    if has_image_masks:
+    unsupported_masks = [
+        layer.uid for layer in stack_model.layers
+        if layer.uid in relevant_uids
+        and any(m.visible and m.image_name for m in layer.masks)
+        and (layer.uid not in plan.upper_layer_uids
+             or len([m for m in layer.masks
+                     if m.visible and m.image_name]) > 1)]
+    if unsupported_masks:
         return {"enabled": False,
                 "status": "fallback: image masks require material preview",
                 "channels": {}, "plan": plan,
                 "safe_fallback": "MATERIAL_INSPECT"}
-    if not plan.single_uv_fast_path:
+    composition = tuple(reversed(stack_model.layers))
+    active_i = composition.index(active)
+    # Lower baselines are still composed as texture-space full-screen passes,
+    # so their image-bearing layers must share the active UV. Upper images
+    # can use named alternative maps: the runtime reprojects those through
+    # the mesh into the active canvas before the live preview samples them.
+    active_uv = str(active.uv_map or "")
+    lower_uvs = {active_uv}
+    for layer in composition[:active_i]:
+        if layer.uid not in plan.lower_layer_uids:
+            continue
+        for binding in layer.bindings:
+            if (binding.enabled and binding.key in GPU_PAINT_CHANNEL_KEYS
+                    and layer.layer_type == "PAINT"
+                    and model.binding_image(layer, binding)):
+                lower_uvs.add(str(layer.uv_map or ""))
+    if len(lower_uvs) > 1:
         return {"enabled": False,
-                "status": ("fallback: participating layers do not share one "
+                "status": ("fallback: lower layers do not share the active "
                            "resolved UV map"),
                 "channels": {}, "plan": plan,
                 "safe_fallback": "MATERIAL_INSPECT"}
 
     channels = {}
-    composition = tuple(reversed(stack_model.layers))
-    active_i = composition.index(active)
     for key in GPU_PAINT_CHANNEL_KEYS:
         channel = model.CHANNEL_MAP[key]
         active_binding = next(
@@ -1724,6 +1808,15 @@ def resident_stack_runtime_spec(stack_model, active_uid):
             continue
         for binding in layer.bindings:
             if (binding.enabled and binding.key in channels
+                    and channels[binding.key]["active"] is None
+                    and layer.layer_type == "PAINT"
+                    and model.binding_image(layer, binding)
+                    and str(layer.uv_map or "") != active_uv):
+                # With no resident active value this channel is folded wholly
+                # into the static baseline, whose pass is still same-UV.
+                unsupported.append((layer.uid, binding.key))
+                continue
+            if (binding.enabled and binding.key in channels
                     and channels[binding.key]["active"] is not None):
                 key = binding.key
                 blend = model.effective_blend(layer, binding)
@@ -1738,14 +1831,29 @@ def resident_stack_runtime_spec(stack_model, active_uid):
                     unsupported.append((layer.uid, key))
                     continue
                 if layer.layer_type == "PAINT" and image_name:
+                    masks = [m for m in layer.masks
+                             if binding.use_masks and m.visible
+                             and m.image_name]
+                    if (masks and (
+                            len(masks) > 1
+                            or str(masks[0].uv_map or layer.uv_map or "")
+                            != active_uv)):
+                        unsupported.append((layer.uid, key))
+                        continue
                     image_spec = {
                         "kind": "IMAGE",
                         "image_name": image_name,
+                        "uv_map": str(layer.uv_map or ""),
                         "factor": model.const_factor(
                             stack_model, layer, binding),
                         "blend": blend,
                         "use_alpha": True,
                     }
+                    if masks:
+                        image_spec["mask"] = {
+                            "image_name": masks[0].image_name,
+                            "invert": bool(masks[0].invert),
+                            "opacity": float(masks[0].opacity)}
                     channels[key]["upper_steps"].append(image_spec)
                     continue
                 if binding.mode == "COLOR":
@@ -1760,9 +1868,22 @@ def resident_stack_runtime_spec(stack_model, active_uid):
                     unsupported.append((layer.uid, key))
                     continue
                 factor = model.const_factor(stack_model, layer, binding)
+                masks = [m for m in layer.masks
+                         if binding.use_masks and m.visible and m.image_name]
+                if (masks and (
+                        len(masks) > 1
+                        or str(masks[0].uv_map or layer.uv_map or "")
+                        != active_uv)):
+                    unsupported.append((layer.uid, key))
+                    continue
                 channels[key]["upper_steps"].append({
                     "kind": "CONSTANT", "value": value,
-                    "factor": factor, "blend": blend})
+                    "factor": factor, "blend": blend,
+                    "mask": ({
+                        "image_name": masks[0].image_name,
+                        "invert": bool(masks[0].invert),
+                        "opacity": float(masks[0].opacity)}
+                        if masks else None)})
                 old_c, old_d = channels[key]["upper_affine"]
                 c, d = preview_stack.affine_coefficients(
                     _vec4(value), factor, blend)
@@ -1781,7 +1902,7 @@ def resident_stack_runtime_spec(stack_model, active_uid):
         }
     status = "resolved: same-UV full visible stack + active isolation"
     return {"enabled": True, "status": status, "channels": channels,
-            "plan": plan}
+            "plan": plan, "active_uv_map": active_uv}
 
 
 def linear_to_srgb(v):
@@ -1951,6 +2072,8 @@ class _Session:
         self.baseline_gpu_refs = []
         self.upper_transform_shader = None
         self.upper_transform_batch = None
+        self.upper_reproject_shader = None
+        self.upper_reproject_batches = {}
         self.upper_transform_texs = {}
         self.upper_transform_gpu_refs = []
         self.active_preview_texs = {}
@@ -2382,6 +2505,7 @@ def _release_gpu_references(s):
         "baseline_shader", "baseline_batch", "baseline_texs",
         "baseline_gpu_refs", "active_preview_texs",
         "upper_transform_shader", "upper_transform_batch",
+        "upper_reproject_shader", "upper_reproject_batches",
         "upper_transform_texs", "upper_transform_gpu_refs",
         "active_preview_gpu_refs", "overlay_circle_batch",
         "overlay_color_shader",
@@ -2827,6 +2951,8 @@ def _ensure_gpu(s):
         baseline_shader_create_info())
     s.upper_transform_shader = gpu.shader.create_from_info(
         upper_transform_shader_create_info())
+    s.upper_reproject_shader = gpu.shader.create_from_info(
+        upper_reproject_shader_create_info())
 
     # Blender does not expose Material Preview's prefiltered studio texture as
     # a public GPU handle. Upload Impasto's deterministic linear-HDR atlas;
@@ -3123,6 +3249,7 @@ def _build_upper_transforms(s):
             current, target = ping, pong
             for step in steps:
                 source_tex = current
+                mask_tex = current
                 if step["kind"] == "IMAGE":
                     image = bpy.data.images.get(step["image_name"])
                     if image is None:
@@ -3130,12 +3257,61 @@ def _build_upper_transforms(s):
                                            step["image_name"])
                     source_tex = gpu.texture.from_image(image)
                     s.upper_transform_gpu_refs.append(source_tex)
+                mask = step.get("mask")
+                if mask:
+                    image = bpy.data.images.get(mask["image_name"])
+                    if image is None:
+                        raise RuntimeError("missing upper mask %r" %
+                                           mask["image_name"])
+                    mask_tex = gpu.texture.from_image(image)
+                    s.upper_transform_gpu_refs.append(mask_tex)
+                source_uv_map = str(step.get("uv_map", ""))
+                active_uv_map = str(spec.get("active_uv_map", ""))
+                reproject = (step["kind"] == "IMAGE"
+                             and source_uv_map != active_uv_map)
                 fb = gpu.types.GPUFrameBuffer(color_slots=(target,))
                 with fb.bind():
                     gpu.state.viewport_set(0, 0, size, size)
                     gpu.state.blend_set('NONE')
-                    shader = s.upper_transform_shader
+                    if reproject:
+                        # Preserve transform texels outside the mesh's active
+                        # UV islands before overwriting covered fragments.
+                        shader = s.copy_shader
+                        shader.bind()
+                        shader.uniform_float("uv_origin", (0.0, 0.0))
+                        shader.uniform_float("uv_scale", (1.0, 1.0))
+                        shader.uniform_sampler("source_tex", current)
+                        s.copy_batch.draw(shader)
+                        obj = bpy.data.objects.get(s.obj_name)
+                        source_uvs = (build_uv_soup(obj, source_uv_map)
+                                      if obj is not None else None)
+                        if source_uvs is None:
+                            raise RuntimeError(
+                                "missing upper UV map %r" % source_uv_map)
+                        batch = s.upper_reproject_batches.get(source_uv_map)
+                        if batch is None:
+                            from gpu_extras.batch import batch_for_shader
+                            batch = batch_for_shader(
+                                s.upper_reproject_shader, 'TRIS',
+                                {"target_uv": s.uvs,
+                                 "source_uv": source_uvs})
+                            s.upper_reproject_batches[source_uv_map] = batch
+                        shader = s.upper_reproject_shader
+                    else:
+                        shader = s.upper_transform_shader
                     shader.bind()
+                    if reproject:
+                        shader.uniform_float(
+                            "source_uses_alpha",
+                            1.0 if step.get("use_alpha") else 0.0)
+                        shader.uniform_float("factor", float(step["factor"]))
+                        shader.uniform_int(
+                            "blend_mode", _BLEND_INDEX.get(step["blend"], 0))
+                        shader.uniform_sampler("current_tex", current)
+                        shader.uniform_sampler("source_tex", source_tex)
+                        batch.draw(shader)
+                        current, target = target, current
+                        continue
                     shader.uniform_float("uv_origin", (0.0, 0.0))
                     shader.uniform_float("uv_scale", (1.0, 1.0))
                     shader.uniform_float(
@@ -3147,10 +3323,18 @@ def _build_upper_transforms(s):
                         "source_uses_alpha",
                         1.0 if step.get("use_alpha") else 0.0)
                     shader.uniform_float("factor", float(step["factor"]))
+                    shader.uniform_float("mask_present",
+                                         1.0 if mask else 0.0)
+                    shader.uniform_float("mask_invert",
+                                         1.0 if mask and mask["invert"]
+                                         else 0.0)
+                    shader.uniform_float("mask_opacity", float(
+                        mask["opacity"] if mask else 1.0))
                     shader.uniform_int(
                         "blend_mode", _BLEND_INDEX.get(step["blend"], 0))
                     shader.uniform_sampler("current_tex", current)
                     shader.uniform_sampler("source_tex", source_tex)
+                    shader.uniform_sampler("mask_tex", mask_tex)
                     s.upper_transform_batch.draw(shader)
                 current, target = target, current
             s.upper_transform_texs[key] = current
