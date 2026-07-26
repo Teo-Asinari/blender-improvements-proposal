@@ -27,6 +27,13 @@ from bpy.props import (BoolProperty, BoolVectorProperty, CollectionProperty,
 
 from . import engine
 from . import model
+
+CANVAS_SIZE_ITEMS = (
+    ('1024', "1K", "1024 × 1024 pixels"),
+    ('2048', "2K", "2048 × 2048 pixels"),
+    ('4096', "4K", "4096 × 4096 pixels"),
+    ('8192', "8K", "8192 × 8192 pixels; experimental and VRAM intensive"),
+)
 from . import stencil
 
 _LAYER_UID_RE = re.compile(r'layers\["([^"]+)"\]')
@@ -416,6 +423,15 @@ class ImpastoLayer(bpy.types.PropertyGroup):
 class ImpastoChannel(bpy.types.PropertyGroup):
     """A registry channel enabled on this stack. name = channel key."""
     enabled: BoolProperty(default=True, update=_structural)
+    use_custom_canvas_size: BoolProperty(
+        name="Override",
+        description="Use a channel-specific resolution for newly created "
+                    "canvases; existing images are not resized and channels "
+                    "painted together by the GPU engine must match",
+        default=False)
+    canvas_size: EnumProperty(
+        name="Resolution", items=CANVAS_SIZE_ITEMS, default='2048',
+        description="Resolution for new canvases of this channel")
 
 
 def _active_index_update(self, context):
@@ -476,6 +492,12 @@ class ImpastoStack(bpy.types.PropertyGroup):
     # presentation-order UI slot for template_list; the uid above is
     # the source of truth for every cross-reference.
     active_index: IntProperty(default=-1, update=_active_index_update)
+    default_canvas_size: EnumProperty(
+        name="Default Resolution", items=CANVAS_SIZE_ITEMS, default='2048',
+        description="Resolution for newly created Paint canvases; existing "
+                    "images are not resized")
+    ui_show_resolution: BoolProperty(
+        name="Canvas Resolution", default=False)
 
     def active_layer(self):
         for ly in self.layers:

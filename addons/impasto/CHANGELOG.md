@@ -4,6 +4,13 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.8
+
+- Added persistent stack-level canvas resolution selection for newly created
+  Paint images at 1K, 2K, 4K, or experimental 8K.
+- Added optional per-channel resolution overrides and made their
+  non-destructive, new-images-only behavior explicit in the main panel.
+
 ## 0.15.7
 
 - Added exact upper-layer mask composition for one visible same-UV image mask

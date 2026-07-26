@@ -27,8 +27,8 @@ try:
     impasto.register()
     check("package registration",
           hasattr(bpy.types.ShaderNodeTree, "impasto"))
-    check("metadata", impasto.bl_info["version"] == (0, 15, 7))
-    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.15.7")
+    check("metadata", impasto.bl_info["version"] == (0, 15, 8))
+    check("panel version label", impasto.ui._VERSION_LABEL == "Impasto 0.15.8")
     check("extended brush sections collapse by default",
           not impasto.props.ImpastoLayer.bl_rna.properties[
               "ui_show_emission_paint"].default
@@ -123,6 +123,17 @@ try:
           engine._last_deltas is not None
           and not engine._last_deltas.errors,
           str(engine._last_deltas))
+    tree.impasto.default_canvas_size = '1024'
+    base_resolution = tree.impasto.channels.get("base_color")
+    base_resolution.use_custom_canvas_size = True
+    base_resolution.canvas_size = '2048'
+    check("stack and per-channel creation resolutions are configurable",
+          tree.impasto.default_canvas_size == '1024'
+          and base_resolution.use_custom_canvas_size
+          and impasto.operator_support.stack_channel_canvas_size(
+              tree.impasto, "base_color") == 2048
+          and impasto.operator_support.stack_channel_canvas_size(
+              tree.impasto, "roughness") == 1024)
 
     check("add fill",
           bpy.ops.impasto.layer_add(layer_type="FILL") == {"FINISHED"})
@@ -135,6 +146,20 @@ try:
           str(engine._last_deltas))
 
     paint_layer = tree.impasto.active_layer()
+    check("new layer uses the initial channel override",
+          tuple(bpy.data.images[paint_layer.image_name].size)
+          == (2048, 2048))
+    check("bind channel using stack default resolution",
+          bpy.ops.impasto.binding_add(channel_key="roughness")
+          == {"FINISHED"})
+    roughness_image = bpy.data.images[
+        paint_layer.bindings["roughness"].image_name]
+    check("new channel canvas uses resolved stack resolution",
+          tuple(roughness_image.size) == (1024, 1024))
+    check("resolution controls disclose non-destructive creation semantics",
+          "existing canvases are unchanged" in
+          impasto.props.ImpastoStack.bl_rna.properties[
+              "default_canvas_size"].description.lower())
     stencil_path = Path(tempfile.gettempdir()) / "impasto_stencil_browser.png"
     stencil_source = bpy.data.images.new(
         "Impasto Stencil Browser Source", 4, 4)

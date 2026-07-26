@@ -79,6 +79,26 @@ class IMPASTO_PT_main(PaintPanelMixin, bpy.types.Panel):
             model.CHANNEL_MAP[c.name].label for c in state.channels
             if c.enabled and c.name in model.CHANNEL_MAP)
         layout.label(text=chan_labels, icon='MATERIAL')
+        resolution = layout.box()
+        header = resolution.row(align=True)
+        header.prop(
+            state, "ui_show_resolution", text="Canvas Resolution",
+            icon='TRIA_DOWN' if state.ui_show_resolution else 'TRIA_RIGHT',
+            emboss=False)
+        header.prop(state, "default_canvas_size", text="")
+        if state.ui_show_resolution:
+            resolution.label(
+                text="Applies to new images; existing canvases are unchanged",
+                icon='INFO')
+            for channel in state.channels:
+                if channel.name not in model.CHANNEL_MAP:
+                    continue
+                row = resolution.row(align=True)
+                row.prop(channel, "use_custom_canvas_size",
+                         text=model.CHANNEL_MAP[channel.name].label)
+                sub = row.row(align=True)
+                sub.enabled = channel.use_custom_canvas_size
+                sub.prop(channel, "canvas_size", text="")
         kiln_tex = (mat.node_tree.nodes.get("Kiln Bake Target")
                     if mat.use_nodes else None)
         if (kiln_tex is not None

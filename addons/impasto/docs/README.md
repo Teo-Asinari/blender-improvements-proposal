@@ -1,6 +1,6 @@
 # Impasto documentation
 
-Impasto 0.15.7 documentation is organized by authority and lifecycle.
+Impasto 0.15.8 documentation is organized by authority and lifecycle.
 
 ## Start here
 
