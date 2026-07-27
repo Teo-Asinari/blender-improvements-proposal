@@ -336,8 +336,7 @@ class IMPASTO_OT_layer_add(bpy.types.Operator):
                                       size=(int(self.canvas_size)
                                             if self.canvas_size != 'DEFAULT'
                                             else operator_support
-                                            .stack_channel_canvas_size(
-                                                state, ch.key)),
+                                            .stack_canvas_size(state)),
                                       generated_color=_channel_canvas_seed(ch))
                 # Explicit per-binding canvas (schema 2). The layer slot
                 # mirrors the primary canvas for legacy compatibility.
@@ -448,7 +447,7 @@ class IMPASTO_OT_channel_add(bpy.types.Operator):
         with engine.stack_edit_session(tree):
             ensure_stack_channel(state, ch.key)
             if self.bind_active_layer and can_bind:
-                ensure_layer_binding(layer, ch.key, state)
+                ensure_layer_binding(layer, ch.key)
         message = "%s added to stack" % ch.label
         if self.bind_active_layer and can_bind:
             message += " and selected layer"
@@ -482,7 +481,7 @@ class IMPASTO_OT_binding_add(bpy.types.Operator):
         _remember_displaced_channel_link(mat, ch.key)
         with engine.stack_edit_session(tree):
             ensure_stack_channel(state, ch.key)
-            ensure_layer_binding(ly, ch.key, state)
+            ensure_layer_binding(ly, ch.key)
         return {'FINISHED'}
 
 

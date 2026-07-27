@@ -73,11 +73,8 @@ def layer_canvas_size(layer):
     return DEFAULT_IMAGE_SIZE
 
 
-def stack_channel_canvas_size(state, channel_key):
-    """Resolve the non-destructive creation size for one stack channel."""
-    channel = state.channels.get(channel_key) if state is not None else None
-    if channel is not None and channel.use_custom_canvas_size:
-        return int(channel.canvas_size)
+def stack_canvas_size(state):
+    """Resolve the stack-wide non-destructive canvas creation size."""
     if state is not None:
         return int(state.default_canvas_size)
     return DEFAULT_IMAGE_SIZE
@@ -104,7 +101,7 @@ def ensure_stack_channel(state, channel_key):
     return state.channels.get(channel_key), True
 
 
-def ensure_layer_binding(layer, channel_key, state=None):
+def ensure_layer_binding(layer, channel_key):
     """Idempotently bind a registered channel to one non-group layer."""
     channel = model.CHANNEL_MAP.get(channel_key)
     if channel is None:
@@ -121,9 +118,7 @@ def ensure_layer_binding(layer, channel_key, state=None):
         binding.mode = 'SHARED'
         image = new_layer_image(
             "Impasto %s %s %s" % (layer.label, channel.label, layer.name),
-            channel.colorspace,
-            size=(stack_channel_canvas_size(state, channel_key)
-                  if state is not None else layer_canvas_size(layer)),
+            channel.colorspace, size=layer_canvas_size(layer),
             generated_color=channel_canvas_seed(channel))
         binding.image_name = image.name
     elif channel.kind == 'COLOR':

@@ -4,6 +4,12 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.9
+
+- Simplified canvas sizing to one persistent stack-wide selector so every
+  channel created within a Paint layer remains GPU-session compatible.
+- Removed per-channel resolution overrides.
+
 ## 0.15.8
 
 - Added persistent stack-level canvas resolution selection for newly created
