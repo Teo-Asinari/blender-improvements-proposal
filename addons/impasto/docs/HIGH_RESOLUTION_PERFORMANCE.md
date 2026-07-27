@@ -52,12 +52,15 @@ not ordinary resident pen-up latency.
 
 ## Current policy
 
-- 1K, 2K, and 4K creation are exposed in the UI.
-- 8K is not exposed and is unsupported as an interactive target.
+- A persistent stack-wide selector exposes 1K, 2K, 4K, and experimental 8K
+  for newly created Paint layers. Channels added later inherit their layer's
+  resolution, preserving uniform GPU-session dimensions.
+- 8K remains unqualified as an interactive target despite being selectable.
 - Large full-surface strokes can exceed the 256 MiB atomic undo budget. Such a
   record is rejected rather than partially retained.
-- Before exposing 8K, benchmark Paint, Erase, Soften, Smear, preview orbiting,
-  explicit flush, save, undo, and session teardown across 1/4/8 channels.
+- Before treating 8K as supported, benchmark Paint, Erase, Soften, Smear,
+  preview orbiting, explicit flush, save, undo, and session teardown across
+  1/4/8 channels.
 
 The headless analytic benchmark matrix covers Paint, Erase, Soften, and Smear
 at 1, 4, and 8 channels. Real timing still requires an interactive GPU context:

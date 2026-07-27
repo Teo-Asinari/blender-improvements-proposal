@@ -58,6 +58,8 @@ Weight/Radius/Scale channels can be registered and bound to the selected Paint
 layer in place; new canvases inherit that layer's resolution and existing
 bindings/images remain untouched. Subsurface IOR and Anisotropy are supported
 as register-only material channels rather than paint canvases.
+A stack-wide selector chooses 1K, 2K, 4K, or experimental 8K for newly
+created Paint layers.
 
 Impasto currently offers three painting paths:
 

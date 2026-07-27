@@ -13,7 +13,9 @@ prototype and is not intended for serious work.**
 
 - Ordered Paint and Fill layers with visibility, opacity, blend mode, and
   per-channel influence.
-- One image canvas per painted channel, with 1K, 2K, or 4K layer resolution.
+- One image canvas per painted channel. A persistent stack-wide selector
+  creates new Paint layers at 1K, 2K, 4K, or experimental 8K; channels added
+  later inherit their layer's resolution.
 - The expanded Layer Channels view reports each bound image's actual pixel
   dimensions and warns when channel sizes differ, including imported or
   migrated images.
@@ -226,9 +228,9 @@ were recorded.
 - The live preview is an Impasto approximation, not Blender Material Preview.
 - GPU painting currently requires UV-mapped image canvases.
 - Full arbitrary layered-normal composition is not implemented.
-- Resident GPU preview currently enters authoritative Blender material
-  inspection while image masks participate; native mask painting, generated
-  materials, and flattened export remain available.
+- Resident GPU preview supports one visible same-UV image mask per affine
+  upper layer. Multiple, independently mapped, lower, or active masks enter
+  authoritative Blender material inspection.
 - The SSS Caliper is tied to an active GPU paint session; a persistent pinned
   inspection mode remains future work.
 - GPU canvases consume real VRAM. One 4K RGBA16F channel is approximately
@@ -238,8 +240,9 @@ were recorded.
   `(channels + 1) × 128 MiB` at 4K and `(channels + 1) × 512 MiB` at 8K,
   before baseline textures, viewport depth, Blender's own image textures, and
   up to 256 MiB of tile undo snapshots.
-- 8K creation is not currently exposed in the UI. Soften and Smear use
-  conservative dirty-region copies, but 8K remains unqualified.
+- 8K creation is exposed as an experimental option. Soften and Smear use
+  conservative dirty-region copies, but 8K remains unqualified and may have
+  prohibitive VRAM, synchronization, undo, or teardown costs.
 
 See [High-resolution painting estimates](docs/HIGH_RESOLUTION_PERFORMANCE.md)
 for formulas, VRAM/RAM tables, expected responsiveness, and qualification
