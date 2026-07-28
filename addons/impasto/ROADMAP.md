@@ -1,10 +1,19 @@
 # Impasto roadmap
 
-This is the authoritative list of open work for Impasto 0.15.9. Shipped work
+This is the authoritative list of open work for Impasto 0.15.10. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Near-term
 
+- Make brush mode, channel targets, and relevant brush parameters update live
+  during an active GPU painting session, without requiring a restart.
+- Make stencil enable/disable and stencil settings update live during GPU
+  painting. In particular, the placement overlay must immediately follow the
+  current toggle instead of retaining its session-start state.
+- Improve roughness readability beyond the current supplemental studio light.
+  Add an optional, clearly identified diagnostic view or stronger
+  preview-only contrast control while keeping the neutral preview unchanged
+  and never modifying painted roughness data.
 - Interactively benchmark Paint, Erase, Soften, and Smear at 4K with 1, 4, and
   8 channels. Treat 8K as experimental until latency, synchronization, undo,
   and memory behavior have been measured. See
@@ -29,6 +38,9 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Explicitly not open
 
+- Embedding Eevee inside the resident GPU painting overlay is not planned.
+  Instead, improve Lit PBR parity with Blender and provide diagnostic channel
+  views; Eevee remains the authoritative post-flush material preview.
 - Flattening the stack to combined per-channel images is implemented.
 - Paint, Soften, Smear, and Erase already have independent per-channel target
   toggles with All/None shortcuts.
