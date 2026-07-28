@@ -4,6 +4,11 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.10
+
+- Add a neutral-by-default, preview-only Roughness Readability light control
+  for distinguishing low and medium roughness without changing painted data.
+
 ## 0.15.9
 
 - Simplified canvas sizing to one persistent stack-wide selector so every

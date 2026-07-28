@@ -91,6 +91,7 @@ PROPERTY_IDS = {
         "gpu_preview_mode", "preview_environment_exposure",
         "preview_environment_rotation", "preview_key_strength",
         "preview_key_rotation", "preview_fill_strength",
+        "preview_roughness_readability",
         "preview_base_normal_image", "preview_base_normal_uv_map",
         "preview_base_normal_strength", "preview_base_normal_invert_green",
         "paint_workflow", "ui_show_channels", "ui_show_emission_channels",

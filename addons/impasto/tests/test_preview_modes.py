@@ -131,9 +131,13 @@ try:
 
     layer.preview_environment_exposure = 1.5
     layer.preview_fill_strength = 2.0
+    layer.preview_roughness_readability = 1.25
     check("live lighting edits apply without restarting session",
           operator._refresh_preview_lighting()
           and gpu_engine.session_active())
+    check("roughness readability persists in resident preview settings",
+          gpu_engine.stroke_settings_snapshot()[1]
+              ["preview_roughness_readability"] == 1.25)
     check("lighting edits queue no CPU image synchronization",
           gpu_engine.take_pending_pixels() is None)
 

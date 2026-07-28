@@ -924,6 +924,14 @@ void main()
             n, v, normalize(vec3(-0.58, 0.46, 0.67)), albedo, f0,
             metallic, roughness, vec3(0.14, 0.19, 0.28)
                                    * preview_fill.x);
+        /* Optional display-only reflection aid.  This deliberately uses the
+         * original roughness in the same GGX light evaluation: it changes
+         * only the studio illumination, never the painted/material value. */
+        rgb += preview_key_light(
+            n, v, normalize(rotate_around_z(vec3(-0.18, -0.62, 0.76),
+                                           preview_lighting.w)), albedo, f0,
+            metallic, roughness, vec3(0.34, 0.37, 0.42)
+                                   * preview_fill.y);
     } else {
         /* Graceful no-texture fallback: energy-conserving hemispheric light. */
         float sky = clamp(n.z * 0.5 + 0.5, 0.0, 1.0);
@@ -4454,7 +4462,8 @@ def _draw_composed_preview(s):
         float(s.settings.get("preview_key_rotation", 0.0))),
         "preview_fill": (
             float(s.settings.get("preview_fill_strength", 1.0)),
-            0.0, 0.0, 0.0),
+            float(s.settings.get("preview_roughness_readability", 0.0)),
+            0.0, 0.0),
     }
     resolved = bool(s.stack_spec and s.stack_spec.get("enabled"))
     base_normal_enabled = s.base_normal_tex is not None

@@ -1067,6 +1067,8 @@ def gpu_preview_lighting(layer):
         "preview_key_strength": layer.preview_key_strength,
         "preview_key_rotation": layer.preview_key_rotation,
         "preview_fill_strength": layer.preview_fill_strength,
+        "preview_roughness_readability":
+            layer.preview_roughness_readability,
     }
 
 

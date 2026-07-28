@@ -208,6 +208,8 @@ class IMPASTO_PT_preview_lighting(bpy.types.Panel):
         col.prop(layer, "preview_key_strength", text="Key")
         col.prop(layer, "preview_key_rotation", text="Key Rotation")
         col.prop(layer, "preview_fill_strength", text="Fill")
+        col.prop(layer, "preview_roughness_readability",
+                 text="Roughness Readability")
         col.separator()
         col.label(text="Base Normal Map", icon='NORMALS_FACE')
         col.template_ID(layer, "preview_base_normal_image", open="image.open")

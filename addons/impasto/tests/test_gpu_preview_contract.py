@@ -148,6 +148,10 @@ check("subsurface preview uses Weight and Radius-times-Scale distance",
       "vec3 scatter_distance = sss_radius * sss_scale" in src
       and "sss_weight * scatter_extent" in src
       and "sample_environment_panel(-environment_n, 0.0)" in src)
+check("roughness readability adds light without remapping roughness",
+      "preview_fill.y" in src
+      and "original roughness in the same GGX light evaluation" in src
+      and "roughness = mix(" not in src)
 check("degenerate and mirrored UVs have explicit handling",
       "abs(uv_det) > 1e-8" in src and "orientation = sign(uv_det)" in src
       and "cross(axis, geometric_n)" in src)

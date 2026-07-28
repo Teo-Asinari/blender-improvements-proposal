@@ -386,6 +386,12 @@ class ImpastoLayer(bpy.types.PropertyGroup):
         name="Fill Strength",
         description="Brightness of the broad light revealing recessed areas",
         default=1.0, min=0.0, soft_max=8.0)
+    preview_roughness_readability: FloatProperty(
+        name="Roughness Readability",
+        description="Preview-only supplemental studio reflection that makes "
+                    "low and medium roughness easier to distinguish; does "
+                    "not change painted roughness or the material",
+        default=0.0, min=0.0, soft_max=4.0)
     preview_base_normal_image: PointerProperty(
         name="Base Normal Map", type=bpy.types.Image,
         description="Optional normal map used only by Impasto's live preview")
