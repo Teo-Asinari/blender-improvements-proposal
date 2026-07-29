@@ -4,6 +4,13 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.11
+
+- Refresh brush mode, channel targets, brush parameters, pressure/stamp state,
+  and stencil state between strokes without restarting GPU painting.
+- Make stencil visibility and placement overlays follow live stencil changes
+  during a resident painting session.
+
 ## 0.15.10
 
 - Add a neutral-by-default, preview-only Roughness Readability light control

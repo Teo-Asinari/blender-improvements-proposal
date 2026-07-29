@@ -247,6 +247,31 @@ try:
           refreshed['stencil_projection'] == 'VIEW_STENCIL'
           and refreshed['stencil_position'] == (0.6, 0.4)
           and refreshed['stencil_opacity'] == 0.25)
+    disabled = stencil.normalized(
+        False, mask.name, 'VIEW_STENCIL', 'ALPHA', 0.25,
+        (0.6, 0.4), (0.2, 0.3), 0.1)
+    check("stencil toggle refresh does not restart resident session",
+          gpu_engine.update_stencil_settings(disabled.as_gpu_settings())
+          and gpu_engine.session_active()
+          and gpu_engine.take_pending_pixels() is None)
+    _payloads, refreshed = gpu_engine.stroke_settings_snapshot()
+    check("live stencil toggle immediately hides its overlay contract",
+          not refreshed['stencil_enabled']
+          and gpu_engine.stencil_preview_quad(
+              (800, 600), (400, 300), 40.0, refreshed) is None)
+    reenabled = stencil.normalized(
+        True, mask.name, 'BRUSH_ALPHA', 'LUMINANCE', 0.75,
+        (0.25, 0.75), (1.2, 0.8), 0.4)
+    check("live stencil settings refresh as one atomic contract",
+          gpu_engine.update_stencil_settings(reenabled.as_gpu_settings()))
+    _payloads, refreshed = gpu_engine.stroke_settings_snapshot()
+    check("live stencil projection and transform reach the overlay",
+          refreshed['stencil_enabled']
+          and refreshed['stencil_projection'] == 'BRUSH_ALPHA'
+          and refreshed['stencil_interpretation'] == 'LUMINANCE'
+          and refreshed['stencil_scale'] == (1.2, 0.8)
+          and gpu_engine.stencil_preview_quad(
+              (800, 600), (400, 300), 40.0, refreshed) is not None)
     gpu_engine.stop_session()
 
     impasto.unregister()

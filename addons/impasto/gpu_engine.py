@@ -2655,27 +2655,64 @@ def update_stroke_settings(payloads, radius=None, hardness=None, opacity=None,
     refreshed = list(payloads)
     if len(refreshed) != s.channels:
         raise ValueError("payload count must match session channels")
-    s.payloads = refreshed
-    s.target_batches = plan_target_batches(s.payloads)
+    changed = False
+    if refreshed != s.payloads:
+        s.payloads = refreshed
+        s.target_batches = plan_target_batches(s.payloads)
+        changed = True
     if radius is not None:
-        s.settings["radius"] = float(radius)
+        value = float(radius)
+        changed |= s.settings.get("radius") != value
+        s.settings["radius"] = value
     if hardness is not None:
-        s.settings["hardness"] = float(hardness)
+        value = float(hardness)
+        changed |= s.settings.get("hardness") != value
+        s.settings["hardness"] = value
     if opacity is not None:
-        s.settings["opacity"] = max(0.0, min(1.0, float(opacity)))
+        value = max(0.0, min(1.0, float(opacity)))
+        changed |= s.settings.get("opacity") != value
+        s.settings["opacity"] = value
     if brush_mode is not None:
-        s.settings["brush_mode"] = str(brush_mode)
+        value = str(brush_mode)
+        changed |= s.settings.get("brush_mode") != value
+        s.settings["brush_mode"] = value
     if brush_target_channel_keys is not None:
-        s.settings["brush_target_channel_keys"] = tuple(
-            brush_target_channel_keys)
+        value = tuple(brush_target_channel_keys)
+        changed |= s.settings.get("brush_target_channel_keys") != value
+        s.settings["brush_target_channel_keys"] = value
     if erase_channel_keys is not None:
-        s.settings["erase_channel_keys"] = tuple(erase_channel_keys)
+        value = tuple(erase_channel_keys)
+        changed |= s.settings.get("erase_channel_keys") != value
+        s.settings["erase_channel_keys"] = value
+    changed |= s.settings.get("brush_stamp") != stamp
     s.settings["brush_stamp"] = stamp
     if stencil_settings is not None:
-        s.settings.update(dict(stencil_settings))
+        for key, value in dict(stencil_settings).items():
+            changed |= s.settings.get(key) != value
+            s.settings[key] = value
     if caliper_settings is not None:
-        s.settings.update(dict(caliper_settings))
-    return True
+        for key, value in dict(caliper_settings).items():
+            changed |= s.settings.get(key) != value
+            s.settings[key] = value
+    return changed
+
+
+def update_stencil_settings(stencil_settings):
+    """Refresh the resident stencil and overlay without restarting.
+
+    Stencil properties belong to viewport/session state rather than to the
+    fixed channel layout, so they may be refreshed independently between UI
+    events.  GPU texture creation/replacement remains deferred to the owning
+    draw callback.
+    """
+    s = _session
+    if s is None:
+        return False
+    changed = False
+    for key, value in dict(stencil_settings).items():
+        changed |= s.settings.get(key) != value
+        s.settings[key] = value
+    return changed
 
 
 def stroke_settings_snapshot():

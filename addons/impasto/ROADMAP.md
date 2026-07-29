@@ -1,15 +1,10 @@
 # Impasto roadmap
 
-This is the authoritative list of open work for Impasto 0.15.10. Shipped work
+This is the authoritative list of open work for Impasto 0.15.11. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Near-term
 
-- Make brush mode, channel targets, and relevant brush parameters update live
-  during an active GPU painting session, without requiring a restart.
-- Make stencil enable/disable and stencil settings update live during GPU
-  painting. In particular, the placement overlay must immediately follow the
-  current toggle instead of retaining its session-start state.
 - Improve roughness readability beyond the current supplemental studio light.
   Add an optional, clearly identified diagnostic view or stronger
   preview-only contrast control while keeping the neutral preview unchanged
@@ -38,6 +33,8 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Explicitly not open
 
+- Brush mode, channel targets, brush parameters, and stencil settings now
+  refresh live between strokes in a resident GPU painting session.
 - Embedding Eevee inside the resident GPU painting overlay is not planned.
   Instead, improve Lit PBR parity with Blender and provide diagnostic channel
   views; Eevee remains the authoritative post-flush material preview.

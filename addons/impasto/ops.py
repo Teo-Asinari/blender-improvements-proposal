@@ -1528,7 +1528,7 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
                            and stamp.supported else None)
         self._radius = (supported_stamp.radius_px if supported_stamp
                         else layer.brush_radius)
-        gpu_engine.update_stroke_settings(
+        changed = gpu_engine.update_stroke_settings(
             payloads, radius=self._radius,
             hardness=layer.brush_hardness, opacity=layer.brush_opacity,
             brush_mode=layer.brush_mode,
@@ -1540,6 +1540,9 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             stamp=supported_stamp,
             stencil_settings=gpu_stencil_settings(layer).as_gpu_settings(),
             caliper_settings=gpu_sss_caliper(layer, context.scene))
+        if changed:
+            self._region.tag_redraw()
+        return changed
 
     def _refresh_preview_mode(self):
         """Apply a sidebar preview change without restarting the session."""
@@ -1556,6 +1559,19 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         self._preview_mode = mode
         self._region.tag_redraw()
         return True
+
+    def _refresh_stencil_settings(self):
+        """Keep the resident stencil mask and placement overlay live."""
+        tree = bpy.data.node_groups.get(self._tree_name)
+        layer = (tree.impasto.layers.get(self._layer_uid)
+                 if tree is not None else None)
+        if layer is None:
+            return False
+        changed = gpu_engine.update_stencil_settings(
+            gpu_stencil_settings(layer).as_gpu_settings())
+        if changed:
+            self._region.tag_redraw()
+        return changed
 
     def _refresh_preview_lighting(self):
         """Apply sidebar lighting edits without restarting or synchronizing."""
@@ -1779,6 +1795,8 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
                 self._region.tag_redraw()
             return {'RUNNING_MODAL'}
         elif etype == 'TIMER':
+            if not gpu_engine.stroke_active():
+                self._refresh_stroke_settings(context)
             self._refresh_preview_mode()
             self._refresh_preview_lighting()
             self._refresh_preview_base_normal()
