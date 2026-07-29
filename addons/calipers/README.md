@@ -1,5 +1,7 @@
 # Calipers — Scale-Aware Voxel-Remesh Preview and Safety
 
+Open work is tracked in [ROADMAP.md](ROADMAP.md).
+
 A Blender add-on (prototype for [Proposal §5](../../PROPOSAL.md#5-scale-aware-remesh-preview-and-safety),
 built on [research/scale-aware-remesh-safety.md](../../research/scale-aware-remesh-safety.md))
 that puts a preflight in front of voxel remeshing: cost estimates and a
