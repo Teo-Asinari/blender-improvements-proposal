@@ -4,8 +4,14 @@
 
 - The pure ownership foundation lives in `gpu/uv_gutters.py`: triangles are
   grouped by mesh-edge and UV continuity, never by paint alpha.
-- Next, rasterize those stable island IDs into an immutable GPU ownership
-  seed and build a nearest-source gutter map once per UV map/resolution.
+- A production-disconnected compact GPU prototype now propagates deterministic
+  local source offsets through an `RG16F` map using only padding-bounded jump
+  steps. Its Blender/OpenGL tests pass; propagation is approximate rather than
+  globally nearest for adversarial seed layouts.
+- Next, rasterize UV interiors into the immutable seed map once per UV map and
+  resolution. The retained map costs 16 MiB at 2K, 64 MiB at 4K, or 256 MiB
+  at 8K; construction temporarily doubles that GPU allocation and uses a
+  float32 CPU seed allocation twice the retained-map size.
 - At pen-up, process only the stroke dirty rectangle expanded by the padding
   radius, ping-pong-copying the complete resident texel (premultiplied RGBA
   for MIX channels; unchanged raw values for ADD channels).

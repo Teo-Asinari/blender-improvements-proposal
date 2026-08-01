@@ -7,8 +7,12 @@ if ADDONS not in sys.path:
     sys.path.insert(0, ADDONS)
 
 from impasto.gpu.uv_gutters import (
+    OFFSET_SENTINEL,
+    bounded_jump_steps,
     build_gutter_plan,
+    build_compact_offset_map,
     expand_pixel_rect,
+    offset_map_bytes,
     triangle_uv_islands,
 )
 
@@ -44,6 +48,77 @@ class UVGutterPlanningTests(unittest.TestCase):
         self.assertEqual(plan.expanded_rect((100, 100, 20, 20)),
                          (92, 92, 36, 36))
 
+    def test_compact_schedule_and_exact_memory_budget(self):
+        self.assertEqual(bounded_jump_steps(8), (8, 4, 2, 1))
+        self.assertEqual(bounded_jump_steps(0), ())
+        self.assertEqual(offset_map_bytes(2048), 16 * 1024 * 1024)
+        self.assertEqual(offset_map_bytes(4096), 64 * 1024 * 1024)
+        self.assertEqual(offset_map_bytes(8192), 256 * 1024 * 1024)
+
+    def test_compact_memory_report_separates_gpu_and_cpu_peaks(self):
+        # One retained RG16F map, two during ping-pong construction, plus the
+        # transient float32 two-component CPU seed owned by the builder.
+        pixels = 4096 * 4096
+        self.assertEqual(offset_map_bytes(4096), pixels * 4)
+        self.assertEqual(pixels * 8, 128 * 1024 * 1024)
+
+
+class UVGutterGPUPrototypeTests(unittest.TestCase):
+    @staticmethod
+    def _read(mask, radius=8):
+        import numpy as np
+        result = build_compact_offset_map(mask, radius)
+        values = np.asarray(result.texture.read().to_list(),
+                            dtype=np.float32)
+        return result, values.reshape(result.height, result.width, 2)
+
+    def test_interior_is_preserved_and_radius_is_bounded(self):
+        import numpy as np
+        mask = np.zeros((25, 25), dtype=bool)
+        mask[12, 12] = True
+        _result, offsets = self._read(mask)
+        self.assertTrue(np.array_equal(offsets[12, 12], (0.0, 0.0)))
+        self.assertTrue(np.array_equal(offsets[12, 20], (-8.0, 0.0)))
+        self.assertGreaterEqual(abs(offsets[12, 21, 0]), 1024.0)
+        # Euclidean radius rejects the diagonal outside the 8 px circle.
+        self.assertGreaterEqual(abs(offsets[18, 18, 0]), 1024.0)
+
+    def test_close_seeds_get_deterministic_bounded_source_with_stable_tie(self):
+        import numpy as np
+        mask = np.zeros((17, 17), dtype=bool)
+        mask[8, 4] = True
+        mask[8, 12] = True
+        _result, first = self._read(mask)
+        _result, second = self._read(mask)
+        self.assertTrue(np.array_equal(first, second))
+        # Equidistant x=8 resolves to the lexicographically earlier source.
+        self.assertTrue(np.array_equal(first[8, 8], (-4.0, 0.0)))
+        self.assertTrue(np.array_equal(first[8, 9], (3.0, 0.0)))
+
+    def test_edges_do_not_wrap_and_empty_seed_remains_invalid(self):
+        import numpy as np
+        mask = np.zeros((12, 12), dtype=bool)
+        mask[0, 0] = True
+        _result, offsets = self._read(mask, 3)
+        self.assertTrue(np.array_equal(offsets[0, 3], (-3.0, 0.0)))
+        self.assertGreaterEqual(abs(offsets[0, 11, 0]), 1024.0)
+        empty = np.zeros((7, 9), dtype=bool)
+        _result, invalid = self._read(empty)
+        self.assertTrue(np.all(invalid == OFFSET_SENTINEL))
+
+    def test_radius_zero_keeps_only_alpha_independent_seed_mask(self):
+        import numpy as np
+        mask = np.zeros((5, 5), dtype=bool)
+        mask[2, 2] = True
+        _result, offsets = self._read(mask, 0)
+        self.assertTrue(np.array_equal(offsets[2, 2], (0.0, 0.0)))
+        self.assertEqual(offsets[2, 1, 0], OFFSET_SENTINEL)
+
 
 if __name__ == "__main__":
-    unittest.main(argv=[__file__])
+    result = unittest.main(argv=[__file__], exit=False)
+    try:
+        import bpy
+        bpy.ops.wm.quit_blender()
+    except ImportError:
+        pass
