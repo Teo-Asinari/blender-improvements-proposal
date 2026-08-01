@@ -1,5 +1,18 @@
 # Impasto roadmap
 
+## UV seam-safe paint padding
+
+- The pure ownership foundation lives in `gpu/uv_gutters.py`: triangles are
+  grouped by mesh-edge and UV continuity, never by paint alpha.
+- Next, rasterize those stable island IDs into an immutable GPU ownership
+  seed and build a nearest-source gutter map once per UV map/resolution.
+- At pen-up, process only the stroke dirty rectangle expanded by the padding
+  radius, ping-pong-copying the complete resident texel (premultiplied RGBA
+  for MIX channels; unchanged raw values for ADD channels).
+- Expand tile-undo capture and session readback bounds by the same radius.
+  Never overwrite occupied UV texels. Overlapping UV faces remain ambiguous
+  and must be diagnosed rather than silently padded.
+
 This is the authoritative list of open work for Impasto 0.15.11. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
