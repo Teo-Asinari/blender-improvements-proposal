@@ -8,6 +8,7 @@ canvases make alpha unsuitable).
 """
 
 from dataclasses import dataclass
+import hashlib
 import time
 
 
@@ -215,6 +216,65 @@ class CompactOffsetMap:
     persistent_bytes: int
     peak_gpu_build_bytes: int
     transient_cpu_bytes: int
+
+
+@dataclass(frozen=True)
+class UVSeedDiagnostics:
+    triangle_count: int
+    subpixel_triangles: int
+    outside_unit_square: int
+    exact_duplicate_triangles: int
+
+    @property
+    def safe(self):
+        return self.exact_duplicate_triangles == 0
+
+
+def uv_seed_key(uv_triangles, canvas_size, radius=DEFAULT_PADDING_PX):
+    """Stable cache key for UV geometry, resolution, radius, and format."""
+    import numpy as np
+    uvs = np.ascontiguousarray(uv_triangles, dtype=np.float32).reshape(-1, 2)
+    digest = hashlib.blake2b(uvs.tobytes(), digest_size=16).hexdigest()
+    return (digest, int(canvas_size), int(radius), OFFSET_FORMAT)
+
+
+def diagnose_uv_seeds(uv_triangles, canvas_size):
+    """Return cheap conservative diagnostics before GPU allocation."""
+    import numpy as np
+    tris = np.asarray(uv_triangles, dtype=np.float64).reshape(-1, 3, 2)
+    size = int(canvas_size)
+    if size <= 0:
+        raise ValueError("canvas_size must be positive")
+    a, b = tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0]
+    area_px = np.abs(a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0]) * size * size * 0.5
+    subpixel = int(np.count_nonzero(area_px < 0.5))
+    outside = int(np.count_nonzero(np.any((tris < 0.0) | (tris > 1.0), axis=(1, 2))))
+    seen, duplicates = set(), 0
+    for tri in tris:
+        canonical = tuple(sorted((round(float(uv[0]), 7), round(float(uv[1]), 7)) for uv in tri))
+        if canonical in seen:
+            duplicates += 1
+        else:
+            seen.add(canonical)
+    return UVSeedDiagnostics(len(tris), subpixel, outside, duplicates)
+
+
+_SEED_VERT = """
+void main() { gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0); }
+"""
+_SEED_FRAG = """
+void main() { fragOffset = vec2(0.0); }
+"""
+
+
+def _seed_shader_create_info():
+    import gpu
+    info = gpu.types.GPUShaderCreateInfo()
+    info.vertex_in(0, "VEC2", "uv")
+    info.fragment_out(0, "VEC2", "fragOffset")
+    info.vertex_source(_SEED_VERT)
+    info.fragment_source(_SEED_FRAG)
+    return info
 
 
 def build_compact_offset_map(interior_mask, radius=DEFAULT_PADDING_PX):

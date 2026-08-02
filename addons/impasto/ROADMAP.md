@@ -2,6 +2,9 @@
 
 ## UV seam-safe paint padding
 
+Development branch: `feature/impasto-uv-gutter-padding`. The feature remains
+production-disconnected and makes no changes to painting yet.
+
 - The pure ownership foundation lives in `gpu/uv_gutters.py`: triangles are
   grouped by mesh-edge and UV continuity, never by paint alpha.
 - A production-disconnected compact GPU prototype now propagates deterministic
@@ -12,12 +15,29 @@
   resolution. The retained map costs 16 MiB at 2K, 64 MiB at 4K, or 256 MiB
   at 8K; construction temporarily doubles that GPU allocation and uses a
   float32 CPU seed allocation twice the retained-map size.
+- Partial, unvalidated groundwork exists for UV/resolution cache keys, direct
+  GPU seed-raster shaders, and warnings for out-of-range, very small, and
+  exactly duplicated UV triangles. These diagnostics do not yet detect every
+  partial overlap, and the small-triangle warning is heuristic.
 - At pen-up, process only the stroke dirty rectangle expanded by the padding
   radius, ping-pong-copying the complete resident texel (premultiplied RGBA
   for MIX channels; unchanged raw values for ADD channels).
 - Expand tile-undo capture and session readback bounds by the same radius.
   Never overwrite occupied UV texels. Overlapping UV faces remain ambiguous
   and must be diagnosed rather than silently padded.
+
+Remaining sequence:
+
+1. Complete and foreground-test seed rasterization, session lifecycle,
+   invalidation, cleanup, logging, and an experimental default-off toggle.
+2. Integrate targeted-channel pen-up copying without overwriting UV interiors.
+3. Capture expanded gutter regions before the first dab for Undo/Redo and
+   include them in flush/save dirty bounds.
+4. Stress-test Smart UV atlases at 2K/4K; keep 8K experimental because the
+   retained compact map alone costs 256 MiB.
+
+Estimate: two to four focused engineering passes for an experimental working
+version, and four to seven for a robust release-quality implementation.
 
 This is the authoritative list of open work for Impasto 0.15.11. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.
