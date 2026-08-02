@@ -44,6 +44,17 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Near-term
 
+- Fix orphaned GPU-paint sessions when the owning Paint layer or stack is
+  deleted. Confirmed failure: the modal timer calls
+  `_refresh_stroke_settings()`, raises `PaintTargetError("The active paint
+  layer disappeared")`, and exits without `_finish()`, leaving resident GPU
+  resources/status overlays alive while pointer events return to Blender.
+  Until fixed, recover from Blender's Python Console with
+  `from impasto import gpu_engine; gpu_engine.stop_session()`. The final fix
+  must catch missing-target failures on every modal refresh path, always
+  remove timers/draw handlers/resources, and either prevent deletion during a
+  resident session or stop/flush it explicitly before deletion. Add regression
+  coverage for layer deletion, whole-stack removal, and left-handed input.
 - Improve roughness readability beyond the current supplemental studio light.
   Add an optional, clearly identified diagnostic view or stronger
   preview-only contrast control while keeping the neutral preview unchanged
