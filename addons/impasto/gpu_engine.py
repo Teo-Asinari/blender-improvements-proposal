@@ -116,6 +116,7 @@ from .gpu.brush_math import (
 )
 from .gpu.caliper import sss_caliper_layout
 from .gpu import overlays as gpu_overlays
+from .gpu import uv_gutters
 
 # ---------------------------------------------------------------------------
 # Tunables
@@ -2095,6 +2096,10 @@ class _Session:
         self.probe_lines = None
         self.overlay_circle_batch = None
         self.overlay_color_shader = None
+        self.gutter_uvs = None
+        self.gutter_offset_map = None
+        self.gutter_map_key = None
+        self.gutter_diagnostics = None
 
         # Prepass cache: key of the view state the prepass was rendered
         # for, plus the matrices captured at that moment (the dab shader
@@ -2469,6 +2474,7 @@ def start_session(obj, images, region, channels=None, payloads=None,
             s.settings["base_normal_image_name"] = ""
         s.base_normal_uvs = uvs
     s.normals = normals
+    s.gutter_uvs = uvs.reshape(-1, 3, 2)
     s.tri_uv_bboxes = triangle_uv_bboxes(uvs)
     _session = s
     keys = tuple(s.settings.get("channel_keys", ()))
@@ -2516,7 +2522,7 @@ def _release_gpu_references(s):
         "upper_reproject_shader", "upper_reproject_batches",
         "upper_transform_texs", "upper_transform_gpu_refs",
         "active_preview_gpu_refs", "overlay_circle_batch",
-        "overlay_color_shader",
+        "overlay_color_shader", "gutter_offset_map",
     )
     for name in names:
         if name in {"baseline_texs", "active_preview_texs",
@@ -2528,6 +2534,8 @@ def _release_gpu_references(s):
         else:
             setattr(s, name, None)
     s.depth_fb_size = None
+    s.gutter_map_key = None
+    s.gutter_diagnostics = None
     s.gpu_ready = False
 
 
@@ -2956,6 +2964,47 @@ class _GPUTileBackend:
         return None
 
 
+def _ensure_uv_gutter_map(s):
+    """Build the optional diagnostic ownership map once for this session."""
+    if not s.settings.get("experimental_uv_gutters", False):
+        return False
+    radius = int(s.settings.get(
+        "uv_gutter_padding_px", uv_gutters.DEFAULT_PADDING_PX))
+    key = uv_gutters.uv_seed_key(s.gutter_uvs, s.size, radius)
+    if s.gutter_offset_map is not None and s.gutter_map_key == key:
+        return True
+    # Never retain a stale map when UVs, resolution, radius, or format differ.
+    s.gutter_offset_map = None
+    s.gutter_map_key = None
+    s.gutter_diagnostics = None
+    try:
+        result, diagnostics = uv_gutters.build_compact_offset_map_from_uvs(
+            s.gutter_uvs, s.size, radius)
+    except Exception as exc:
+        # This experimental diagnostic must never prevent an ordinary paint
+        # session. Exact duplicate UV triangles deliberately take this path.
+        s.settings["experimental_uv_gutters"] = False
+        _log_line("GPU_PAINT_UV_GUTTER status=disabled reason=%s"
+                  % str(exc).replace("\n", " "))
+        return False
+    s.gutter_offset_map = result
+    s.gutter_map_key = key
+    s.gutter_diagnostics = diagnostics
+    mib = 1024.0 * 1024.0
+    _log_line(
+        "GPU_PAINT_UV_GUTTER status=ready format=%s size=%d radius=%d "
+        "persistent_mb=%.1f peak_gpu_build_mb=%.1f cpu_peak_mb=%.1f "
+        "build_ms=%.3f triangles=%d subpixel=%d outside_01=%d "
+        "exact_duplicates=%d partial_overlaps=not_checked propagation=approximate"
+        % (uv_gutters.OFFSET_FORMAT, s.size, radius,
+           result.persistent_bytes / mib, result.peak_gpu_build_bytes / mib,
+           result.transient_cpu_bytes / mib, result.initialization_ms,
+           diagnostics.triangle_count, diagnostics.subpixel_triangles,
+           diagnostics.outside_unit_square,
+           diagnostics.exact_duplicate_triangles))
+    return True
+
+
 def _ensure_gpu(s):
     if s.gpu_ready:
         return
@@ -3024,6 +3073,7 @@ def _ensure_gpu(s):
     # which converts to float32 regardless of the attachment format.
     size = s.size
     n = s.channels
+    _ensure_uv_gutter_map(s)
 
     # Every logical-layer binding owns an independent Blender Image. Seed all
     # GPU targets so an untouched channel round-trips losslessly.

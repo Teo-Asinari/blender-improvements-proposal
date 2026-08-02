@@ -1,6 +1,8 @@
 import unittest
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 ADDONS = str(Path(__file__).resolve().parents[2])
 if ADDONS not in sys.path:
@@ -113,6 +115,61 @@ class UVGutterGPUPrototypeTests(unittest.TestCase):
         _result, offsets = self._read(mask, 0)
         self.assertTrue(np.array_equal(offsets[2, 2], (0.0, 0.0)))
         self.assertEqual(offsets[2, 1, 0], OFFSET_SENTINEL)
+
+
+class UVGutterSessionLifecycleTests(unittest.TestCase):
+    @staticmethod
+    def _session(enabled=True):
+        import numpy as np
+        return SimpleNamespace(
+            settings={"experimental_uv_gutters": enabled,
+                      "uv_gutter_padding_px": 8},
+            gutter_uvs=np.asarray((((0, 0), (1, 0), (0, 1)),),
+                                  dtype=np.float32),
+            size=64, gutter_offset_map=None, gutter_map_key=None,
+            gutter_diagnostics=None)
+
+    def test_default_off_never_allocates(self):
+        from impasto import gpu_engine
+        session = self._session(False)
+        with mock.patch.object(
+                gpu_engine.uv_gutters,
+                "build_compact_offset_map_from_uvs") as builder:
+            self.assertFalse(gpu_engine._ensure_uv_gutter_map(session))
+            builder.assert_not_called()
+
+    def test_success_is_cached_and_release_drops_reference(self):
+        from impasto import gpu_engine
+        session = self._session()
+        result = SimpleNamespace(
+            persistent_bytes=64, peak_gpu_build_bytes=128,
+            transient_cpu_bytes=0, initialization_ms=1.0)
+        diagnostics = SimpleNamespace(
+            triangle_count=1, subpixel_triangles=0, outside_unit_square=0,
+            exact_duplicate_triangles=0)
+        with mock.patch.object(
+                gpu_engine.uv_gutters,
+                "build_compact_offset_map_from_uvs",
+                return_value=(result, diagnostics)) as builder, \
+                mock.patch.object(gpu_engine, "_log_line"):
+            self.assertTrue(gpu_engine._ensure_uv_gutter_map(session))
+            self.assertTrue(gpu_engine._ensure_uv_gutter_map(session))
+            builder.assert_called_once()
+        gpu_engine._release_gpu_references(session)
+        self.assertIsNone(session.gutter_offset_map)
+        self.assertIsNone(session.gutter_map_key)
+
+    def test_build_failure_disables_experiment_without_raising(self):
+        from impasto import gpu_engine
+        session = self._session()
+        with mock.patch.object(
+                gpu_engine.uv_gutters,
+                "build_compact_offset_map_from_uvs",
+                side_effect=RuntimeError("unsupported RG16F")), \
+                mock.patch.object(gpu_engine, "_log_line"):
+            self.assertFalse(gpu_engine._ensure_uv_gutter_map(session))
+        self.assertFalse(session.settings["experimental_uv_gutters"])
+        self.assertIsNone(session.gutter_offset_map)
 
 
 if __name__ == "__main__":

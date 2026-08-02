@@ -8,6 +8,7 @@ canvases make alpha unsuitable).
 """
 
 from dataclasses import dataclass
+from contextlib import contextmanager
 import hashlib
 import time
 
@@ -18,6 +19,16 @@ DEFAULT_PADDING_PX = 8
 # invalid marker and far outside the set of valid offsets.
 OFFSET_SENTINEL = 2048.0
 OFFSET_FORMAT = "RG16F"
+
+
+@contextmanager
+def _preserve_blend_state(gpu_module):
+    """Keep prototype passes from leaking global Blender GPU state."""
+    previous = gpu_module.state.blend_get()
+    try:
+        yield
+    finally:
+        gpu_module.state.blend_set(previous)
 
 
 @dataclass(frozen=True)
@@ -206,7 +217,7 @@ def _propagate_shader_create_info():
 
 @dataclass
 class CompactOffsetMap:
-    """Prototype GPU map.  Not connected to production painting."""
+    """Session-owned GPU map. It never mutates production paint textures."""
 
     texture: object
     width: int
@@ -239,7 +250,13 @@ def uv_seed_key(uv_triangles, canvas_size, radius=DEFAULT_PADDING_PX):
 
 
 def diagnose_uv_seeds(uv_triangles, canvas_size):
-    """Return cheap conservative diagnostics before GPU allocation."""
+    """Return cheap conservative diagnostics before GPU allocation.
+
+    Exact duplicates are unsafe and rejected by the builder. ``subpixel`` is
+    only an area heuristic: raster coverage rules decide whether a particular
+    narrow triangle actually produces a seed. Partial UV overlaps are not
+    detected here and must be checked with Blender's Select Overlap tool.
+    """
     import numpy as np
     tris = np.asarray(uv_triangles, dtype=np.float64).reshape(-1, 3, 2)
     size = int(canvas_size)
@@ -275,6 +292,68 @@ def _seed_shader_create_info():
     info.vertex_source(_SEED_VERT)
     info.fragment_source(_SEED_FRAG)
     return info
+
+
+def build_compact_offset_map_from_uvs(uv_triangles, canvas_size,
+                                      radius=DEFAULT_PADDING_PX):
+    """Rasterize UV interiors on GPU and propagate bounded local offsets.
+
+    The seed target is cleared to the sentinel, then mesh triangles write zero
+    offsets independently of all channel pixels and alpha. Propagation is the
+    same deterministic, padding-bounded approximation used by
+    :func:`build_compact_offset_map`; it is not a global nearest-seed solve.
+    No full-resolution CPU seed buffer is allocated.
+    """
+    import numpy as np
+    import gpu
+    from gpu_extras.batch import batch_for_shader
+
+    size = int(canvas_size)
+    radius = int(radius)
+    uvs = np.ascontiguousarray(uv_triangles, dtype=np.float32)
+    if uvs.ndim != 3 or uvs.shape[1:] != (3, 2) or not len(uvs):
+        raise ValueError("uv_triangles must have non-empty shape (N, 3, 2)")
+    diagnostics = diagnose_uv_seeds(uvs, size)
+    if diagnostics.exact_duplicate_triangles:
+        raise ValueError(
+            "unsafe UV layout: %d exact duplicate triangle(s); partial "
+            "overlaps are not detected" % diagnostics.exact_duplicate_triangles)
+    steps = bounded_jump_steps(radius)
+    started = time.perf_counter()
+    current = gpu.types.GPUTexture((size, size), format=OFFSET_FORMAT)
+    target = gpu.types.GPUTexture((size, size), format=OFFSET_FORMAT)
+    current.clear(format="FLOAT",
+                  value=(OFFSET_SENTINEL, OFFSET_SENTINEL, 0.0, 0.0))
+    seed_shader = gpu.shader.create_from_info(_seed_shader_create_info())
+    seed_batch = batch_for_shader(seed_shader, "TRIS",
+                                  {"uv": uvs.reshape(-1, 2)})
+    seed_fb = gpu.types.GPUFrameBuffer(color_slots=(current,))
+    with seed_fb.bind(), _preserve_blend_state(gpu):
+        seed_fb.viewport_set(0, 0, size, size)
+        gpu.state.blend_set("NONE")
+        seed_shader.bind()
+        seed_batch.draw(seed_shader)
+
+    shader = gpu.shader.create_from_info(_propagate_shader_create_info())
+    quad = batch_for_shader(shader, "TRI_FAN", {
+        "pos": [(-1.0, -1.0, 0.0), (1.0, -1.0, 0.0),
+                (1.0, 1.0, 0.0), (-1.0, 1.0, 0.0)]})
+    for step in steps:
+        framebuffer = gpu.types.GPUFrameBuffer(color_slots=(target,))
+        with framebuffer.bind(), _preserve_blend_state(gpu):
+            framebuffer.viewport_set(0, 0, size, size)
+            gpu.state.blend_set("NONE")
+            shader.bind()
+            shader.uniform_int("map_size", (size, size))
+            shader.uniform_int("jump_px", step)
+            shader.uniform_int("radius_px", radius)
+            shader.uniform_sampler("source_offsets", current)
+            quad.draw(shader)
+        current, target = target, current
+    return CompactOffsetMap(
+        current, size, size, radius,
+        (time.perf_counter() - started) * 1000.0,
+        offset_map_bytes(size), offset_map_bytes(size, buffers=2), 0), diagnostics
 
 
 def build_compact_offset_map(interior_mask, radius=DEFAULT_PADDING_PX):
@@ -313,7 +392,7 @@ def build_compact_offset_map(interior_mask, radius=DEFAULT_PADDING_PX):
                 (1.0, 1.0, 0.0), (-1.0, 1.0, 0.0)]})
     for step in steps:
         framebuffer = gpu.types.GPUFrameBuffer(color_slots=(target,))
-        with framebuffer.bind():
+        with framebuffer.bind(), _preserve_blend_state(gpu):
             framebuffer.viewport_set(0, 0, width, height)
             gpu.state.blend_set("NONE")
             shader.bind()

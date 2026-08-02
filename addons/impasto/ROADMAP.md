@@ -61,6 +61,15 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Architecture and compatibility
 
+- Investigate format-optimized resident paint targets: keep color and normal
+  channels in `RGBA16F`, but store scalar channels such as Metallic,
+  Roughness, Subsurface Weight, and Emission Strength in `R16F`. For seven
+  representative channels this would reduce one resident copy from about
+  896 MiB to 512 MiB at 4K, or 224 MiB to 128 MiB at 2K. Because the current
+  OpenGL probe supports both formats separately but not mixed-format MRT,
+  implementation requires separate RGB/scalar draw batches plus readback,
+  preview, compositing, undo, and backend qualification. Treat this as later
+  performance work, after UV seam-safe padding correctness.
 - Expand live upper-layer post-composition beyond arbitrary ordered affine
   non-normal layers, one same-UV mask per upper layer, and named-UV
   reprojection for unmasked upper Paint layers. Remaining boundaries are
