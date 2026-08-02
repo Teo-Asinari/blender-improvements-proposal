@@ -424,6 +424,11 @@ class ImpastoLayer(bpy.types.PropertyGroup):
         name="Subsurface Brush Values", default=False,
         description="Show Subsurface brush controls and the SSS caliper")
     ui_show_advanced: BoolProperty(name="Advanced", default=False)
+    experimental_uv_gutters: BoolProperty(
+        name="Experimental Seam Padding",
+        description="Pad painted UV-island edges after each GPU stroke to "
+                    "reduce filtering gaps; exact duplicates disable it",
+        default=False)
 
 
 class ImpastoChannel(bpy.types.PropertyGroup):

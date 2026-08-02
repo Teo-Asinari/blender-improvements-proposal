@@ -4,6 +4,16 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.12
+
+- Add default-off Experimental Seam Padding for resident GPU painting. After
+  each stroke, exact UV-edge ownership extends complete channel texels eight
+  pixels into island gutters, reducing white/filtering seams without changing
+  UV-interior pixels.
+- Apply seam padding only to targeted channel dirty regions, include expanded
+  pixels in Undo/Redo and flush/save synchronization, and reuse the existing
+  scratch texture rather than retaining another per-channel 4K canvas.
+
 ## 0.15.11
 
 - Refresh brush mode, channel targets, brush parameters, pressure/stamp state,

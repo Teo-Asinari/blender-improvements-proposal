@@ -2100,6 +2100,9 @@ class _Session:
         self.gutter_offset_map = None
         self.gutter_map_key = None
         self.gutter_diagnostics = None
+        self.gutter_apply_shader = None
+        self.gutter_apply_batch = None
+        self.gutter_apply_ms = 0.0
 
         # Prepass cache: key of the view state the prepass was rendered
         # for, plus the matrices captured at that moment (the dab shader
@@ -2141,6 +2144,7 @@ class _Session:
         self.pending_flush = False
         self.flush_in_flight = False
         self.stroke_transaction = None
+        self.stroke_gutter_rects = {}
         self.history = tile_undo.TileHistory()
         self.history_backend = None
         self.pending_history_action = None
@@ -2522,7 +2526,8 @@ def _release_gpu_references(s):
         "upper_reproject_shader", "upper_reproject_batches",
         "upper_transform_texs", "upper_transform_gpu_refs",
         "active_preview_gpu_refs", "overlay_circle_batch",
-        "overlay_color_shader", "gutter_offset_map",
+        "overlay_color_shader", "gutter_offset_map", "gutter_apply_shader",
+        "gutter_apply_batch",
     )
     for name in names:
         if name in {"baseline_texs", "active_preview_texs",
@@ -2555,6 +2560,7 @@ def begin_stroke(x, y, pressure):
     s.leftover = 0.0
     s.stroke_dirty = None
     s.stroke_dirty_full = False
+    s.stroke_gutter_rects = {}
     s.dirty_ms = 0.0
     s.smear_last_point = None
     s.dab_queue.append((x, y, pressure))
@@ -2977,9 +2983,12 @@ def _ensure_uv_gutter_map(s):
     s.gutter_offset_map = None
     s.gutter_map_key = None
     s.gutter_diagnostics = None
+    s.gutter_apply_shader = None
+    s.gutter_apply_batch = None
     try:
         result, diagnostics = uv_gutters.build_compact_offset_map_from_uvs(
             s.gutter_uvs, s.size, radius)
+        apply_shader, apply_batch = uv_gutters.create_gutter_apply_resources()
     except Exception as exc:
         # This experimental diagnostic must never prevent an ordinary paint
         # session. Exact duplicate UV triangles deliberately take this path.
@@ -2990,6 +2999,8 @@ def _ensure_uv_gutter_map(s):
     s.gutter_offset_map = result
     s.gutter_map_key = key
     s.gutter_diagnostics = diagnostics
+    s.gutter_apply_shader = apply_shader
+    s.gutter_apply_batch = apply_batch
     mib = 1024.0 * 1024.0
     _log_line(
         "GPU_PAINT_UV_GUTTER status=ready format=%s size=%d radius=%d "
@@ -4039,10 +4050,17 @@ def _flush_dabs(s, region):
             keys = tuple(s.settings.get("channel_keys", ()))
             target_keys = set(s.settings.get(
                 "brush_target_channel_keys", keys))
+            if s.gutter_offset_map is not None:
+                rect = uv_gutters.expand_pixel_rect(
+                    rect, s.gutter_offset_map.radius, s.size)
             for i in range(s.channels):
                 channel = keys[i] if i < len(keys) else str(i)
                 if channel not in target_keys:
                     continue
+                if s.gutter_offset_map is not None:
+                    s.stroke_gutter_rects[channel] = (
+                        uv_gutters.union_pixel_rect(
+                            s.stroke_gutter_rects.get(channel), rect))
                 s.stroke_transaction.touch_rect(
                     channel, rect, (s.size, s.size))
 
@@ -4339,12 +4357,35 @@ def _finalize_stroke_gpu(s):
     """Close one stroke without readback, drain, or Blender Image writes."""
     global _last_stroke_stats
     s.pending_finalize = False
+    gutter_rects = s.stroke_gutter_rects
+    if (gutter_rects and s.gutter_offset_map is not None
+            and s.gutter_apply_shader is not None
+            and s.history_backend is not None):
+        keys = tuple(s.settings.get("channel_keys", ()))
+        for index in range(s.channels):
+            channel = keys[index] if index < len(keys) else str(index)
+            gutter_rect = gutter_rects.get(channel)
+            if gutter_rect is None:
+                continue
+            x, y, width, height = gutter_rect
+            s.history_backend._draw_copy(
+                s.paint_texs[index], s.soften_scratch_fb, gutter_rect,
+                (x / s.size, y / s.size),
+                (width / s.size, height / s.size))
+            s.gutter_apply_ms += uv_gutters.apply_gutters_into(
+                s.soften_scratch, s.single_fbs[index],
+                s.gutter_offset_map, gutter_rect,
+                s.gutter_apply_shader, s.gutter_apply_batch)
+            s.stroke_dirty = union_bbox(s.stroke_dirty, (
+                x / s.size, y / s.size,
+                (x + width) / s.size, (y + height) / s.size))
     if s.stroke_dirty_full:
         s.session_dirty_full = True
     else:
         s.session_dirty = union_bbox(s.session_dirty, s.stroke_dirty)
     s.stroke_dirty = None
     s.stroke_dirty_full = False
+    s.stroke_gutter_rects = {}
     if s.stroke_transaction is not None:
         s.stroke_transaction.commit()
         s.stroke_transaction = None

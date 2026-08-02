@@ -2,8 +2,9 @@
 
 ## UV seam-safe paint padding
 
-Development branch: `feature/impasto-uv-gutter-padding`. The feature remains
-production-disconnected and makes no changes to painting yet.
+Development branch: `feature/impasto-uv-gutter-padding`. Experimental seam
+padding is implemented behind a default-off Advanced toggle and awaits
+interactive validation on production 4K meshes before merging to `master`.
 
 - The pure ownership foundation lives in `gpu/uv_gutters.py`: triangles are
   grouped by mesh-edge and UV continuity, never by paint alpha.
@@ -19,25 +20,15 @@ production-disconnected and makes no changes to painting yet.
   GPU seed-raster shaders, and warnings for out-of-range, very small, and
   exactly duplicated UV triangles. These diagnostics do not yet detect every
   partial overlap, and the small-triangle warning is heuristic.
-- At pen-up, process only the stroke dirty rectangle expanded by the padding
-  radius, ping-pong-copying the complete resident texel (premultiplied RGBA
-  for MIX channels; unchanged raw values for ADD channels).
-- Expand tile-undo capture and session readback bounds by the same radius.
-  Never overwrite occupied UV texels. Overlapping UV faces remain ambiguous
-  and must be diagnosed rather than silently padded.
+- Implemented: pen-up processes only per-channel dirty rectangles expanded by
+  the padding radius and copies complete resident texels through the existing
+  scratch texture. UV interiors are preserved; expanded Undo/Redo and
+  flush/save bounds include the gutters.
 
-Remaining sequence:
-
-1. Complete and foreground-test seed rasterization, session lifecycle,
-   invalidation, cleanup, logging, and an experimental default-off toggle.
-2. Integrate targeted-channel pen-up copying without overwriting UV interiors.
-3. Capture expanded gutter regions before the first dab for Undo/Redo and
-   include them in flush/save dirty bounds.
-4. Stress-test Smart UV atlases at 2K/4K; keep 8K experimental because the
-   retained compact map alone costs 256 MiB.
-
-Estimate: two to four focused engineering passes for an experimental working
-version, and four to seven for a robust release-quality implementation.
+Remaining: stress-test hand-authored and Smart UV atlases at 2K/4K, measure
+pen-up latency, and keep 8K experimental because the retained compact map alone
+costs 256 MiB. Partial UV overlaps and islands too small to cover a texel center
+remain limitations requiring diagnostics rather than silent claims of repair.
 
 This is the authoritative list of open work for Impasto 0.15.11. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.

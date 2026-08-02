@@ -289,6 +289,14 @@ class PaintPanelMixin:
         delay = row.row(align=True)
         delay.enabled = layer.auto_material_preview
         delay.prop(layer, "auto_material_preview_delay", text="Delay")
+        col.separator()
+        col.prop(layer, "experimental_uv_gutters",
+                 text="Experimental Seam Padding")
+        if layer.experimental_uv_gutters:
+            warning = col.column(align=True)
+            warning.alert = True
+            warning.label(text="Experimental — adds GPU memory and pen-up work",
+                          icon='ERROR')
 
     def _draw_stencil_controls(self, col, layer):
         """Present projection, source data, and effect as distinct choices."""

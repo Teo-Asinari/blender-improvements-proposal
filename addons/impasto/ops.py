@@ -1432,6 +1432,8 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             "opacity": layer.brush_opacity,
             "brush_mode": layer.brush_mode,
             "brush_target_channel_keys": gpu_brush_target_keys(layer, keys),
+            "experimental_uv_gutters": bool(
+                layer.experimental_uv_gutters),
             "erase_channel_keys": tuple(
                 key for key in keys
                 if layer.erase_channels[model.CHANNEL_ORDER[key]]),

@@ -13,6 +13,8 @@ from impasto.gpu.uv_gutters import (
     bounded_jump_steps,
     build_gutter_plan,
     build_compact_offset_map,
+    build_compact_offset_map_from_uvs,
+    apply_gutters_disconnected,
     exact_relaxation_steps,
     expand_pixel_rect,
     offset_map_bytes,
@@ -142,6 +144,91 @@ class UVGutterGPUPrototypeTests(unittest.TestCase):
                     "GPU mismatch for radius=%d density=%d" %
                     (radius, int(mask.sum())))
 
+    @staticmethod
+    def _rgba_texture(values):
+        import gpu
+        values = values.astype("float32")
+        return gpu.types.GPUTexture(
+            (values.shape[1], values.shape[0]), format="RGBA16F",
+            data=gpu.types.Buffer("FLOAT", values.shape, values))
+
+    @staticmethod
+    def _read_rgba(texture, height, width):
+        import numpy as np
+        return np.asarray(texture.read().to_list(), dtype=np.float32).reshape(
+            height, width, 4)
+
+    def test_disconnected_apply_preserves_interior_and_copies_full_erase_texel(self):
+        import numpy as np
+        mask = np.zeros((9, 9), dtype=bool)
+        mask[4, 4] = True
+        offsets = build_compact_offset_map(mask, 2)
+        source = np.zeros((9, 9, 4), dtype=np.float32)
+        source[4, 4] = (0.25, 0.5, 0.75, 0.0)  # alpha-zero erase/RGB transport
+        source[0, 0] = (1.0, 0.0, 1.0, 1.0)
+        source[2, 2] = (0.0, 1.0, 0.5, 0.25)  # in rect, sentinel/unowned
+        result = apply_gutters_disconnected(
+            self._rgba_texture(source), offsets, (4, 4, 1, 1))
+        actual = self._read_rgba(result.texture, 9, 9)
+        self.assertEqual(result.work_rect, (2, 2, 5, 5))
+        self.assertTrue(np.array_equal(actual[4, 4], source[4, 4]))
+        self.assertTrue(np.array_equal(actual[4, 6], source[4, 4]))
+        self.assertTrue(np.array_equal(actual[2, 2], source[2, 2]))
+        self.assertGreaterEqual(result.apply_ms, 0.0)
+        # Outside the expanded/scissored work rect remains the initial copy.
+        self.assertTrue(np.array_equal(actual[0, 0], source[0, 0]))
+
+    def test_disconnected_apply_keeps_adjacent_sources_separate_and_clips_edge(self):
+        import numpy as np
+        mask = np.zeros((7, 10), dtype=bool)
+        mask[0, 0] = mask[3, 3] = mask[3, 7] = True
+        offsets = build_compact_offset_map(mask, 3)
+        source = np.zeros((7, 10, 4), dtype=np.float32)
+        source[0, 0] = (0.5, 0.25, 0.125, 0.0)
+        source[3, 3] = (1.0, 0.0, 0.0, 1.0)
+        source[3, 7] = (0.0, 0.0, 1.0, 1.0)
+        result = apply_gutters_disconnected(
+            self._rgba_texture(source), offsets, (0, 0, 10, 7))
+        actual = self._read_rgba(result.texture, 7, 10)
+        self.assertEqual(result.work_rect, (0, 0, 10, 7))
+        self.assertTrue(np.array_equal(actual[0, 2], source[0, 0]))
+        self.assertTrue(np.array_equal(actual[3, 4], source[3, 3]))
+        self.assertTrue(np.array_equal(actual[3, 6], source[3, 7]))
+        # Exact tie at x=5 resolves to lower source x=3.
+        self.assertTrue(np.array_equal(actual[3, 5], source[3, 3]))
+
+    def test_uv_raster_multi_island_offsets_copy_only_their_source_texels(self):
+        import numpy as np
+        size = 16
+        uvs = np.asarray((
+            ((2 / size, 2 / size), (6 / size, 2 / size),
+             (2 / size, 6 / size)),
+            ((10 / size, 9 / size), (14 / size, 9 / size),
+             (14 / size, 13 / size))), dtype=np.float32)
+        offsets, diagnostics = build_compact_offset_map_from_uvs(
+            uvs, size, 2)
+        self.assertEqual(diagnostics.exact_duplicate_triangles, 0)
+        raw = np.asarray(offsets.texture.read().to_list(),
+                         dtype=np.float32).reshape(size, size, 2)
+        interior = np.all(raw == 0.0, axis=2)
+        valid_gutter = ((np.max(np.abs(raw), axis=2) < 2048.0)
+                        & ~interior)
+        source = np.zeros((size, size, 4), dtype=np.float32)
+        ys, xs = np.nonzero(interior)
+        source[ys, xs] = np.where(
+            (xs < size // 2)[:, None],
+            np.asarray((1.0, 0.0, 0.0, 0.0), dtype=np.float32),
+            np.asarray((0.0, 0.0, 1.0, 0.5), dtype=np.float32))
+        result = apply_gutters_disconnected(
+            self._rgba_texture(source), offsets, (0, 0, size, size))
+        actual = self._read_rgba(result.texture, size, size)
+        gutter_y, gutter_x = np.nonzero(valid_gutter)
+        self.assertGreater(len(gutter_x), 0)
+        for y, x in zip(gutter_y, gutter_x):
+            dx, dy = (int(raw[y, x, 0]), int(raw[y, x, 1]))
+            self.assertTrue(np.array_equal(
+                actual[y, x], source[y + dy, x + dx]))
+
 
 class UVGutterSessionLifecycleTests(unittest.TestCase):
     @staticmethod
@@ -177,6 +264,9 @@ class UVGutterSessionLifecycleTests(unittest.TestCase):
                 gpu_engine.uv_gutters,
                 "build_compact_offset_map_from_uvs",
                 return_value=(result, diagnostics)) as builder, \
+                mock.patch.object(
+                    gpu_engine.uv_gutters, "create_gutter_apply_resources",
+                    return_value=("shader", "batch")), \
                 mock.patch.object(gpu_engine, "_log_line"):
             self.assertTrue(gpu_engine._ensure_uv_gutter_map(session))
             self.assertTrue(gpu_engine._ensure_uv_gutter_map(session))
@@ -196,6 +286,74 @@ class UVGutterSessionLifecycleTests(unittest.TestCase):
             self.assertFalse(gpu_engine._ensure_uv_gutter_map(session))
         self.assertFalse(session.settings["experimental_uv_gutters"])
         self.assertIsNone(session.gutter_offset_map)
+
+    def test_apply_resource_failure_disables_experiment_atomically(self):
+        from impasto import gpu_engine
+        session = self._session()
+        result = SimpleNamespace()
+        diagnostics = SimpleNamespace()
+        with mock.patch.object(
+                gpu_engine.uv_gutters,
+                "build_compact_offset_map_from_uvs",
+                return_value=(result, diagnostics)), \
+                mock.patch.object(
+                    gpu_engine.uv_gutters, "create_gutter_apply_resources",
+                    side_effect=RuntimeError("shader compile failed")), \
+                mock.patch.object(gpu_engine, "_log_line"):
+            self.assertFalse(gpu_engine._ensure_uv_gutter_map(session))
+        self.assertFalse(session.settings["experimental_uv_gutters"])
+        self.assertIsNone(session.gutter_offset_map)
+        self.assertIsNone(session.gutter_apply_shader)
+        self.assertIsNone(session.gutter_apply_batch)
+
+    def test_finalize_applies_each_channel_rect_before_history_commit(self):
+        from impasto import gpu_engine
+        events = []
+
+        class Backend:
+            def _draw_copy(self, source, framebuffer, viewport, origin, scale):
+                events.append(("copy", source, viewport))
+
+        class Transaction:
+            def commit(self):
+                events.append(("commit",))
+
+        session = SimpleNamespace(
+            pending_finalize=True,
+            stroke_gutter_rects={"base_color": (2, 3, 5, 6),
+                                 "roughness": (11, 12, 3, 4)},
+            gutter_offset_map=SimpleNamespace(),
+            gutter_apply_shader="shader", gutter_apply_batch="batch",
+            history_backend=Backend(),
+            settings={"channel_keys": ("base_color", "roughness")},
+            channels=2, paint_texs=("base", "rough"),
+            soften_scratch_fb="scratch_fb", soften_scratch="scratch",
+            single_fbs=("base_fb", "rough_fb"), size=64,
+            gutter_apply_ms=0.0, stroke_dirty=None,
+            stroke_dirty_full=False, session_dirty_full=False,
+            session_dirty=None, stroke_transaction=Transaction())
+
+        def apply(_source, target, _offsets, rect, _shader, _batch):
+            events.append(("apply", target, rect))
+            return 0.25
+
+        with mock.patch.object(gpu_engine.uv_gutters,
+                               "apply_gutters_into", side_effect=apply), \
+                mock.patch.object(gpu_engine, "_stroke_stats",
+                                  return_value={}), \
+                mock.patch.object(gpu_engine, "_log_line"):
+            gpu_engine._finalize_stroke_gpu(session)
+        self.assertEqual(events, [
+            ("copy", "base", (2, 3, 5, 6)),
+            ("apply", "base_fb", (2, 3, 5, 6)),
+            ("copy", "rough", (11, 12, 3, 4)),
+            ("apply", "rough_fb", (11, 12, 3, 4)),
+            ("commit",),
+        ])
+        self.assertEqual(session.session_dirty,
+                         (2 / 64, 3 / 64, 14 / 64, 16 / 64))
+        self.assertEqual(session.gutter_apply_ms, 0.5)
+        self.assertEqual(session.stroke_gutter_rects, {})
 
 
 if __name__ == "__main__":

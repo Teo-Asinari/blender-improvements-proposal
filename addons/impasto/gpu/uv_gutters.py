@@ -57,6 +57,18 @@ def expand_pixel_rect(rect, padding, canvas_size):
     return (x0, y0, max(0, x1 - x0), max(0, y1 - y0))
 
 
+def union_pixel_rect(a, b):
+    """Union two XYWH pixel rectangles; either may be ``None``."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    x0, y0 = min(a[0], b[0]), min(a[1], b[1])
+    x1 = max(a[0] + a[2], b[0] + b[2])
+    y1 = max(a[1] + a[3], b[1] + b[3])
+    return (x0, y0, x1 - x0, y1 - y0)
+
+
 def triangle_uv_islands(vertex_triangles, uv_triangles, tolerance=1e-7):
     """Return a stable island id for every loop triangle.
 
@@ -263,6 +275,15 @@ class CompactOffsetMap:
     transient_cpu_bytes: int
 
 
+@dataclass
+class GutterApplyResult:
+    """Disconnected apply output; caller owns the returned RGBA16F texture."""
+
+    texture: object
+    work_rect: tuple
+    apply_ms: float
+
+
 @dataclass(frozen=True)
 class UVSeedDiagnostics:
     triangle_count: int
@@ -328,14 +349,147 @@ def _seed_shader_create_info():
     return info
 
 
+_APPLY_VERT = """
+void main()
+{
+    gl_Position = vec4(pos, 1.0);
+}
+"""
+
+
+_APPLY_FRAG = """
+bool valid_offset(vec2 value)
+{
+    return max(abs(value.x), abs(value.y)) < 2048.0;
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_FragCoord.xy);
+    vec2 raw = texelFetch(source_offsets, pixel, 0).rg;
+    ivec2 offset = ivec2(raw);
+    ivec2 source_pixel = pixel;
+    if (apply_offsets != 0 && valid_offset(raw) && any(notEqual(offset, ivec2(0))))
+        source_pixel += offset;
+    fragColor = texelFetch(source_pixels, source_pixel, 0);
+}
+"""
+
+
+def _apply_shader_create_info():
+    import gpu
+    info = gpu.types.GPUShaderCreateInfo()
+    info.push_constant("INT", "apply_offsets")
+    info.sampler(0, "FLOAT_2D", "source_pixels")
+    info.sampler(1, "FLOAT_2D", "source_offsets")
+    info.vertex_in(0, "VEC3", "pos")
+    info.fragment_out(0, "VEC4", "fragColor")
+    info.vertex_source(_APPLY_VERT)
+    info.fragment_source(_APPLY_FRAG)
+    return info
+
+
+def create_gutter_apply_resources():
+    """Create reusable shader/batch resources for production pen-up passes."""
+    import gpu
+    from gpu_extras.batch import batch_for_shader
+    shader = gpu.shader.create_from_info(_apply_shader_create_info())
+    batch = batch_for_shader(shader, "TRI_FAN", {
+        "pos": [(-1.0, -1.0, 0.0), (1.0, -1.0, 0.0),
+                (1.0, 1.0, 0.0), (-1.0, 1.0, 0.0)]})
+    return shader, batch
+
+
+def apply_gutters_into(source_texture, target_framebuffer, offset_map,
+                       work_rect, shader, batch):
+    """Apply exact offsets from ``source_texture`` into an existing target.
+
+    Source and target must be distinct. ``work_rect`` is already expanded and
+    clipped. The caller is responsible for seeding source scratch from the
+    target before this call.
+    """
+    import gpu
+    x, y, width, height = (int(value) for value in work_rect)
+    if width <= 0 or height <= 0:
+        return 0.0
+    started = time.perf_counter()
+    with target_framebuffer.bind(), _preserve_blend_state(gpu):
+        target_framebuffer.viewport_set(0, 0, offset_map.width,
+                                        offset_map.height)
+        gpu.state.blend_set("NONE")
+        gpu.state.scissor_set(x, y, width, height)
+        gpu.state.scissor_test_set(True)
+        try:
+            shader.bind()
+            shader.uniform_sampler("source_pixels", source_texture)
+            shader.uniform_sampler("source_offsets", offset_map.texture)
+            shader.uniform_int("apply_offsets", 1)
+            batch.draw(shader)
+        finally:
+            gpu.state.scissor_test_set(False)
+    return (time.perf_counter() - started) * 1000.0
+
+
+def apply_gutters_disconnected(source_texture, offset_map, dirty_rect):
+    """Copy a channel plus owned gutters into a new RGBA16F GPU texture.
+
+    This helper deliberately has no stroke/undo/flush call site. It copies the
+    complete source first, then applies non-zero offsets only inside the dirty
+    rectangle expanded by the map radius. Interior (zero) and unowned
+    (sentinel) texels remain unchanged. Alpha is never read as control data;
+    complete vec4 texels are copied for every channel representation.
+    """
+    import gpu
+    from gpu_extras.batch import batch_for_shader
+
+    if (source_texture.width != offset_map.width
+            or source_texture.height != offset_map.height):
+        raise ValueError("source and offset map dimensions differ")
+    if dirty_rect is None:
+        raise ValueError("dirty_rect is required")
+    x, y, width, height = (int(value) for value in dirty_rect)
+    padding = offset_map.radius
+    x0, y0 = max(0, x - padding), max(0, y - padding)
+    x1 = min(offset_map.width, x + max(0, width) + padding)
+    y1 = min(offset_map.height, y + max(0, height) + padding)
+    work_rect = (x0, y0, max(0, x1 - x0), max(0, y1 - y0))
+    started = time.perf_counter()
+    output = gpu.types.GPUTexture(
+        (offset_map.width, offset_map.height), format="RGBA16F")
+    framebuffer = gpu.types.GPUFrameBuffer(color_slots=(output,))
+    shader = gpu.shader.create_from_info(_apply_shader_create_info())
+    batch = batch_for_shader(shader, "TRI_FAN", {
+        "pos": [(-1.0, -1.0, 0.0), (1.0, -1.0, 0.0),
+                (1.0, 1.0, 0.0), (-1.0, 1.0, 0.0)]})
+    with framebuffer.bind(), _preserve_blend_state(gpu):
+        framebuffer.viewport_set(0, 0, offset_map.width, offset_map.height)
+        gpu.state.blend_set("NONE")
+        shader.bind()
+        shader.uniform_sampler("source_pixels", source_texture)
+        shader.uniform_sampler("source_offsets", offset_map.texture)
+        shader.uniform_int("apply_offsets", 0)
+        batch.draw(shader)
+        x, y, width, height = work_rect
+        if width and height:
+            gpu.state.scissor_set(x, y, width, height)
+            gpu.state.scissor_test_set(True)
+            try:
+                shader.uniform_int("apply_offsets", 1)
+                batch.draw(shader)
+            finally:
+                gpu.state.scissor_test_set(False)
+    return GutterApplyResult(
+        output, work_rect, (time.perf_counter() - started) * 1000.0)
+
+
 def build_compact_offset_map_from_uvs(uv_triangles, canvas_size,
                                       radius=DEFAULT_PADDING_PX):
     """Rasterize UV interiors on GPU and propagate bounded local offsets.
 
     The seed target is cleared to the sentinel, then mesh triangles write zero
     offsets independently of all channel pixels and alpha. Propagation is the
-    same deterministic, padding-bounded approximation used by
-    :func:`build_compact_offset_map`; it is not a global nearest-seed solve.
+    same exact, deterministic, padding-bounded solve used by
+    :func:`build_compact_offset_map`.
     No full-resolution CPU seed buffer is allocated.
     """
     import numpy as np
@@ -395,10 +549,8 @@ def build_compact_offset_map(interior_mask, radius=DEFAULT_PADDING_PX):
 
     ``interior_mask`` is a 2-D numpy-compatible array.  Interior texels seed
     exact ``(0, 0)`` offsets; all other texels seed ``OFFSET_SENTINEL``.  The
-    returned RG16F texture stores a local pixel offset to a deterministic
-    interior source texel, or the sentinel outside ``radius``.  The bounded
-    jump propagation is approximate and does not promise the globally nearest
-    source for every adversarial seed arrangement.
+    returned RG16F texture stores the exact nearest local interior source
+    within ``radius``, with deterministic y/x tie-breaking, or the sentinel.
 
     This intentionally owns no per-channel resources and performs no paint,
     dilation, undo, or readback integration.

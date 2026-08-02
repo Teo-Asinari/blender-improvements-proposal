@@ -607,6 +607,7 @@ try:
           rough_channel_spec["upper_steps"] == [{
               "kind": "IMAGE",
               "image_name": upper_roughness_image.name,
+              "uv_map": "UVMap",
               "factor": 0.5,
               "blend": "MIX",
               "use_alpha": True,
