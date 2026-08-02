@@ -13,8 +13,10 @@ from impasto.gpu.uv_gutters import (
     bounded_jump_steps,
     build_gutter_plan,
     build_compact_offset_map,
+    exact_relaxation_steps,
     expand_pixel_rect,
     offset_map_bytes,
+    reference_offset_map,
     triangle_uv_islands,
 )
 
@@ -52,7 +54,9 @@ class UVGutterPlanningTests(unittest.TestCase):
 
     def test_compact_schedule_and_exact_memory_budget(self):
         self.assertEqual(bounded_jump_steps(8), (8, 4, 2, 1))
+        self.assertEqual(exact_relaxation_steps(8), (1,) * 8)
         self.assertEqual(bounded_jump_steps(0), ())
+        self.assertEqual(exact_relaxation_steps(0), ())
         self.assertEqual(offset_map_bytes(2048), 16 * 1024 * 1024)
         self.assertEqual(offset_map_bytes(4096), 64 * 1024 * 1024)
         self.assertEqual(offset_map_bytes(8192), 256 * 1024 * 1024)
@@ -115,6 +119,28 @@ class UVGutterGPUPrototypeTests(unittest.TestCase):
         _result, offsets = self._read(mask, 0)
         self.assertTrue(np.array_equal(offsets[2, 2], (0.0, 0.0)))
         self.assertEqual(offsets[2, 1, 0], OFFSET_SENTINEL)
+
+    def test_exact_gpu_matches_bruteforce_on_adversarial_and_random_masks(self):
+        import numpy as np
+        masks = []
+        # Corners, boundaries, close competitors, and deterministic ties.
+        adversarial = np.zeros((23, 27), dtype=bool)
+        adversarial[0, 0] = adversarial[0, 26] = True
+        adversarial[22, 0] = adversarial[22, 26] = True
+        adversarial[11, 8] = adversarial[11, 16] = True
+        adversarial[5, 12] = adversarial[17, 12] = True
+        masks.append(adversarial)
+        rng = np.random.default_rng(731942)
+        for probability in (0.01, 0.08, 0.35):
+            masks.append(rng.random((31, 29)) < probability)
+        for radius in (0, 1, 3, 8):
+            for mask in masks:
+                _result, actual = self._read(mask, radius)
+                expected = reference_offset_map(mask, radius)
+                self.assertTrue(
+                    np.array_equal(actual, expected),
+                    "GPU mismatch for radius=%d density=%d" %
+                    (radius, int(mask.sum())))
 
 
 class UVGutterSessionLifecycleTests(unittest.TestCase):

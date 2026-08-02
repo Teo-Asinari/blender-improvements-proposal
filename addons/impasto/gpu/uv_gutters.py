@@ -140,6 +140,40 @@ def bounded_jump_steps(radius):
     return tuple(step >> index for index in range(step.bit_length()))
 
 
+def exact_relaxation_steps(radius):
+    """One-pixel passes required for exact propagation within ``radius``."""
+    radius = int(radius)
+    if radius < 0 or radius > 1023:
+        raise ValueError("padding radius must be in [0, 1023]")
+    return (1,) * radius
+
+
+def reference_offset_map(interior_mask, radius=DEFAULT_PADDING_PX):
+    """Brute-force CPU oracle with deterministic y/x source ties."""
+    import numpy as np
+    mask = np.asarray(interior_mask, dtype=bool)
+    if mask.ndim != 2 or not mask.size:
+        raise ValueError("interior_mask must be a non-empty 2-D array")
+    radius = int(radius)
+    exact_relaxation_steps(radius)  # validation
+    height, width = mask.shape
+    result = np.full((height, width, 2), OFFSET_SENTINEL, dtype=np.float32)
+    sources = np.argwhere(mask)
+    r2 = radius * radius
+    for y in range(height):
+        for x in range(width):
+            best = None
+            for sy, sx in sources:
+                dx, dy = int(sx) - x, int(sy) - y
+                d2 = dx * dx + dy * dy
+                candidate = (d2, int(sy), int(sx), dx, dy)
+                if d2 <= r2 and (best is None or candidate < best):
+                    best = candidate
+            if best is not None:
+                result[y, x] = (best[3], best[4])
+    return result
+
+
 def offset_map_bytes(canvas_size, *, buffers=1):
     """Exact storage for an RG16F offset map (two 16-bit components)."""
     size = int(canvas_size)
@@ -318,7 +352,7 @@ def build_compact_offset_map_from_uvs(uv_triangles, canvas_size,
         raise ValueError(
             "unsafe UV layout: %d exact duplicate triangle(s); partial "
             "overlaps are not detected" % diagnostics.exact_duplicate_triangles)
-    steps = bounded_jump_steps(radius)
+    steps = exact_relaxation_steps(radius)
     started = time.perf_counter()
     current = gpu.types.GPUTexture((size, size), format=OFFSET_FORMAT)
     target = gpu.types.GPUTexture((size, size), format=OFFSET_FORMAT)
@@ -377,7 +411,7 @@ def build_compact_offset_map(interior_mask, radius=DEFAULT_PADDING_PX):
     if mask.ndim != 2 or not mask.size:
         raise ValueError("interior_mask must be a non-empty 2-D array")
     radius = int(radius)
-    steps = bounded_jump_steps(radius)
+    steps = exact_relaxation_steps(radius)
     height, width = mask.shape
     started = time.perf_counter()
     seed = np.full((height, width, 2), OFFSET_SENTINEL, dtype=np.float32)
