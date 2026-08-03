@@ -13,7 +13,7 @@ hue reads island membership while checker scale reads texel density.
 bl_info = {
     "name": "UV Island Overlay",
     "author": "Teo Asinari",
-    "version": (1, 4, 0),
+    "version": (1, 5, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N) > UV Islands tab; also in the "
                 "Overlays popover",
@@ -31,11 +31,13 @@ from bpy.props import (BoolProperty, EnumProperty, FloatProperty,
 if "overlay" in locals():
     import importlib
     density = importlib.reload(density)
+    health = importlib.reload(health)
     islands = importlib.reload(islands)
     live = importlib.reload(live)
     overlay = importlib.reload(overlay)
 else:
     from . import density
+    from . import health
     from . import islands
     from . import live
     from . import overlay
@@ -91,6 +93,73 @@ class UV_OT_island_overlay_refresh(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class UV_OT_health_analyze(bpy.types.Operator):
+    """Analyze UV mappings and texel-density risks on the active mesh"""
+    bl_idname = "uv.island_health_analyze"
+    bl_label = "Analyze UV Health"
+    bl_options = {'REGISTER'}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj is not None and obj.type == 'MESH'
+
+    def execute(self, context):
+        wm = context.window_manager
+        try:
+            result = health.analyze_object(
+                context.active_object,
+                texture_size=wm.uv_health_texture_size,
+                low_density_ratio=wm.uv_health_low_density_ratio,
+                minimum_island_span_px=wm.uv_health_minimum_span_px)
+        except ValueError as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, "%d islands; %d duplicate UV triangles; "
+                    "%d low-density islands; %d tiny islands" % (
+                        result.island_count, result.duplicate_triangles,
+                        len(result.low_density_islands),
+                        len(result.tiny_islands)))
+        return {'FINISHED'}
+
+
+class UV_OT_health_select(bpy.types.Operator):
+    """Select faces belonging to one UV-health issue category"""
+    bl_idname = "uv.island_health_select"
+    bl_label = "Select UV Health Issues"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    issue: EnumProperty(items=(
+        ('ZERO', "Collapsed UVs", "Faces with zero UV or 3D area"),
+        ('DUPLICATE', "Duplicate Mappings",
+         "Faces whose triangulated UV coordinates duplicate another triangle"),
+        ('LOW_DENSITY', "Low Density", "Faces in below-threshold islands"),
+        ('TINY', "Tiny Islands", "Faces in islands narrower than the pixel threshold"),
+        ('OUTSIDE', "Outside 0-1", "Faces with UV coordinates outside the main tile"),
+    ))
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj is not None and obj.type == 'MESH'
+
+    def execute(self, context):
+        result = health.last_result(context.active_object.name)
+        if result is None:
+            self.report({'ERROR'}, "Run Analyze UV Health first")
+            return {'CANCELLED'}
+        faces = {
+            'ZERO': result.zero_area_faces,
+            'DUPLICATE': result.duplicate_faces,
+            'LOW_DENSITY': result.low_density_faces,
+            'TINY': result.tiny_island_faces,
+            'OUTSIDE': result.out_of_bounds_faces,
+        }[self.issue]
+        health.select_faces(context.active_object, faces)
+        self.report({'INFO'}, "Selected %d face(s)" % len(faces))
+        return {'FINISHED'}
+
+
 # ---------------------------------------------------------------------------
 # UI
 #
@@ -103,7 +172,7 @@ class UV_OT_island_overlay_refresh(bpy.types.Operator):
 # finds the toggle operator.
 # ---------------------------------------------------------------------------
 
-def _draw_overlay_controls(layout, context):
+def _draw_overlay_controls(layout, context, show_health=True):
     """Shared body: checkbox + display mode + per-mode settings +
     refresh button + status labels + a loud error row if the draw
     handler ever failed (see overlay._draw)."""
@@ -187,6 +256,36 @@ def _draw_overlay_controls(layout, context):
             and not getattr(obj.data, "uv_layers", None):
         col.label(text="Mesh has no UVs", icon='INFO')
 
+    if have_mesh and show_health:
+        health_box = layout.box()
+        health_box.label(text="UV Health", icon='VIEWZOOM')
+        health_box.prop(wm, "uv_health_texture_size")
+        health_box.prop(wm, "uv_health_low_density_ratio")
+        health_box.prop(wm, "uv_health_minimum_span_px")
+        health_box.operator(UV_OT_health_analyze.bl_idname,
+                            icon='FILE_REFRESH')
+        result = health.last_result(obj.name)
+        if result is not None:
+            health_box.label(text="%d islands, median %.1f px/unit" % (
+                result.island_count,
+                (result.median_density or 0.0) * wm.uv_health_texture_size))
+            rows = (
+                ('ZERO', "Collapsed UV faces", len(result.zero_area_faces)),
+                ('DUPLICATE', "Duplicate-mapped faces",
+                 len(result.duplicate_faces)),
+                ('LOW_DENSITY', "Low-density islands",
+                 len(result.low_density_islands)),
+                ('TINY', "Tiny islands", len(result.tiny_islands)),
+                ('OUTSIDE', "Faces outside 0-1",
+                 len(result.out_of_bounds_faces)),
+            )
+            for issue, label, count in rows:
+                row = health_box.row(align=True)
+                row.label(text=f"{label}: {count}")
+                op = row.operator(UV_OT_health_select.bl_idname,
+                                  text="Select")
+                op.issue = issue
+
 
 def _overlay_popover_draw(self, context):
     obj = context.active_object
@@ -196,7 +295,7 @@ def _overlay_popover_draw(self, context):
         return
     layout = self.layout
     layout.separator()
-    _draw_overlay_controls(layout, context)
+    _draw_overlay_controls(layout, context, show_health=False)
 
 
 class VIEW3D_PT_uv_island_overlay(bpy.types.Panel):
@@ -327,6 +426,8 @@ def _on_load_pre(*args):
 _classes = (
     UV_OT_island_overlay_toggle,
     UV_OT_island_overlay_refresh,
+    UV_OT_health_analyze,
+    UV_OT_health_select,
     VIEW3D_PT_uv_island_overlay,
 )
 
@@ -458,6 +559,22 @@ def register():
         update=_on_density_tint_update,
     )
 
+    bpy.types.WindowManager.uv_health_texture_size = IntProperty(
+        name="Health Texture Size",
+        description="Texture resolution used to express texel density and "
+                    "minimum island span in pixels",
+        default=4096, min=1, soft_max=16384)
+    bpy.types.WindowManager.uv_health_low_density_ratio = FloatProperty(
+        name="Low Density Below",
+        description="Flag islands below this fraction of the mesh median "
+                    "texel density",
+        default=0.5, min=0.01, max=1.0, subtype='FACTOR')
+    bpy.types.WindowManager.uv_health_minimum_span_px = FloatProperty(
+        name="Minimum Island Span",
+        description="Flag islands whose UV bounding box is narrower than "
+                    "this many pixels at the chosen texture size",
+        default=8.0, min=0.0, soft_max=64.0, unit='NONE')
+
     if hasattr(bpy.types, "VIEW3D_PT_overlay"):
         bpy.types.VIEW3D_PT_overlay.append(_overlay_popover_draw)
     for menu_name in _MENUS:
@@ -492,6 +609,9 @@ def unregister():
         except Exception:
             pass
 
+    del bpy.types.WindowManager.uv_health_minimum_span_px
+    del bpy.types.WindowManager.uv_health_low_density_ratio
+    del bpy.types.WindowManager.uv_health_texture_size
     del bpy.types.WindowManager.uv_island_overlay_density_tint
     del bpy.types.WindowManager.uv_island_overlay_texture_size
     del bpy.types.WindowManager.uv_island_overlay_density_opacity

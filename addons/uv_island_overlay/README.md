@@ -22,6 +22,12 @@ shows both at once: the texel-density checker multiplied by each
 island's identity color, so **hue reads island membership while
 checker scale reads texel density**.
 
+Since v1.5.0 the sidebar also includes a **UV Health** analyzer. It reports and
+selects collapsed UV faces, exact duplicate triangle mappings, faces outside
+the main 0–1 tile, low-density islands, and islands too narrow to paint
+reliably at a chosen texture resolution. Analysis never edits UVs; only an
+explicit **Select** action changes face selection.
+
 *(No screenshots included — see the GUI checklist below to see it live in
 under a minute.)*
 
@@ -57,6 +63,25 @@ For development, symlink/copy the folder into your Blender
 Colors are assigned by golden-ratio hue stepping with stable ordering:
 recomputing the same mesh keeps the same colors, and adding islands never
 reshuffles existing ones.
+
+## UV Health
+
+Choose the intended texture resolution and press **Analyze UV Health**. The
+report distinguishes:
+
+- **Collapsed UV faces** — zero UV area or degenerate 3D area.
+- **Duplicate mappings** — distinct triangles using the same three UV
+  coordinates. They may be intentionally stacked, but painting cannot
+  distinguish them.
+- **Low-density islands** — below the selected fraction of the mesh median;
+  the default threshold is 50%.
+- **Tiny islands** — the shorter UV-bounds dimension is below the selected
+  pixel span. This catches thin charts that average density can miss.
+- **Outside 0–1** — potentially valid for UDIM or deliberate tiling, so this
+  is diagnostic rather than automatically erroneous.
+
+Each row has a **Select** button that enters face Edit Mode and selects the
+affected faces. Re-run the analysis after changing the unwrap.
 
 ## Island sources: Seams (predicted) vs UVs (actual)
 

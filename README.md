@@ -15,9 +15,14 @@ usage, limitations, and interactive acceptance checks.
 
 Interactive shortest-path UV seam marking in Edit Mode: click points on the mesh, each click commits a seam along the shortest path from the last anchor, with a live preview of the candidate path under the cursor. Occlusion-aware vertex picking, erase mode, per-segment undo, on-screen help panel. Fast on large meshes: commits reuse the previewed path (no pathfinding on click), and the hover path tree solves at C speed via an optional scipy dependency (pure-Python fallback included).
 
-### [UV Island Overlay](addons/uv_island_overlay/) — v1.4.0
+### [UV Island Overlay](addons/uv_island_overlay/) — v1.5.0
 
 Viewport overlay that colors each UV island distinctly and/or drapes a texel-density checkerboard through the actual UVs — the default combined mode shows both at once (hue = island, checker scale = density). Islands can be computed from true UV connectivity or *predicted from seams live as you mark them*, no unwrap needed. Per-island density stats, deviation tint, live opacity controls. Drawn as a GPU overlay; the mesh is never modified.
+
+Its **UV Health** section audits collapsed and duplicate UV mappings,
+out-of-tile coordinates, low-density islands, and islands whose narrow span is
+only a few pixels at the selected texture resolution. Each category can be
+selected directly in face Edit Mode.
 
 ### [Kiln](addons/kiln/) — v1.2.1
 
