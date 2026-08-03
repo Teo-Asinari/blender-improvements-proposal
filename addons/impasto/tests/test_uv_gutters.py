@@ -306,6 +306,53 @@ class UVGutterSessionLifecycleTests(unittest.TestCase):
         self.assertIsNone(session.gutter_apply_shader)
         self.assertIsNone(session.gutter_apply_batch)
 
+    def test_initial_padding_covers_active_and_resolved_baseline_textures(self):
+        from impasto import gpu_engine
+        events = []
+
+        class Backend:
+            def _draw_copy(self, source, framebuffer, viewport, origin, scale):
+                events.append(("copy", source, viewport, origin, scale))
+
+        class Framebuffer:
+            def __init__(self, color_slots):
+                self.target = color_slots[0]
+
+        session = SimpleNamespace(
+            gutter_offset_map="offsets", gutter_apply_shader="shader",
+            gutter_apply_batch="batch", history_backend=Backend(),
+            size=64, paint_texs=("base", "rough"),
+            single_fbs=("base_fb", "rough_fb"),
+            baseline_texs={"base_color": "lower_base"},
+            soften_scratch="scratch", soften_scratch_fb="scratch_fb",
+            gutter_apply_ms=1.0)
+
+        def apply(_source, target, _offsets, rect, _shader, _batch):
+            events.append(("apply", getattr(target, "target", target), rect))
+            return 0.5
+
+        with mock.patch.object(gpu_engine.gpu.types, "GPUFrameBuffer",
+                               Framebuffer), \
+                mock.patch.object(gpu_engine.uv_gutters,
+                                  "apply_gutters_into", side_effect=apply), \
+                mock.patch.object(gpu_engine, "_log_line"):
+            count = gpu_engine._apply_initial_uv_gutters(session)
+
+        self.assertEqual(count, 3)
+        self.assertEqual([event[:2] for event in events], [
+            ("copy", "base"), ("apply", "base_fb"),
+            ("copy", "rough"), ("apply", "rough_fb"),
+            ("copy", "lower_base"), ("apply", "lower_base"),
+        ])
+        self.assertEqual(session.gutter_apply_ms, 2.5)
+
+    def test_initial_padding_is_noop_without_ready_offset_map(self):
+        from impasto import gpu_engine
+        session = SimpleNamespace(
+            gutter_offset_map=None, gutter_apply_shader="shader",
+            gutter_apply_batch="batch", history_backend=object())
+        self.assertEqual(gpu_engine._apply_initial_uv_gutters(session), 0)
+
     def test_finalize_applies_each_channel_rect_before_history_commit(self):
         from impasto import gpu_engine
         events = []

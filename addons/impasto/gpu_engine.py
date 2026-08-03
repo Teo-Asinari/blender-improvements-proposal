@@ -3016,6 +3016,42 @@ def _ensure_uv_gutter_map(s):
     return True
 
 
+def _apply_initial_uv_gutters(s):
+    """Pad resident preview inputs once, before the first Lit PBR draw.
+
+    Per-stroke padding only repairs pixels touched after session start.  Lit
+    PBR also samples the pre-existing active canvases and resolved lower-stack
+    baselines, so leaving those unpadded makes an enabled experiment appear to
+    do nothing until a stroke happens to reach a seam.  Reuse the session's
+    single soften scratch texture for every input; no per-channel scratch or
+    retained preview copy is allocated.
+
+    This is deliberately preview-resident initialization.  It does not mark
+    the session dirty, create undo records, or write Blender Images.
+    """
+    if (s.gutter_offset_map is None or s.gutter_apply_shader is None
+            or s.gutter_apply_batch is None or s.history_backend is None):
+        return 0
+    rect = (0, 0, s.size, s.size)
+    origin = (0.0, 0.0)
+    scale = (1.0, 1.0)
+    targets = list(zip(s.paint_texs, s.single_fbs))
+    targets.extend(
+        (texture, gpu.types.GPUFrameBuffer(color_slots=(texture,)))
+        for texture in s.baseline_texs.values())
+    applied = 0
+    for texture, framebuffer in targets:
+        s.history_backend._draw_copy(
+            texture, s.soften_scratch_fb, rect, origin, scale)
+        s.gutter_apply_ms += uv_gutters.apply_gutters_into(
+            s.soften_scratch, framebuffer, s.gutter_offset_map, rect,
+            s.gutter_apply_shader, s.gutter_apply_batch)
+        applied += 1
+    if applied:
+        _log_line("GPU_PAINT_UV_GUTTER status=initialized textures=%d" % applied)
+    return applied
+
+
 def _ensure_gpu(s):
     if s.gpu_ready:
         return
@@ -3167,6 +3203,7 @@ def _ensure_gpu(s):
     _build_active_preview_textures(s)
     _ensure_base_normal_texture(s)
     s.history_backend = _GPUTileBackend(s)
+    _apply_initial_uv_gutters(s)
     s.gpu_ready = True
 
     # The research spike's destructive readback characterization is not part
