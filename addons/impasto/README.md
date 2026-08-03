@@ -1,6 +1,6 @@
 # Impasto
 
-Impasto 0.15.12 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
+Impasto 0.15.14 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
 painting. It stores material work as ordered Paint and Fill layers, compiles
 the stack into a Principled BSDF material, and provides a GPU-resident painting
 session with immediate material feedback.
@@ -24,9 +24,14 @@ prototype and is not intended for serious work.**
 - Post-creation channel expansion without replacing existing canvases.
 - GPU multi-channel strokes with tablet-pressure control for size and opacity.
 - A default-off **Experimental Seam Padding** option under Paint → Advanced
-  extends painted edge texels eight pixels into UV-island gutters at pen-up.
-  It targets only painted channels, participates in Undo/Redo and saving, and
-  is intended to reduce white filtering lines on multi-island UV layouts.
+  combines eight-pixel UV-island gutters with topology-aware seam continuation.
+  For Paint and Erase, Impasto pairs UV edges through their shared mesh edge
+  even when their islands are distant, rotated, or differently scaled. A
+  temporary stroke-coverage mask fills only missed peer-edge texels instead of
+  overwriting paint that already reached both sides. It participates in
+  Undo/Redo and saving and remains experimental pending production validation.
+  Literal transport supports color and scalar channels; Tangent Normal is
+  excluded until its value can be converted between the islands' tangent bases.
   Exactly duplicated UV triangles disable the feature; partial overlaps and
   extremely subpixel islands remain diagnostic limitations.
 - Emission and Subsurface brush-value sections are collapsed by default and

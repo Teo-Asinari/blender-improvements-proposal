@@ -117,6 +117,7 @@ from .gpu.brush_math import (
 from .gpu.caliper import sss_caliper_layout
 from .gpu import overlays as gpu_overlays
 from .gpu import uv_gutters
+from .gpu import uv_seams
 
 # ---------------------------------------------------------------------------
 # Tunables
@@ -450,6 +451,41 @@ def dab_frag_src(channels=1, additive=False, profile_slots=None,
                          "dab_params.paint_flags.y * f); }"
                          % (output, i, i))
     return _DAB_FRAG_PRELUDE + "\n".join(lines) + "\n}\n"
+
+
+SEAM_COVERAGE_FRAG_SRC = (_DAB_FRAG_PRELUDE + """
+    float coverage = clamp(dab_params.paint_flags.y * f, 0.0, 1.0);
+    fragColor = vec4(coverage);
+}
+""")
+
+SEAM_TRANSFER_VERT_SRC = """
+void main()
+{
+    gl_Position = vec4(destination_uv * 2.0 - 1.0, 0.0, 1.0);
+    destinationUV = destination_uv;
+    sourceUV = source_uv;
+}
+"""
+
+SEAM_TRANSFER_FRAG_SRC = """
+void main()
+{
+    ivec2 limit = textureSize(coverage_tex, 0) - ivec2(1);
+    ivec2 destination_pixel = clamp(
+        ivec2(floor(destinationUV * vec2(limit + ivec2(1)))),
+        ivec2(0), limit);
+    ivec2 source_pixel = clamp(
+        ivec2(floor(sourceUV * vec2(limit + ivec2(1)))),
+        ivec2(0), limit);
+    float destination_coverage = texelFetch(
+        coverage_tex, destination_pixel, 0).r;
+    float source_coverage = texelFetch(coverage_tex, source_pixel, 0).r;
+    if (source_coverage <= 1e-6 || destination_coverage > 1e-6)
+        discard;
+    fragColor = texelFetch(source_pixels, source_pixel, 0);
+}
+"""
 
 
 def soften_frag_src():
@@ -1174,6 +1210,86 @@ def build_uv_soup(obj, uv_map_name=""):
     return np.ascontiguousarray(uv.reshape(-1, 2)[loops], dtype=np.float32)
 
 
+def build_vertex_triangle_soup(obj):
+    """Return loop-triangle mesh vertex indices for topology-aware seams."""
+    import numpy as np
+    me = obj.data
+    if hasattr(me, "calc_loop_triangles"):
+        me.calc_loop_triangles()
+    if len(me.loop_triangles) == 0:
+        return None
+    vertices = np.empty(len(me.loop_triangles) * 3, dtype=np.int32)
+    me.loop_triangles.foreach_get("vertices", vertices)
+    return vertices.reshape(-1, 3)
+
+
+def seam_continuation_channel_keys(channel_keys):
+    """Channels safe for literal seam transport.
+
+    Encoded tangent normals are intentionally excluded: the two islands can
+    have different tangent frames, so copying RGB without a basis transform
+    changes the represented world-space direction.
+    """
+    return tuple(key for key in channel_keys if key != "normal")
+
+
+def build_sparse_seam_strips(correspondence, uv_triangles, canvas_size,
+                             width_px=2):
+    """Build bidirectional, topology-paired UV strip triangles and rects."""
+    import numpy as np
+    destinations = []
+    sources = []
+    rects = []
+    inset = max(1.0, float(width_px)) / float(canvas_size)
+
+    def side_strip(destination, source):
+        tri = uv_triangles[destination.triangle]
+        third = tri[(destination.corner + 2) % 3]
+        a = np.asarray(destination.uv0, dtype=np.float64)
+        b = np.asarray(destination.uv1, dtype=np.float64)
+        edge = b - a
+        length = float(np.linalg.norm(edge))
+        if length <= 1e-12:
+            return
+        normal = np.asarray((-edge[1], edge[0])) / length
+        if float(np.dot(np.asarray(third) - (a + b) * 0.5, normal)) < 0.0:
+            normal = -normal
+        sa = np.asarray(source.uv0, dtype=np.float64)
+        sb = np.asarray(source.uv1, dtype=np.float64)
+        source_tri = uv_triangles[source.triangle]
+        source_third = source_tri[(source.corner + 2) % 3]
+        source_edge = sb - sa
+        source_length = float(np.linalg.norm(source_edge))
+        if source_length <= 1e-12:
+            return
+        source_normal = np.asarray((-source_edge[1], source_edge[0])) \
+            / source_length
+        if float(np.dot(np.asarray(source_third) - (sa + sb) * 0.5,
+                        source_normal)) < 0.0:
+            source_normal = -source_normal
+        da, db = a + normal * inset, b + normal * inset
+        sda, sdb = sa + source_normal * inset, sb + source_normal * inset
+        destination_quad = (a, b, db, a, db, da)
+        source_quad = (sa, sb, sdb, sa, sdb, sda)
+        destinations.extend(tuple(map(float, uv)) for uv in destination_quad)
+        sources.extend(tuple(map(float, uv)) for uv in source_quad)
+        lo = np.minimum(np.minimum(a, b), np.minimum(da, db))
+        hi = np.maximum(np.maximum(a, b), np.maximum(da, db))
+        x0 = max(0, min(canvas_size, int(np.floor(lo[0] * canvas_size))))
+        y0 = max(0, min(canvas_size, int(np.floor(lo[1] * canvas_size))))
+        x1 = max(0, min(canvas_size, int(np.ceil(hi[0] * canvas_size)) + 1))
+        y1 = max(0, min(canvas_size, int(np.ceil(hi[1] * canvas_size)) + 1))
+        if x1 > x0 and y1 > y0:
+            rects.append((x0, y0, x1 - x0, y1 - y0))
+
+    for pair in correspondence.pairs:
+        side_strip(pair.first, pair.second)
+        side_strip(pair.second, pair.first)
+    return (np.asarray(destinations, dtype=np.float32).reshape(-1, 2),
+            np.asarray(sources, dtype=np.float32).reshape(-1, 2),
+            tuple(rects))
+
+
 # ---------------------------------------------------------------------------
 # Conservative dirty-rect tracking (pure numpy; headless-testable)
 #
@@ -1418,6 +1534,41 @@ def dab_shader_create_info(channels=1, additive=False, profile_slots=None,
                          + dab_frag_src(channels, additive=additive,
                                        profile_slots=profile_slots,
                                        profile_enabled=profile_enabled))
+    return info
+
+
+def seam_coverage_shader_create_info():
+    """Single-channel dab coverage using the exact paint visibility mask."""
+    iface = gpu.types.GPUStageInterfaceInfo("impasto_seam_coverage_iface")
+    iface.smooth('VEC3', "worldPos")
+    iface.smooth('VEC2', "paintUV")
+    info = gpu.types.GPUShaderCreateInfo()
+    info.typedef_source(DAB_UBO_TYPEDEF)
+    info.uniform_buf(DAB_UBO_SLOT, "ImpastoDabParams", DAB_UBO_NAME)
+    info.sampler(0, 'FLOAT_2D', "scene_depth_tex")
+    info.sampler(1, 'FLOAT_2D', "stencil_tex")
+    info.vertex_in(0, 'VEC3', "pos")
+    info.vertex_in(1, 'VEC2', "uv")
+    info.vertex_out(iface)
+    info.fragment_out(0, 'VEC4', "fragColor")
+    info.vertex_source(DAB_VERT_SRC)
+    info.fragment_source(visibility.GLSL_SOURCE + SEAM_COVERAGE_FRAG_SRC)
+    return info
+
+
+def seam_transfer_shader_create_info():
+    iface = gpu.types.GPUStageInterfaceInfo("impasto_seam_transfer_iface")
+    iface.smooth('VEC2', "destinationUV")
+    iface.smooth('VEC2', "sourceUV")
+    info = gpu.types.GPUShaderCreateInfo()
+    info.sampler(0, 'FLOAT_2D', "source_pixels")
+    info.sampler(1, 'FLOAT_2D', "coverage_tex")
+    info.vertex_in(0, 'VEC2', "destination_uv")
+    info.vertex_in(1, 'VEC2', "source_uv")
+    info.vertex_out(iface)
+    info.fragment_out(0, 'VEC4', "fragColor")
+    info.vertex_source(SEAM_TRANSFER_VERT_SRC)
+    info.fragment_source(SEAM_TRANSFER_FRAG_SRC)
     return info
 
 
@@ -2103,6 +2254,18 @@ class _Session:
         self.gutter_apply_shader = None
         self.gutter_apply_batch = None
         self.gutter_apply_ms = 0.0
+        self.seam_correspondence = None
+        self.seam_channel_keys = ()
+        self.seam_coverage_shader = None
+        self.seam_coverage_tex = None
+        self.seam_coverage_fb = None
+        self.batch_seam_coverage = None
+        self.seam_coverage_needs_clear = True
+        self.seam_transfer_shader = None
+        self.batch_seam_transfer = None
+        self.seam_strip_rects = ()
+        self.seam_history_touched = False
+        self.seam_transfer_ms = 0.0
 
         # Prepass cache: key of the view state the prepass was rendered
         # for, plus the matrices captured at that moment (the dab shader
@@ -2479,9 +2642,14 @@ def start_session(obj, images, region, channels=None, payloads=None,
         s.base_normal_uvs = uvs
     s.normals = normals
     s.gutter_uvs = uvs.reshape(-1, 3, 2)
+    keys = tuple(s.settings.get("channel_keys", ()))
+    vertex_triangles = build_vertex_triangle_soup(obj)
+    if vertex_triangles is not None:
+        s.seam_correspondence = uv_seams.build_seam_correspondence(
+            vertex_triangles, s.gutter_uvs)
+    s.seam_channel_keys = seam_continuation_channel_keys(keys)
     s.tri_uv_bboxes = triangle_uv_bboxes(uvs)
     _session = s
-    keys = tuple(s.settings.get("channel_keys", ()))
     targets = ",".join(
         "%s:%s" % (keys[i] if i < len(keys) else i, image.name)
         for i, image in enumerate(images))
@@ -2527,7 +2695,9 @@ def _release_gpu_references(s):
         "upper_transform_texs", "upper_transform_gpu_refs",
         "active_preview_gpu_refs", "overlay_circle_batch",
         "overlay_color_shader", "gutter_offset_map", "gutter_apply_shader",
-        "gutter_apply_batch",
+        "gutter_apply_batch", "seam_coverage_shader", "seam_coverage_tex",
+        "seam_coverage_fb", "batch_seam_coverage", "seam_transfer_shader",
+        "batch_seam_transfer",
     )
     for name in names:
         if name in {"baseline_texs", "active_preview_texs",
@@ -2561,6 +2731,8 @@ def begin_stroke(x, y, pressure):
     s.stroke_dirty = None
     s.stroke_dirty_full = False
     s.stroke_gutter_rects = {}
+    s.seam_coverage_needs_clear = True
+    s.seam_history_touched = False
     s.dirty_ms = 0.0
     s.smear_last_point = None
     s.dab_queue.append((x, y, pressure))
@@ -3094,6 +3266,15 @@ def _ensure_gpu(s):
         upper_transform_shader_create_info())
     s.upper_reproject_shader = gpu.shader.create_from_info(
         upper_reproject_shader_create_info())
+    seam_coverage_enabled = bool(
+        s.settings.get("experimental_uv_gutters", False)
+        and s.seam_correspondence and s.seam_correspondence.pairs
+        and s.seam_channel_keys)
+    if seam_coverage_enabled:
+        s.seam_coverage_shader = gpu.shader.create_from_info(
+            seam_coverage_shader_create_info())
+        s.seam_transfer_shader = gpu.shader.create_from_info(
+            seam_transfer_shader_create_info())
 
     # Blender does not expose Material Preview's prefiltered studio texture as
     # a public GPU handle. Upload Impasto's deterministic linear-HDR atlas;
@@ -3161,6 +3342,15 @@ def _ensure_gpu(s):
     s.soften_scratch = gpu.types.GPUTexture((size, size), format='RGBA16F')
     s.soften_scratch_fb = gpu.types.GPUFrameBuffer(
         color_slots=(s.soften_scratch,))
+    if seam_coverage_enabled:
+        # One scalar coverage plane, shared by every eligible channel. At 4K
+        # R16F costs 32 MiB; no per-channel mask is retained.
+        s.seam_coverage_tex = gpu.types.GPUTexture(
+            (size, size), format='R16F')
+        s.seam_coverage_tex.clear(
+            format='FLOAT', value=(0.0, 0.0, 0.0, 0.0))
+        s.seam_coverage_fb = gpu.types.GPUFrameBuffer(
+            color_slots=(s.seam_coverage_tex,))
     seed_line = "paint_tex_seeded_images=%d/%d" % (seeded_count, n)
     s.probe_lines.append(seed_line)
     _log_line("GPU_PAINT_SPIKE_PROBE %s" % seed_line)
@@ -3179,6 +3369,18 @@ def _ensure_gpu(s):
         s.soften_shader, 'TRIS', {"pos": s.coords, "uv": s.uvs})
     s.batch_smear = batch_for_shader(
         s.smear_shader, 'TRIS', {"pos": s.coords, "uv": s.uvs})
+    if seam_coverage_enabled:
+        s.batch_seam_coverage = batch_for_shader(
+            s.seam_coverage_shader, 'TRIS',
+            {"pos": s.coords, "uv": s.uvs})
+        destination_uv, source_uv, s.seam_strip_rects = (
+            build_sparse_seam_strips(
+                s.seam_correspondence, s.gutter_uvs, size))
+        if len(destination_uv):
+            s.batch_seam_transfer = batch_for_shader(
+                s.seam_transfer_shader, 'TRIS', {
+                    "destination_uv": destination_uv,
+                    "source_uv": source_uv})
     s.batch_prepass = batch_for_shader(
         s.prepass_shader, 'TRIS', {"pos": s.coords})
     s.batch_preview = batch_for_shader(
@@ -4100,6 +4302,22 @@ def _flush_dabs(s, region):
                             s.stroke_gutter_rects.get(channel), rect))
                 s.stroke_transaction.touch_rect(
                     channel, rect, (s.size, s.size))
+            if (s.batch_seam_transfer is not None
+                    and not s.seam_history_touched):
+                eligible = set(s.seam_channel_keys) & target_keys
+                for channel in eligible:
+                    for seam_rect in s.seam_strip_rects:
+                        undo_rect = seam_rect
+                        if s.gutter_offset_map is not None:
+                            undo_rect = uv_gutters.expand_pixel_rect(
+                                seam_rect, s.gutter_offset_map.radius, s.size)
+                            s.stroke_gutter_rects[channel] = (
+                                uv_gutters.union_pixel_rect(
+                                    s.stroke_gutter_rects.get(channel),
+                                    undo_rect))
+                        s.stroke_transaction.touch_rect(
+                            channel, undo_rect, (s.size, s.size))
+                s.seam_history_touched = True
 
     if s.settings.get("brush_mode", "PAINT") == "SOFTEN":
         _flush_soften_dabs(s, region, queue, radius, hardness, occlusion,
@@ -4196,8 +4414,56 @@ def _flush_dabs(s, region):
                 ubo.update(ubo_data)
                 draw_batch.draw(sh)
                 s.submit_times.append(time.perf_counter() - t0)
+    _flush_seam_coverage_dabs(
+        s, queue, radius, stamp, stencil_tex, use_stencil)
     s.dab_count += len(queue)
     s.last_dab_t = time.perf_counter()
+
+
+def _flush_seam_coverage_dabs(s, queue, radius, stamp, stencil_tex,
+                              use_stencil):
+    """Record actual visible/stencilled dab coverage for later seam transfer.
+
+    This pass shares the already-packed first dab UBO, and therefore exactly
+    matches paint projection, falloff, stencil, and occlusion. It records one
+    scalar mask for the whole stroke; no seam pixels are transported here.
+    """
+    if (not queue or s.seam_coverage_shader is None
+            or s.seam_coverage_fb is None
+            or s.batch_seam_coverage is None or not s.dab_ubos):
+        return
+    if s.seam_coverage_needs_clear:
+        s.seam_coverage_tex.clear(
+            format='FLOAT', value=(0.0, 0.0, 0.0, 0.0))
+        s.seam_coverage_needs_clear = False
+    shader = s.seam_coverage_shader
+    ubo = s.dab_ubos[0]
+    data = s.dab_ubo_data[0]
+    with s.seam_coverage_fb.bind():
+        s.seam_coverage_fb.viewport_set(0, 0, s.size, s.size)
+        gpu.state.blend_set('ADDITIVE')
+        gpu.state.depth_test_set('NONE')
+        gpu.state.depth_mask_set(False)
+        gpu.state.face_culling_set('NONE')
+        shader.bind()
+        shader.uniform_block(DAB_UBO_NAME, ubo)
+        shader.uniform_sampler("scene_depth_tex", s.depth_color_tex)
+        shader.uniform_sampler("stencil_tex", stencil_tex if use_stencil
+                               else s.depth_color_tex)
+        for x, y, pressure in queue:
+            dab_radius, dab_opacity = (
+                stamp.values_at_pressure(pressure)
+                if stamp is not None else (radius, pressure))
+            effective_opacity = max(0.0, min(
+                1.0, dab_opacity * float(s.settings.get("opacity", 1.0))))
+            if stamp is not None and stamp.use_pressure_strength:
+                effective_opacity = overlap_compensated_opacity(
+                    effective_opacity, stamp.spacing_ratio)
+            data[DAB_UBO_REGION_CENTER, 2:4] = (float(x), float(y))
+            data[DAB_UBO_BRUSH_DEPTH, 0] = dab_radius
+            data[DAB_UBO_PAINT_FLAGS, 1] = effective_opacity
+            ubo.update(data)
+            s.batch_seam_coverage.draw(shader)
 
 
 def _flush_soften_dabs(s, region, queue, radius, hardness, occlusion, stamp,
@@ -4390,10 +4656,61 @@ def _stroke_stats(s):
     return stats
 
 
+def _apply_seam_transport(s):
+    """Transport touched seam samples without overwriting touched peers."""
+    if (getattr(s, "batch_seam_transfer", None) is None
+            or getattr(s, "seam_coverage_tex", None) is None
+            or s.history_backend is None
+            or s.settings.get("brush_mode", "PAINT") not in {"PAINT", "ERASE"}):
+        return 0
+    keys = tuple(s.settings.get("channel_keys", ()))
+    targets = set(s.settings.get("brush_target_channel_keys", keys))
+    eligible = set(s.seam_channel_keys) & targets
+    count = 0
+    started = time.perf_counter()
+    for index, texture in enumerate(s.paint_texs):
+        channel = keys[index] if index < len(keys) else str(index)
+        if channel not in eligible:
+            continue
+        # The seam batch can sample distant atlas locations. Seed only its
+        # sparse source/destination strips into the shared absolute-coordinate
+        # scratch texture instead of copying the complete canvas.
+        for x, y, width, height in s.seam_strip_rects:
+            s.history_backend._draw_copy(
+                texture, s.soften_scratch_fb, (x, y, width, height),
+                (x / s.size, y / s.size),
+                (width / s.size, height / s.size))
+        with s.single_fbs[index].bind():
+            s.single_fbs[index].viewport_set(0, 0, s.size, s.size)
+            gpu.state.blend_set('NONE')
+            gpu.state.depth_test_set('NONE')
+            gpu.state.depth_mask_set(False)
+            gpu.state.face_culling_set('NONE')
+            shader = s.seam_transfer_shader
+            shader.bind()
+            shader.uniform_sampler("source_pixels", s.soften_scratch)
+            shader.uniform_sampler("coverage_tex", s.seam_coverage_tex)
+            s.batch_seam_transfer.draw(shader)
+        count += 1
+    if count:
+        for rect in s.seam_strip_rects:
+            x, y, width, height = rect
+            s.stroke_dirty = union_bbox(s.stroke_dirty, (
+                x / s.size, y / s.size,
+                (x + width) / s.size, (y + height) / s.size))
+        elapsed = (time.perf_counter() - started) * 1000.0
+        s.seam_transfer_ms += elapsed
+        _log_line("GPU_PAINT_UV_SEAM status=transported channels=%d "
+                  "strips=%d transfer_ms=%.3f" % (
+                      count, len(s.seam_strip_rects), elapsed))
+    return count
+
+
 def _finalize_stroke_gpu(s):
     """Close one stroke without readback, drain, or Blender Image writes."""
     global _last_stroke_stats
     s.pending_finalize = False
+    _apply_seam_transport(s)
     gutter_rects = s.stroke_gutter_rects
     if (gutter_rects and s.gutter_offset_map is not None
             and s.gutter_apply_shader is not None

@@ -72,6 +72,14 @@ class UVGutterPlanningTests(unittest.TestCase):
 
 
 class UVGutterGPUPrototypeTests(unittest.TestCase):
+    def test_seam_coverage_and_transfer_shaders_compile(self):
+        import gpu
+        from impasto import gpu_engine
+        self.assertIsNotNone(gpu.shader.create_from_info(
+            gpu_engine.seam_coverage_shader_create_info()))
+        self.assertIsNotNone(gpu.shader.create_from_info(
+            gpu_engine.seam_transfer_shader_create_info()))
+
     @staticmethod
     def _read(mask, radius=8):
         import numpy as np
@@ -228,6 +236,94 @@ class UVGutterGPUPrototypeTests(unittest.TestCase):
             dx, dy = (int(raw[y, x, 0]), int(raw[y, x, 1]))
             self.assertTrue(np.array_equal(
                 actual[y, x], source[y + dy, x + dx]))
+
+    def test_topological_seam_stroke_survives_rotated_scaled_uv_islands(self):
+        """Reproduce one screen-space dab crossing a disconnected UV seam.
+
+        The triangles share mesh edge B-C, but their UV copies of that edge
+        are far apart.  The second island is deliberately rotated and has a
+        different scale.  Painting is evaluated from barycentric mesh-space
+        positions, as the production dab shader does; padding must then copy
+        the complete color/scalar payload beside *both* UV boundaries.
+        """
+        import numpy as np
+
+        size = 64
+        mesh = np.asarray((
+            ((0.0, 0.0), (1.0, 0.0), (0.0, 1.0)),       # A, B, C
+            ((0.0, 1.0), (1.0, 0.0), (1.0, 1.0))),      # C, B, D
+            dtype=np.float64)
+        # T1's C-B seam runs diagonally up/right; T2's matching C-B seam is
+        # rotated, shorter, and remote in the atlas.
+        uv_px = np.asarray((
+            ((4.0, 4.0), (25.0, 4.0), (4.0, 25.0)),
+            ((45.0, 48.0), (52.0, 35.0), (59.0, 51.0))),
+            dtype=np.float64)
+        uvs = (uv_px / size).astype(np.float32)
+        self.assertEqual(
+            triangle_uv_islands(((0, 1, 2), (2, 1, 3)), uvs),
+            (0, 1))
+
+        def barycentric(point, triangle):
+            a, b, c = triangle
+            v0, v1, v2 = b - a, c - a, point - a
+            den = v0[0] * v1[1] - v1[0] * v0[1]
+            w1 = (v2[0] * v1[1] - v1[0] * v2[1]) / den
+            w2 = (v0[0] * v2[1] - v2[0] * v0[1]) / den
+            return np.asarray((1.0 - w1 - w2, w1, w2))
+
+        # Simulate the UV rasterizer evaluating a circular dab in common
+        # mesh/screen space.  Both sides of B-C therefore receive one stroke
+        # despite having unrelated UV transforms.
+        source = np.zeros((size, size, 4), dtype=np.float32)
+        painted_by_triangle = [set(), set()]
+        seam_painted_by_triangle = [set(), set()]
+        # Binary-exact values keep full-vec4 assertions independent of the
+        # expected RGBA16F round trip.
+        payload = np.asarray((0.25, 0.375, 0.5, 0.75), dtype=np.float32)
+        for tri_index in range(2):
+            tri_uv = uv_px[tri_index]
+            lo = np.floor(tri_uv.min(axis=0)).astype(int) - 1
+            hi = np.ceil(tri_uv.max(axis=0)).astype(int) + 1
+            for y in range(max(0, lo[1]), min(size, hi[1] + 1)):
+                for x in range(max(0, lo[0]), min(size, hi[0] + 1)):
+                    weights = barycentric(
+                        np.asarray((x + 0.5, y + 0.5)), tri_uv)
+                    if np.min(weights) < -1e-9:
+                        continue
+                    surface = weights @ mesh[tri_index]
+                    if np.linalg.norm(surface - (0.5, 0.5)) <= 0.24:
+                        source[y, x] = payload
+                        painted_by_triangle[tri_index].add((y, x))
+                        # Shared mesh edge B-C is x+y=1 on both triangles.
+                        if abs(float(surface.sum()) - 1.0) <= 0.08:
+                            seam_painted_by_triangle[tri_index].add((y, x))
+
+        self.assertTrue(all(painted_by_triangle))
+        self.assertTrue(all(seam_painted_by_triangle))
+        offsets, _diagnostics = build_compact_offset_map_from_uvs(uvs, size, 3)
+        raw = np.asarray(offsets.texture.read().to_list(),
+                         dtype=np.float32).reshape(size, size, 2)
+        result = apply_gutters_disconnected(
+            self._rgba_texture(source), offsets, (0, 0, size, size))
+        actual = self._read_rgba(result.texture, size, size)
+
+        # For each independently transformed island, find at least one gutter
+        # texel whose nearest interior source belongs to the seam-crossing dab.
+        # Full vec4 equality covers color, scalar value, and coverage alpha.
+        propagated = [0, 0]
+        for y in range(size):
+            for x in range(size):
+                dx, dy = (int(raw[y, x, 0]), int(raw[y, x, 1]))
+                if (dx == 0 and dy == 0) or max(abs(dx), abs(dy)) >= 2048:
+                    continue
+                source_pixel = (y + dy, x + dx)
+                for tri_index, painted in enumerate(seam_painted_by_triangle):
+                    if source_pixel in painted:
+                        self.assertTrue(np.array_equal(actual[y, x], payload))
+                        propagated[tri_index] += 1
+        self.assertGreater(propagated[0], 0)
+        self.assertGreater(propagated[1], 0)
 
 
 class UVGutterSessionLifecycleTests(unittest.TestCase):

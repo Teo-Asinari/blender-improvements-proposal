@@ -3,34 +3,39 @@
 ## UV seam-safe paint padding
 
 Development branch: `feature/impasto-uv-gutter-padding`. Experimental seam
-padding is implemented behind a default-off Advanced toggle and awaits
+padding and topology-aware seam continuation are implemented behind a
+default-off Advanced toggle and await
 interactive validation on production 4K meshes before merging to `master`.
 
 - The pure ownership foundation lives in `gpu/uv_gutters.py`: triangles are
   grouped by mesh-edge and UV continuity, never by paint alpha.
-- A production-disconnected compact GPU prototype now propagates deterministic
-  local source offsets through an `RG16F` map using only padding-bounded jump
-  steps. Its Blender/OpenGL tests pass; propagation is approximate rather than
-  globally nearest for adversarial seed layouts.
-- Next, rasterize UV interiors into the immutable seed map once per UV map and
+- The resident compact GPU path propagates exact deterministic local source
+  offsets through an `RG16F` map using eight one-pixel relaxation passes.
+  UV interiors are rasterized into the immutable map once per UV map and
   resolution. The retained map costs 16 MiB at 2K, 64 MiB at 4K, or 256 MiB
   at 8K; construction temporarily doubles that GPU allocation and uses a
   float32 CPU seed allocation twice the retained-map size.
-- Partial, unvalidated groundwork exists for UV/resolution cache keys, direct
-  GPU seed-raster shaders, and warnings for out-of-range, very small, and
+- UV/resolution cache keys, direct GPU seed-raster shaders, and warnings for
+  out-of-range, very small, and
   exactly duplicated UV triangles. These diagnostics do not yet detect every
   partial overlap, and the small-triangle warning is heuristic.
 - Implemented: pen-up processes only per-channel dirty rectangles expanded by
   the padding radius and copies complete resident texels through the existing
   scratch texture. UV interiors are preserved; expanded Undo/Redo and
   flush/save bounds include the gutters.
+- Implemented experimentally: manifold UV seams are paired by their shared
+  mesh edge rather than atlas proximity. Paint/Erase record one shared `R16F`
+  coverage mask and copy only source-touched, destination-missed samples
+  through bidirectional two-pixel seam strips. The mask costs 8 MiB at 2K or
+  32 MiB at 4K and exists only for sessions with eligible seams. Tangent Normal,
+  Soften, and Smear are not yet transported across this path.
 
 Remaining: stress-test hand-authored and Smart UV atlases at 2K/4K, measure
 pen-up latency, and keep 8K experimental because the retained compact map alone
 costs 256 MiB. Partial UV overlaps and islands too small to cover a texel center
 remain limitations requiring diagnostics rather than silent claims of repair.
 
-This is the authoritative list of open work for Impasto 0.15.11. Shipped work
+This is the authoritative list of open work for Impasto 0.15.14. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Near-term
