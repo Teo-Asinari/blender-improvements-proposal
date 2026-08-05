@@ -13,7 +13,7 @@ hue reads island membership while checker scale reads texel density.
 bl_info = {
     "name": "UV Island Overlay",
     "author": "Teo Asinari",
-    "version": (1, 5, 0),
+    "version": (1, 5, 1),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N) > UV Islands tab; also in the "
                 "Overlays popover",

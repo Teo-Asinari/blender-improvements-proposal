@@ -53,4 +53,12 @@ health.select_faces(obj, result.duplicate_faces)
 obj.update_from_editmode()
 assert {face.index for face in mesh.polygons if face.select} == {2, 3}
 
+# Blender 5.1 exposes an empty Mesh UV data collection while Edit Mode's
+# BMesh owns the UVs. Analysis must remain fully functional in that state.
+edit_result = health.analyze_object(
+    obj, texture_size=1024, low_density_ratio=0.25,
+    minimum_island_span_px=16)
+assert edit_result.duplicate_faces == frozenset((2, 3)), edit_result
+assert edit_result.zero_area_faces == frozenset((4,)), edit_result
+
 print("HEALTH_TESTS_PASSED")

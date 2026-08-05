@@ -122,28 +122,34 @@ def analyze_object(obj, texture_size=4096, low_density_ratio=0.5,
                               for face in island_faces[island])
         tiny_faces = frozenset(face for island in tiny_ids
                                for face in island_faces[island])
+
+        # In Blender 5.1 the Mesh UV data collection is empty while Edit Mode
+        # BMesh owns the data, even after update_from_editmode(). Keep exact
+        # duplicate detection on the same BMesh path as the rest of this
+        # analysis so the operator works identically in Object and Edit Mode.
+        groups = collections.defaultdict(list)
+        for loops in bm.calc_loop_triangles():
+            key = tuple(sorted(
+                (round(float(loop[uv_layer].uv.x), 7),
+                 round(float(loop[uv_layer].uv.y), 7))
+                for loop in loops))
+            groups[key].append(loops[0].face.index)
+
+        def key_area(key):
+            (ax, ay), (bx, by), (cx, cy) = key
+            return abs((bx - ax) * (cy - ay)
+                       - (by - ay) * (cx - ax)) * 0.5
+
+        # Collapsed triangles are reported separately. Do not inflate the
+        # duplicate-mapping count when hundreds of collapsed triangles share
+        # the same point or line in UV space.
+        duplicate_groups = [faces for key, faces in groups.items()
+                            if len(faces) > 1 and key_area(key) > epsilon]
+        duplicate_faces = frozenset(face for faces in duplicate_groups
+                                    for face in faces)
     finally:
         bm.free()
-
     mesh.calc_loop_triangles()
-    uv_data = mesh.uv_layers.active.data
-    groups = collections.defaultdict(list)
-    for tri in mesh.loop_triangles:
-        key = tuple(sorted((round(float(uv_data[loop].uv.x), 7),
-                            round(float(uv_data[loop].uv.y), 7))
-                           for loop in tri.loops))
-        groups[key].append(tri.polygon_index)
-    def key_area(key):
-        (ax, ay), (bx, by), (cx, cy) = key
-        return abs((bx - ax) * (cy - ay) - (by - ay) * (cx - ax)) * 0.5
-
-    # Collapsed triangles are reported separately. Do not inflate the
-    # duplicate-mapping count when hundreds of collapsed triangles share the
-    # same point or line in UV space.
-    duplicate_groups = [faces for key, faces in groups.items()
-                        if len(faces) > 1 and key_area(key) > epsilon]
-    duplicate_faces = frozenset(face for faces in duplicate_groups
-                                for face in faces)
     result = UVHealthResult(
         object_name=obj.name, uv_map=mesh.uv_layers.active.name,
         face_count=len(mesh.polygons), triangle_count=len(mesh.loop_triangles),
