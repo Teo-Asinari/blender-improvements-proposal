@@ -99,6 +99,12 @@ images, flattened output, or Blender's authoritative Material Preview.
 Rebuild automatically discovers a material-level `Kiln Bake Target` image and
 imports it as the bottom normal layer; the explicit Base Normal picker remains
 the authoritative preview-only manual override.
+Impasto 0.15.15 also adds user-validated **Conservative UV Seam Paint** for
+Paint and Erase. It evaluates the continuous brush footprint in a narrow
+face-clamped boundary strip, eliminating the white staircase-like texel gaps
+seen along UV islands on a complex 4K production mesh. The mode remains
+default-off while extremely close exterior gutters and broader GPU coverage are
+qualified.
 Flatten/Export to combined per-channel Blender Images is implemented. Paint,
 Soften, Smear, and Erase have independent per-channel target controls.
 Same-UV visible layers remain composed around an intermediate active layer;

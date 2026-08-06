@@ -35,12 +35,14 @@ pen-up latency, and keep 8K experimental because the retained compact map alone
 costs 256 MiB. Partial UV overlaps and islands too small to cover a texel center
 remain limitations requiring diagnostics rather than silent claims of repair.
 
-Conservative boundary rasterization is now available behind its own default-off
+Conservative boundary rasterization is available behind its own default-off
 toggle in 0.15.15. It processes only seam faces intersecting the current stroke,
 adds endpoint caps, protects rasterized island interiors, and supports Paint and
-Erase for literal color/scalar channels. It still needs production-mesh
-validation and exterior-gutter collision ownership for islands packed within
-about one texel; Tangent Normal, Soften, and Smear remain excluded.
+Erase for literal color/scalar channels. **User-validated:** it removed the
+white staircase-like UV seam gaps on the complex 4K production mesh that
+reproduced the original failure. Remaining qualification is exterior-gutter
+collision ownership for islands packed within about one texel, broader GPU
+coverage, and eventual Tangent Normal/Soften/Smear support.
 
 This is the authoritative list of open work for Impasto 0.15.15. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.

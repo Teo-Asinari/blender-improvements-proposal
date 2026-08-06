@@ -34,13 +34,15 @@ prototype and is not intended for serious work.**
   excluded until its value can be converted between the islands' tangent bases.
   Exactly duplicated UV triangles disable the feature; partial overlaps and
   extremely subpixel islands remain diagnostic limitations.
-- A separate default-off **Conservative UV Seam Paint** experiment addresses
+- A separate default-off **Conservative UV Seam Paint** mode addresses
   texel-center misses directly. Paint and Erase conservatively extend only
   touched UV seam edges by less than one texel, evaluate the brush at the
   corresponding face edge, protect existing island interiors, and include
-  endpoint caps. Tangent Normal, Soften, and Smear are excluded. Exterior
-  gutters of islands packed within roughly one texel can still collide, so
-  this remains a diagnostic prototype rather than a production guarantee.
+  endpoint caps. This removed the previously persistent white, staircase-like
+  seam gaps in user validation on a complex 4K production mesh. Tangent Normal,
+  Soften, and Smear are excluded. Exterior gutters of islands packed within
+  roughly one texel can still collide, so the mode remains default-off while
+  that edge case and broader hardware coverage are qualified.
 - Emission and Subsurface brush-value sections are collapsed by default and
   retain their disclosure state per Paint layer.
 - A collapsed **Recent Colors** menu remembers up to eight colors actually

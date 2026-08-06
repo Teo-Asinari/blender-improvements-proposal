@@ -16,6 +16,10 @@ notes remain available in
 - Known limitation: exterior gutter strips still lack ownership where islands
   are packed within roughly one texel. Tangent Normal, Soften, and Smear are
   not included in this experiment.
+- User validation on a complex 4K production mesh confirmed that conservative
+  boundary painting removes the persistent white, staircase-like gaps along UV
+  island seams that the earlier padding and cross-island transport attempts did
+  not resolve.
 
 ## 0.15.12
 
