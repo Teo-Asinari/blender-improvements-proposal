@@ -83,6 +83,12 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
   undo records before GPU copying. Version 0.15.18 captures Paint/Erase Undo
   from sparse hit-island tiles rather than their atlas-wide union. Re-measure
   production strokes to identify the next dominant 4K cost.
+  **Regression found:** a Smart UV Project object with very many tiny,
+  near-adjacent islands spent 15.1 seconds rebuilding sparse Undo requests in
+  a 19.3-second stroke, versus 3.7 seconds on the earlier hand-unwrapped object.
+  Once the 256 MiB transaction is abandoned, skip all further sparse-rect and
+  tile work for that stroke. Then qualify an adaptive sparse/broad threshold
+  using island fragmentation and unique tile/request counts.
 
 ## Workflow and UX
 

@@ -14,6 +14,10 @@ notes remain available in
 - Keep experimental gutter destinations as separate regions through pen-up,
   ensuring the gutter pass cannot modify atlas-gap tiles omitted by sparse
   Undo.
+- Known performance regression: highly fragmented UV atlases can spend
+  substantial CPU time rebuilding sparse tile requests after a stroke has
+  already exceeded the atomic Undo budget. Painting remains correct; an early
+  exit and adaptive sparse/broad policy are tracked in the roadmap.
 
 ## 0.15.17
 

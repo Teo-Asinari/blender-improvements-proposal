@@ -92,6 +92,36 @@ retains separate destination regions. The gain still requires measurement on
 the production 4K scene; dense strokes naturally benefit less than fragmented
 atlases with large empty gaps.
 
+### 0.15.18 regression on a highly fragmented Smart UV atlas
+
+The first post-release comparison established that UV topology matters more
+than raw texture resolution. The earlier production object was hand-unwrapped
+into relatively few, large islands. A second 4K object used Blender Smart UV
+Project and contained very many tiny, nearly adjacent islands. On that object,
+a 19.34-second Paint stroke produced 1,194 dabs and only 197 live flushes:
+
+| Component | Hand-unwrapped object | Smart-UV object |
+|---|---:|---:|
+| Full flush work | 6,808.3 ms | 17,921.6 ms |
+| Approx. flush cost | 7.69 ms | 90.97 ms |
+| Undo tile work | 3,699.3 ms | 15,093.8 ms |
+| UV bounds/sparse-rect work | 906.1 ms | 1,485.0 ms |
+| GPU command submission | 57.5 ms | 40.5 ms |
+
+The roughly 91 ms flush cost reduced live feedback to about 10 Hz and was
+visibly choppy. GPU drawing was not the bottleneck. The fragmented atlas made
+each screen hit produce many small UV rectangle requests. After their atomic
+Undo estimate exceeded 256 MiB, the transaction correctly became non-undoable,
+but every later flush still rebuilt, tiled, and deduplicated those requests.
+That work could no longer produce an Undo record and was therefore wasted.
+
+Required correction: once a stroke transaction is abandoned, bypass sparse
+rectangle generation and tile enumeration for the rest of that stroke. After
+that early exit is validated, consider an adaptive selector that uses sparse
+capture only while its request count or measured cost is lower than the broad
+alternative. Do not infer that Smart UV Project is universally slower: the
+observed driver is this result's many tiny islands, not the operator's name.
+
 Other remaining costs are conservative UV-union calculation, unclassified
 flush overhead, and roughly one second for explicit near-full 4K Image
 synchronization. GPU command submission itself is small in these traces.

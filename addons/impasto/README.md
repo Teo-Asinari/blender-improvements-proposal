@@ -24,7 +24,12 @@ the [performance history](docs/PERFORMANCE_HISTORY.md) for the exact logs,
 comparison method, and remaining costs.
 Paint and Erase Undo capture is also sparse: distant UV islands contribute
 their own 128-pixel tiles without forcing capture of the empty atlas space
-between them. Exact gains depend on UV layout and stroke coverage.
+between them. Exact gains depend strongly on UV layout and stroke coverage.
+Version 0.15.18 has a known performance regression on highly fragmented
+atlases: a tested Smart UV Project mesh with many tiny islands continued
+building sparse requests after its Undo transaction exceeded the memory
+budget, producing roughly 91 ms live flushes. The painted result remains
+correct, but this path is choppy pending an early-exit fix.
 
 ## Current feature set
 
