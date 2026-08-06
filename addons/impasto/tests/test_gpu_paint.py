@@ -568,6 +568,10 @@ try:
         (10.0, 10.0, 20.0, 20.0), 64, pad=0)
     check("sparse undo includes only screen-hit triangles",
           sparse_near == ((16, 16, 16, 16),), str(sparse_near))
+    shared_hits = gpu_engine._screen_bbox_hit_indices(
+        screen_boxes, np.array([False, True]), (10.0, 10.0, 20.0, 20.0))
+    check("shared exact hit selection preserves always-dirty fallback",
+          shared_hits.tolist() == [0, 1], str(shared_hits.tolist()))
     sparse_unprojectable = gpu_engine.dirty_uv_pixel_rects(
         screen_boxes, np.array([False, True]), uv_boxes,
         (10.0, 10.0, 20.0, 20.0), 64, pad=0)

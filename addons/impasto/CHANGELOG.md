@@ -4,6 +4,17 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.23
+
+- Compute the exact screen-space triangle hit set once per GPU flush and reuse
+  it for dirty UV bounds, sparse Undo coverage, and seam transport. This avoids
+  repeating the same full-mesh intersection work for each subsystem while
+  preserving inclusive edge hits and deterministic seam-record order.
+- Reuse the paint UV soup for the common Base Normal case where it uses the
+  active UV map. Distinct named Base Normal UV maps remain independently
+  extracted.
+- Add `screen_exact_hits` to stroke telemetry for production qualification.
+
 ## 0.15.22
 
 - Cache backend capability-probe results for the current Blender process,

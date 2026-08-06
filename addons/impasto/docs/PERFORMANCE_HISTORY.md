@@ -196,3 +196,22 @@ CPU submission time does not make it the first priority.
 
 See [High-resolution performance](HIGH_RESOLUTION_PERFORMANCE.md) for memory
 estimates and qualification policy.
+
+## 0.15.23: shared triangle selection and active-UV reuse
+
+Each paint flush previously repeated the same screen-bbox intersection while
+calculating dirty UV bounds, sparse Undo coverage, and topology-aware seam
+transport. Version 0.15.23 computes one exact, inclusive triangle-hit list and
+reuses it across all three consumers. `screen_exact_hits` reports the total
+selected triangles in stroke telemetry.
+
+The common Base Normal configuration also no longer extracts the active UV map
+twice during session startup. A synthetic 151,112-triangle gather avoided about
+4.6 ms and 8.65 MiB of transient NumPy allocation, before counting Blender's
+UV `foreach_get` cost. Distinct named Base Normal UV maps keep the independent
+path.
+
+A Python-built uniform screen grid was evaluated and rejected: synthetic 173K
+triangle queries were much faster, but the roughly 2.9-second construction cost
+would have caused a severe first-stroke regression. A future spatial index must
+use a vectorized/native build or persist safely across projection changes.

@@ -1415,7 +1415,8 @@ def seam_record_triangle_index(records):
 
 
 def touched_seam_record_indices(records, triangle_screen_bboxes, dab_rect,
-                                record_triangles=None):
+                                record_triangles=None,
+                                touched_triangles=None):
     """Select seam sides whose owning face intersects this dab union exactly.
 
     ``record_triangles`` is cached once per session.  Indexing the numpy bbox
@@ -1428,6 +1429,12 @@ def touched_seam_record_indices(records, triangle_screen_bboxes, dab_rect,
         return ()
     owners = (seam_record_triangle_index(records) if record_triangles is None
               else record_triangles)
+    if touched_triangles is not None:
+        # The boolean lookup retains seam-record order while reusing the exact
+        # triangle selection already computed for dirty tracking this flush.
+        triangle_hit = np.zeros(len(triangle_screen_bboxes), dtype=bool)
+        triangle_hit[np.asarray(touched_triangles, dtype=np.int32)] = True
+        return tuple(map(int, np.flatnonzero(triangle_hit[owners])))
     boxes = np.asarray(triangle_screen_bboxes)[owners]
     x0, y0, x1, y1 = dab_rect
     mask = ((boxes[:, 2] >= x0) & (boxes[:, 0] <= x1)
@@ -1572,25 +1579,40 @@ def dab_rect_union(dabs, radius):
     return (min(xs) - r, min(ys) - r, max(xs) + r, max(ys) + r)
 
 
-def dirty_uv_bbox(screen_bboxes, unprojectable, uv_bboxes, rect):
+def _screen_bbox_hit_indices(screen_bboxes, unprojectable, rect,
+                             candidates=None):
+    """Apply the authoritative inclusive bbox test to optional candidates."""
+    import numpy as np
+    if candidates is None:
+        candidates = np.arange(len(screen_bboxes), dtype=np.int32)
+    else:
+        candidates = np.asarray(candidates, dtype=np.int32)
+    boxes = np.asarray(screen_bboxes)[candidates]
+    invalid = np.asarray(unprojectable)[candidates]
+    hit = ~((boxes[:, 2] < rect[0]) | (boxes[:, 0] > rect[2])
+            | (boxes[:, 3] < rect[1]) | (boxes[:, 1] > rect[3]))
+    return candidates[hit | invalid]
+
+
+def dirty_uv_bbox(screen_bboxes, unprojectable, uv_bboxes, rect,
+                  candidates=None, hit_indices=None):
     """UV bbox (min_u, min_v, max_u, max_v) unioned over the triangles
     whose screen bbox intersects ``rect`` — plus every unprojectable
     triangle (always dirty). None when no triangle is hit."""
     import numpy as np
-    hit = ~((screen_bboxes[:, 2] < rect[0])
-            | (screen_bboxes[:, 0] > rect[2])
-            | (screen_bboxes[:, 3] < rect[1])
-            | (screen_bboxes[:, 1] > rect[3]))
-    hit = hit | unprojectable
-    if not bool(hit.any()):
+    indices = (np.asarray(hit_indices, dtype=np.int32)
+               if hit_indices is not None else _screen_bbox_hit_indices(
+                   screen_bboxes, unprojectable, rect, candidates))
+    if not len(indices):
         return None
-    sel = uv_bboxes[hit]
+    sel = np.asarray(uv_bboxes)[indices]
     return (float(sel[:, 0].min()), float(sel[:, 1].min()),
             float(sel[:, 2].max()), float(sel[:, 3].max()))
 
 
 def dirty_uv_pixel_rects(screen_bboxes, unprojectable, uv_bboxes, rect,
-                         size, pad=DIRTY_RECT_PAD_PX):
+                         size, pad=DIRTY_RECT_PAD_PX, candidates=None,
+                         hit_indices=None):
     """Conservative per-triangle texel rects intersecting a screen rect.
 
     Unlike :func:`dirty_uv_bbox`, this deliberately does not bridge gaps
@@ -1599,14 +1621,12 @@ def dirty_uv_pixel_rects(screen_bboxes, unprojectable, uv_bboxes, rect,
     bounds are removed without changing their deterministic triangle order.
     """
     import numpy as np
-    hit = ~((screen_bboxes[:, 2] < rect[0])
-            | (screen_bboxes[:, 0] > rect[2])
-            | (screen_bboxes[:, 3] < rect[1])
-            | (screen_bboxes[:, 1] > rect[3]))
-    hit = hit | unprojectable
+    indices = (np.asarray(hit_indices, dtype=np.int32)
+               if hit_indices is not None else _screen_bbox_hit_indices(
+                   screen_bboxes, unprojectable, rect, candidates))
     result = []
     seen = set()
-    for bbox in np.asarray(uv_bboxes)[hit]:
+    for bbox in np.asarray(uv_bboxes)[indices]:
         pixel_rect = uv_bbox_to_pixel_rect(bbox, size, pad=pad)
         if pixel_rect is not None and pixel_rect not in seen:
             seen.add(pixel_rect)
@@ -2626,6 +2646,7 @@ class _Session:
         # (same matrices the dab shader uses) + per-stroke accumulator.
         self.tri_screen_bboxes = None
         self.tri_unprojectable = None
+        self.screen_exact_hits = 0
         self.stroke_dirty = None       # UV bbox or None
         self.stroke_dirty_full = False  # tracking unavailable: full read
         self.session_dirty = None      # accumulated until explicit flush
@@ -3047,7 +3068,16 @@ def start_session(obj, images, region, channels=None, payloads=None,
     s.uvs = uvs
     requested_base_uv = s.settings.get("base_normal_uv_map", "")
     base_uv_t0 = time.perf_counter()
-    s.base_normal_uvs = build_uv_soup(obj, requested_base_uv)
+    active_uv_layer = obj.data.uv_layers.active
+    if (not requested_base_uv
+            or (active_uv_layer is not None
+                and requested_base_uv == active_uv_layer.name)):
+        # build_mesh_soup() already extracted the active map in loop-triangle
+        # order.  Reusing it avoids a second full foreach_get, triangle-index
+        # allocation, and advanced-index copy on the common/default path.
+        s.base_normal_uvs = uvs
+    else:
+        s.base_normal_uvs = build_uv_soup(obj, requested_base_uv)
     base_uv_ms = (time.perf_counter() - base_uv_t0) * 1000.0
     if s.base_normal_uvs is None:
         # A missing named map disables the fallback instead of silently
@@ -3198,6 +3228,7 @@ def begin_stroke(x, y, pressure):
     s.seam_flush_indices = ()
     s.dirty_ms = 0.0
     s.projection_bounds_ms = 0.0
+    s.screen_exact_hits = 0
     s.flush_count = 0
     s.flush_wall_ms = 0.0
     s.dirty_union_ms = 0.0
@@ -4907,23 +4938,29 @@ def _flush_dabs(s, region):
     if (s.tri_screen_bboxes is not None and s.tri_uv_bboxes is not None
             and queue):
         rect = dab_rect_union(queue, radius)
+        hit_indices = _screen_bbox_hit_indices(
+            s.tri_screen_bboxes, s.tri_unprojectable, rect)
+        s.screen_exact_hits = getattr(s, "screen_exact_hits", 0) + len(
+            hit_indices)
         if s.seam_records:
             seam_started = time.perf_counter()
             s.seam_flush_indices = touched_seam_record_indices(
                 s.seam_records, s.tri_screen_bboxes, rect,
-                s.seam_record_triangles)
+                s.seam_record_triangles, hit_indices)
             s.seam_selected_indices.update(s.seam_flush_indices)
             s.seam_select_ms += (time.perf_counter() - seam_started) * 1000.0
         union_started = time.perf_counter()
         bb = dirty_uv_bbox(s.tri_screen_bboxes, s.tri_unprojectable,
-                           s.tri_uv_bboxes, rect)
+                           s.tri_uv_bboxes, rect,
+                           hit_indices=hit_indices)
         s.stroke_dirty = union_bbox(s.stroke_dirty, bb)
         if (undo_recording
                 and s.settings.get("brush_mode", "PAINT")
                 in {"PAINT", "ERASE"}):
             undo_dirty_rects = dirty_uv_pixel_rects(
                 s.tri_screen_bboxes, s.tri_unprojectable,
-                s.tri_uv_bboxes, rect, s.size)
+                s.tri_uv_bboxes, rect, s.size,
+                hit_indices=hit_indices)
         s.dirty_union_ms += (time.perf_counter() - union_started) * 1000.0
         work_started = time.perf_counter()
         dab_work_rects = detailed_dab_work_rects(
@@ -5413,6 +5450,7 @@ def _stroke_stats(s):
             s.settings.get("channel_keys", ())))),
         "prepass_ms": s.prepass_ms,
         "projection_bounds_ms": s.projection_bounds_ms,
+        "screen_exact_hits": s.screen_exact_hits,
         "dirty_ms": s.dirty_ms * 1000.0,
         "flush_count": s.flush_count,
         "flush_wall_ms": s.flush_wall_ms,

@@ -33,6 +33,9 @@ class UVSeamCorrespondenceTests(unittest.TestCase):
         self.assertEqual(expected, (0, 1, 2))
         self.assertEqual(gpu_engine.touched_seam_record_indices(
             records, boxes, (0, 0, 5, 5), owners), expected)
+        self.assertEqual(gpu_engine.touched_seam_record_indices(
+            records, boxes, (0, 0, 5, 5), owners,
+            np.asarray((0, 2), dtype=np.int32)), expected)
 
     def test_touched_filter_empty_records(self):
         import numpy as np
