@@ -291,7 +291,9 @@ class PaintPanelMixin:
         delay.prop(layer, "auto_material_preview_delay", text="Delay")
         col.separator()
         col.prop(layer, "experimental_uv_gutters",
-                 text="Experimental Seam Padding")
+                 text="Legacy Seam Padding")
+        col.prop(layer, "experimental_conservative_seams",
+                 text="Conservative UV Seam Paint")
         if layer.experimental_uv_gutters:
             warning = col.column(align=True)
             warning.alert = True

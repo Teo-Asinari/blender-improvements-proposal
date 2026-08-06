@@ -1434,6 +1434,8 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
             "brush_target_channel_keys": gpu_brush_target_keys(layer, keys),
             "experimental_uv_gutters": bool(
                 layer.experimental_uv_gutters),
+            "experimental_conservative_seams": bool(
+                layer.experimental_conservative_seams),
             "erase_channel_keys": tuple(
                 key for key in keys
                 if layer.erase_channels[model.CHANNEL_ORDER[key]]),

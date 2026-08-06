@@ -4,6 +4,19 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.15
+
+- Add a separate default-off Conservative UV Seam Paint experiment for Paint
+  and Erase. It extends only touched seam boundaries by less than one texel,
+  evaluates brush coverage at the corresponding mesh edge, includes endpoint
+  caps, and protects rasterized UV-island interiors.
+- Limit conservative seam batches, undo capture, and dirty synchronization to
+  seam faces intersecting the current stroke. Hard-disable the ineffective
+  0.15.14 texel-center transport path.
+- Known limitation: exterior gutter strips still lack ownership where islands
+  are packed within roughly one texel. Tangent Normal, Soften, and Smear are
+  not included in this experiment.
+
 ## 0.15.12
 
 - Add default-off Experimental Seam Padding for resident GPU painting. After

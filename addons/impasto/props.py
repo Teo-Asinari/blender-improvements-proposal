@@ -429,6 +429,11 @@ class ImpastoLayer(bpy.types.PropertyGroup):
         description="Pad painted UV-island edges after each GPU stroke to "
                     "reduce filtering gaps; exact duplicates disable it",
         default=False)
+    experimental_conservative_seams: BoolProperty(
+        name="Conservative UV Seam Paint",
+        description="Experimental: paint a narrow face-clamped boundary "
+                    "around touched UV seams to prevent texel-center gaps",
+        default=False)
 
 
 class ImpastoChannel(bpy.types.PropertyGroup):

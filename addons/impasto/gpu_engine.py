@@ -412,7 +412,7 @@ void main()
 # v0.2.0's single-channel source, byte-for-byte (the N=1 case must not
 # regress): prelude + the one output assignment.
 def dab_frag_src(channels=1, additive=False, profile_slots=None,
-                 profile_enabled=None):
+                 profile_enabled=None, coverage_guard=False):
     """MRT fragment source with one independent RGBA payload per slot."""
     if channels > MAX_CHANNELS:
         raise ValueError("channels > MAX_CHANNELS")
@@ -422,6 +422,15 @@ def dab_frag_src(channels=1, additive=False, profile_slots=None,
     if profile_enabled is None:
         profile_enabled = any(profile_slots)
     lines = []
+    if coverage_guard:
+        lines.append(
+            "    ivec2 coverage_size = textureSize(coverage_tex, 0);\n"
+            "    ivec2 coverage_pixel = clamp(ivec2(floor(paintUV * "
+            "vec2(coverage_size))), ivec2(0), coverage_size - ivec2(1));\n"
+            "    if (texelFetch(coverage_tex, coverage_pixel, 0).r > 1e-6) "
+            "discard;\n"
+            "    if (texelFetch(interior_tex, coverage_pixel, 0).r > 0.5) "
+            "discard;")
     for i in range(channels):
         output = "fragColor" if i == 0 else "fragColor%d" % i
         lines.append(
@@ -1290,6 +1299,125 @@ def build_sparse_seam_strips(correspondence, uv_triangles, canvas_size,
             tuple(rects))
 
 
+def build_conservative_seam_strips(correspondence, uv_triangles,
+                                    triangle_coords, canvas_size,
+                                    expansion_px=0.75):
+    """Raster strips outside each UV seam, clamped to its mesh edge.
+
+    Outer strip vertices retain the corresponding edge world position. The
+    ordinary dab shader therefore evaluates brush/stencil/occlusion at the
+    nearest valid surface point while rasterizing the texel square just beyond
+    the island boundary.
+    """
+    import numpy as np
+    positions, destinations, rects = [], [], []
+    inset = max(0.5, float(expansion_px)) / float(canvas_size)
+    for pair in correspondence.pairs:
+        for side in (pair.first, pair.second):
+            tri_uv = np.asarray(uv_triangles[side.triangle], dtype=np.float64)
+            tri_pos = np.asarray(
+                triangle_coords[side.triangle], dtype=np.float32)
+            corner = side.corner
+            nxt = (corner + 1) % 3
+            third = (corner + 2) % 3
+            a, b = tri_uv[corner], tri_uv[nxt]
+            pa, pb = tri_pos[corner], tri_pos[nxt]
+            edge = b - a
+            length = float(np.linalg.norm(edge))
+            if length <= 1e-12:
+                continue
+            outward = np.asarray((edge[1], -edge[0])) / length
+            midpoint = (a + b) * 0.5
+            if float(np.dot(tri_uv[third] - midpoint, outward)) > 0.0:
+                outward = -outward
+            oa, ob = a + outward * inset, b + outward * inset
+            destinations.extend(tuple(map(float, uv)) for uv in (
+                a, b, ob, a, ob, oa))
+            # Both outer vertices clamp to the closest point on the real edge.
+            positions.extend(tuple(map(float, p)) for p in (
+                pa, pb, pb, pa, pb, pa))
+            lo = np.minimum(np.minimum(a, b), np.minimum(oa, ob))
+            hi = np.maximum(np.maximum(a, b), np.maximum(oa, ob))
+            x0 = max(0, min(canvas_size, int(np.floor(lo[0] * canvas_size))))
+            y0 = max(0, min(canvas_size, int(np.floor(lo[1] * canvas_size))))
+            x1 = max(0, min(canvas_size,
+                            int(np.ceil(hi[0] * canvas_size)) + 1))
+            y1 = max(0, min(canvas_size,
+                            int(np.ceil(hi[1] * canvas_size)) + 1))
+            if x1 > x0 and y1 > y0:
+                rects.append((x0, y0, x1 - x0, y1 - y0))
+    return (np.asarray(positions, dtype=np.float32).reshape(-1, 3),
+            np.asarray(destinations, dtype=np.float32).reshape(-1, 2),
+            tuple(rects))
+
+
+def build_conservative_seam_records(correspondence, uv_triangles,
+                                    triangle_coords, canvas_size,
+                                    expansion_px=0.75):
+    """Per-side conservative strips with vertex caps and owner triangles."""
+    import numpy as np
+    records = []
+    radius = max(0.5, float(expansion_px)) / float(canvas_size)
+    capped = set()
+    for pair in correspondence.pairs:
+        for side in (pair.first, pair.second):
+            tri = side.triangle
+            corner, nxt, third = side.corner, (side.corner + 1) % 3, \
+                (side.corner + 2) % 3
+            tuv = np.asarray(uv_triangles[tri], dtype=np.float64)
+            tpos = np.asarray(triangle_coords[tri], dtype=np.float32)
+            a, b = tuv[corner], tuv[nxt]
+            pa, pb = tpos[corner], tpos[nxt]
+            edge = b - a
+            length = float(np.linalg.norm(edge))
+            if length <= 1e-12:
+                continue
+            outward = np.asarray((edge[1], -edge[0])) / length
+            if float(np.dot(tuv[third] - (a + b) * 0.5, outward)) > 0.0:
+                outward = -outward
+            oa, ob = a + outward * radius, b + outward * radius
+            uv_vertices = [a, b, ob, a, ob, oa]
+            pos_vertices = [pa, pb, pb, pa, pb, pa]
+            # A half-texel square around each UV endpoint closes the wedge
+            # which two independently expanded edge quads can otherwise miss.
+            for vertex_corner, uv, pos in ((corner, a, pa), (nxt, b, pb)):
+                cap_key = (tri, vertex_corner)
+                if cap_key in capped:
+                    continue
+                capped.add(cap_key)
+                lo = uv - radius
+                hi = uv + radius
+                cap_uvs = (lo, (hi[0], lo[1]), hi,
+                           lo, hi, (lo[0], hi[1]))
+                uv_vertices.extend(cap_uvs)
+                pos_vertices.extend((pos,) * 6)
+            uv_array = np.asarray(uv_vertices, dtype=np.float32).reshape(-1, 2)
+            pos_array = np.asarray(pos_vertices, dtype=np.float32).reshape(-1, 3)
+            lo = np.min(uv_array, axis=0)
+            hi = np.max(uv_array, axis=0)
+            x0 = max(0, min(canvas_size, int(np.floor(lo[0] * canvas_size))))
+            y0 = max(0, min(canvas_size, int(np.floor(lo[1] * canvas_size))))
+            x1 = max(0, min(canvas_size,
+                            int(np.ceil(hi[0] * canvas_size)) + 1))
+            y1 = max(0, min(canvas_size,
+                            int(np.ceil(hi[1] * canvas_size)) + 1))
+            if x1 > x0 and y1 > y0:
+                records.append((tri, pos_array, uv_array,
+                                (x0, y0, x1 - x0, y1 - y0)))
+    return tuple(records)
+
+
+def touched_seam_record_indices(records, triangle_screen_bboxes, dab_rect):
+    """Select only seam sides whose owning face intersects this dab union."""
+    x0, y0, x1, y1 = dab_rect
+    selected = []
+    for index, (triangle, _positions, _uvs, _rect) in enumerate(records):
+        tx0, ty0, tx1, ty1 = triangle_screen_bboxes[triangle]
+        if tx1 >= x0 and tx0 <= x1 and ty1 >= y0 and ty0 <= y1:
+            selected.append(index)
+    return tuple(selected)
+
+
 # ---------------------------------------------------------------------------
 # Conservative dirty-rect tracking (pure numpy; headless-testable)
 #
@@ -1553,6 +1681,48 @@ def seam_coverage_shader_create_info():
     info.fragment_out(0, 'VEC4', "fragColor")
     info.vertex_source(DAB_VERT_SRC)
     info.fragment_source(visibility.GLSL_SOURCE + SEAM_COVERAGE_FRAG_SRC)
+    return info
+
+
+def seam_boundary_shader_create_info(channels=1, additive=False,
+                                     profile_slots=None):
+    iface = gpu.types.GPUStageInterfaceInfo("impasto_seam_boundary_iface")
+    iface.smooth('VEC3', "worldPos")
+    iface.smooth('VEC2', "paintUV")
+    info = gpu.types.GPUShaderCreateInfo()
+    info.typedef_source(DAB_UBO_TYPEDEF)
+    info.uniform_buf(DAB_UBO_SLOT, "ImpastoDabParams", DAB_UBO_NAME)
+    info.sampler(0, 'FLOAT_2D', "scene_depth_tex")
+    info.sampler(1, 'FLOAT_2D', "stencil_tex")
+    info.sampler(2, 'FLOAT_2D', "coverage_tex")
+    info.sampler(3, 'FLOAT_2D', "interior_tex")
+    info.vertex_in(0, 'VEC3', "pos")
+    info.vertex_in(1, 'VEC2', "uv")
+    info.vertex_out(iface)
+    for index in range(channels):
+        info.fragment_out(index, 'VEC4',
+                          "fragColor" if index == 0 else "fragColor%d" % index)
+    info.vertex_source(DAB_VERT_SRC)
+    info.fragment_source(visibility.GLSL_SOURCE + dab_frag_src(
+        channels, additive=additive, profile_slots=profile_slots,
+        coverage_guard=True))
+    return info
+
+
+SEAM_INTERIOR_VERT_SRC = """
+void main() { gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0); }
+"""
+SEAM_INTERIOR_FRAG_SRC = """
+void main() { fragColor = vec4(1.0); }
+"""
+
+
+def seam_interior_shader_create_info():
+    info = gpu.types.GPUShaderCreateInfo()
+    info.vertex_in(0, 'VEC2', "uv")
+    info.fragment_out(0, 'VEC4', "fragColor")
+    info.vertex_source(SEAM_INTERIOR_VERT_SRC)
+    info.fragment_source(SEAM_INTERIOR_FRAG_SRC)
     return info
 
 
@@ -2263,9 +2433,17 @@ class _Session:
         self.seam_coverage_needs_clear = True
         self.seam_transfer_shader = None
         self.batch_seam_transfer = None
+        self.batch_seam_boundary = None
+        self.seam_boundary_shaders = None
+        self.seam_interior_tex = None
+        self.seam_interior_fb = None
+        self.seam_interior_shader = None
         self.seam_strip_rects = ()
-        self.seam_history_touched = False
+        self.seam_history_touched = set()
         self.seam_transfer_ms = 0.0
+        self.seam_records = ()
+        self.seam_selected_indices = set()
+        self.seam_flush_indices = ()
 
         # Prepass cache: key of the view state the prepass was rendered
         # for, plus the matrices captured at that moment (the dab shader
@@ -2698,6 +2876,9 @@ def _release_gpu_references(s):
         "gutter_apply_batch", "seam_coverage_shader", "seam_coverage_tex",
         "seam_coverage_fb", "batch_seam_coverage", "seam_transfer_shader",
         "batch_seam_transfer",
+        "batch_seam_boundary",
+        "seam_boundary_shaders",
+        "seam_interior_tex", "seam_interior_fb", "seam_interior_shader",
     )
     for name in names:
         if name in {"baseline_texs", "active_preview_texs",
@@ -2732,7 +2913,9 @@ def begin_stroke(x, y, pressure):
     s.stroke_dirty_full = False
     s.stroke_gutter_rects = {}
     s.seam_coverage_needs_clear = True
-    s.seam_history_touched = False
+    s.seam_history_touched = set()
+    s.seam_selected_indices = set()
+    s.seam_flush_indices = ()
     s.dirty_ms = 0.0
     s.smear_last_point = None
     s.dab_queue.append((x, y, pressure))
@@ -3267,14 +3450,22 @@ def _ensure_gpu(s):
     s.upper_reproject_shader = gpu.shader.create_from_info(
         upper_reproject_shader_create_info())
     seam_coverage_enabled = bool(
-        s.settings.get("experimental_uv_gutters", False)
+        s.settings.get("experimental_conservative_seams", False)
         and s.seam_correspondence and s.seam_correspondence.pairs
         and s.seam_channel_keys)
     if seam_coverage_enabled:
         s.seam_coverage_shader = gpu.shader.create_from_info(
             seam_coverage_shader_create_info())
-        s.seam_transfer_shader = gpu.shader.create_from_info(
-            seam_transfer_shader_create_info())
+        s.seam_boundary_shaders = [gpu.shader.create_from_info(
+            seam_boundary_shader_create_info(
+                len(indices), additive=(blend == 'ADD'),
+                profile_slots=tuple(
+                    index < len(channel_keys)
+                    and channel_keys[index] == 'normal'
+                    for index in indices)))
+            for blend, indices in s.target_batches]
+        s.seam_interior_shader = gpu.shader.create_from_info(
+            seam_interior_shader_create_info())
 
     # Blender does not expose Material Preview's prefiltered studio texture as
     # a public GPU handle. Upload Impasto's deterministic linear-HDR atlas;
@@ -3351,6 +3542,23 @@ def _ensure_gpu(s):
             format='FLOAT', value=(0.0, 0.0, 0.0, 0.0))
         s.seam_coverage_fb = gpu.types.GPUFrameBuffer(
             color_slots=(s.seam_coverage_tex,))
+        s.seam_interior_tex = gpu.types.GPUTexture(
+            (size, size), format='R16F')
+        s.seam_interior_tex.clear(
+            format='FLOAT', value=(0.0, 0.0, 0.0, 0.0))
+        s.seam_interior_fb = gpu.types.GPUFrameBuffer(
+            color_slots=(s.seam_interior_tex,))
+        interior_batch = batch_for_shader(
+            s.seam_interior_shader, 'TRIS',
+            {"uv": s.gutter_uvs.reshape(-1, 2)})
+        with s.seam_interior_fb.bind():
+            s.seam_interior_fb.viewport_set(0, 0, size, size)
+            gpu.state.blend_set('NONE')
+            gpu.state.depth_test_set('NONE')
+            gpu.state.depth_mask_set(False)
+            gpu.state.face_culling_set('NONE')
+            s.seam_interior_shader.bind()
+            interior_batch.draw(s.seam_interior_shader)
     seed_line = "paint_tex_seeded_images=%d/%d" % (seeded_count, n)
     s.probe_lines.append(seed_line)
     _log_line("GPU_PAINT_SPIKE_PROBE %s" % seed_line)
@@ -3373,14 +3581,15 @@ def _ensure_gpu(s):
         s.batch_seam_coverage = batch_for_shader(
             s.seam_coverage_shader, 'TRIS',
             {"pos": s.coords, "uv": s.uvs})
-        destination_uv, source_uv, s.seam_strip_rects = (
-            build_sparse_seam_strips(
-                s.seam_correspondence, s.gutter_uvs, size))
-        if len(destination_uv):
-            s.batch_seam_transfer = batch_for_shader(
-                s.seam_transfer_shader, 'TRIS', {
-                    "destination_uv": destination_uv,
-                    "source_uv": source_uv})
+        s.seam_records = build_conservative_seam_records(
+            s.seam_correspondence, s.gutter_uvs,
+            s.coords.reshape(-1, 3, 3), size)
+        if s.seam_records:
+            s.seam_strip_rects = tuple(record[3] for record in s.seam_records)
+            # Selected records are concatenated into one transient batch per
+            # target shader at flush time. Never allocate one GPUBatch per
+            # seam side: production meshes can have tens of thousands.
+            s.batch_seam_boundary = True
     s.batch_prepass = batch_for_shader(
         s.prepass_shader, 'TRIS', {"pos": s.coords})
     s.batch_preview = batch_for_shader(
@@ -4252,6 +4461,9 @@ def _flush_dabs(s, region):
 
     queue = s.dab_queue
     s.dab_queue = []
+    # Never reuse a previous flush's seam subset when projection data is
+    # temporarily unavailable or the current queue selects no seam face.
+    s.seam_flush_indices = ()
     now = time.perf_counter()
     if s.first_dab_t is None:
         s.first_dab_t = now
@@ -4263,6 +4475,10 @@ def _flush_dabs(s, region):
     if (s.tri_screen_bboxes is not None and s.tri_uv_bboxes is not None
             and queue):
         rect = dab_rect_union(queue, radius)
+        if s.seam_records:
+            s.seam_flush_indices = touched_seam_record_indices(
+                s.seam_records, s.tri_screen_bboxes, rect)
+            s.seam_selected_indices.update(s.seam_flush_indices)
         bb = dirty_uv_bbox(s.tri_screen_bboxes, s.tri_unprojectable,
                            s.tri_uv_bboxes, rect)
         s.stroke_dirty = union_bbox(s.stroke_dirty, bb)
@@ -4302,11 +4518,13 @@ def _flush_dabs(s, region):
                             s.stroke_gutter_rects.get(channel), rect))
                 s.stroke_transaction.touch_rect(
                     channel, rect, (s.size, s.size))
-            if (s.batch_seam_transfer is not None
-                    and not s.seam_history_touched):
+            if s.batch_seam_boundary is not None:
                 eligible = set(s.seam_channel_keys) & target_keys
+                new_seams = (s.seam_selected_indices
+                             - s.seam_history_touched)
                 for channel in eligible:
-                    for seam_rect in s.seam_strip_rects:
+                    for seam_index in sorted(new_seams):
+                        seam_rect = s.seam_records[seam_index][3]
                         undo_rect = seam_rect
                         if s.gutter_offset_map is not None:
                             undo_rect = uv_gutters.expand_pixel_rect(
@@ -4317,7 +4535,7 @@ def _flush_dabs(s, region):
                                     undo_rect))
                         s.stroke_transaction.touch_rect(
                             channel, undo_rect, (s.size, s.size))
-                s.seam_history_touched = True
+                s.seam_history_touched.update(new_seams)
 
     if s.settings.get("brush_mode", "PAINT") == "SOFTEN":
         _flush_soften_dabs(s, region, queue, radius, hardness, occlusion,
@@ -4416,6 +4634,8 @@ def _flush_dabs(s, region):
                 s.submit_times.append(time.perf_counter() - t0)
     _flush_seam_coverage_dabs(
         s, queue, radius, stamp, stencil_tex, use_stencil)
+    _flush_seam_boundary_dabs(
+        s, queue, radius, stamp, stencil_tex, use_stencil)
     s.dab_count += len(queue)
     s.last_dab_t = time.perf_counter()
 
@@ -4464,6 +4684,72 @@ def _flush_seam_coverage_dabs(s, queue, radius, stamp, stencil_tex,
             data[DAB_UBO_PAINT_FLAGS, 1] = effective_opacity
             ubo.update(data)
             s.batch_seam_coverage.draw(shader)
+
+
+def _flush_seam_boundary_dabs(s, queue, radius, stamp, stencil_tex,
+                              use_stencil):
+    """Paint the conservative half-texel strip using clamped face points."""
+    if (not queue or not s.batch_seam_boundary
+            or not s.seam_flush_indices
+            or s.seam_coverage_tex is None):
+        return
+    keys = tuple(s.settings.get("channel_keys", ()))
+    targets = set(s.settings.get("brush_target_channel_keys", keys))
+    erase = s.settings.get("brush_mode", "PAINT") == "ERASE"
+    if s.settings.get("brush_mode", "PAINT") not in {"PAINT", "ERASE"}:
+        return
+    import numpy as np
+    from gpu_extras.batch import batch_for_shader
+    selected = [s.seam_records[index] for index in s.seam_flush_indices]
+    positions = np.concatenate([record[1] for record in selected], axis=0)
+    uvs = np.concatenate([record[2] for record in selected], axis=0)
+    for (blend, indices), fb, shader, ubo, data in zip(
+            s.target_batches, s.paint_fbs, s.seam_boundary_shaders,
+            s.dab_ubos, s.dab_ubo_data):
+        batch = batch_for_shader(
+            shader, 'TRIS', {"pos": positions, "uv": uvs})
+        # Tangent normals remain intentionally gated until a dedicated
+        # face-basis validation exists. Other channels preserve normal target
+        # toggles and their ordinary payloads.
+        for local, index in enumerate(indices):
+            key = keys[index] if index < len(keys) else str(index)
+            if key == "normal" or key not in targets:
+                data[DAB_UBO_BRUSH_VALUES + local, 3] = 0.0
+        ubo.update(data)
+        with fb.bind():
+            fb.viewport_set(0, 0, s.size, s.size)
+            gpu.state.blend_set(
+                'MULTIPLY' if erase else
+                ('ADDITIVE' if blend == 'ADD' else 'ALPHA'))
+            gpu.state.depth_test_set('NONE')
+            gpu.state.depth_mask_set(False)
+            gpu.state.face_culling_set('NONE')
+            shader.bind()
+            shader.uniform_block(DAB_UBO_NAME, ubo)
+            shader.uniform_sampler("scene_depth_tex", s.depth_color_tex)
+            shader.uniform_sampler("stencil_tex", stencil_tex if use_stencil
+                                   else s.depth_color_tex)
+            shader.uniform_sampler("coverage_tex", s.seam_coverage_tex)
+            shader.uniform_sampler("interior_tex", s.seam_interior_tex)
+            for x, y, pressure in queue:
+                dab_radius, dab_opacity = (
+                    stamp.values_at_pressure(pressure)
+                    if stamp is not None else (radius, pressure))
+                effective_opacity = max(0.0, min(
+                    1.0, dab_opacity * float(s.settings.get("opacity", 1.0))))
+                if stamp is not None and stamp.use_pressure_strength:
+                    effective_opacity = overlap_compensated_opacity(
+                        effective_opacity, stamp.spacing_ratio)
+                data[DAB_UBO_REGION_CENTER, 2:4] = (float(x), float(y))
+                data[DAB_UBO_BRUSH_DEPTH, 0] = dab_radius
+                data[DAB_UBO_PAINT_FLAGS, 1] = effective_opacity
+                ubo.update(data)
+                batch.draw(shader)
+    for seam_index in s.seam_flush_indices:
+        x, y, width, height = s.seam_records[seam_index][3]
+        s.stroke_dirty = union_bbox(s.stroke_dirty, (
+            x / s.size, y / s.size,
+            (x + width) / s.size, (y + height) / s.size))
 
 
 def _flush_soften_dabs(s, region, queue, radius, hardness, occlusion, stamp,
@@ -4657,7 +4943,10 @@ def _stroke_stats(s):
 
 
 def _apply_seam_transport(s):
-    """Transport touched seam samples without overwriting touched peers."""
+    """Obsolete topology texel-center transport; intentionally disabled."""
+    return 0
+    # Retained temporarily below only to ease comparison while the
+    # conservative boundary experiment is validated; it is unreachable.
     if (getattr(s, "batch_seam_transfer", None) is None
             or getattr(s, "seam_coverage_tex", None) is None
             or s.history_backend is None
@@ -4710,7 +4999,6 @@ def _finalize_stroke_gpu(s):
     """Close one stroke without readback, drain, or Blender Image writes."""
     global _last_stroke_stats
     s.pending_finalize = False
-    _apply_seam_transport(s)
     gutter_rects = s.stroke_gutter_rects
     if (gutter_rects and s.gutter_offset_map is not None
             and s.gutter_apply_shader is not None

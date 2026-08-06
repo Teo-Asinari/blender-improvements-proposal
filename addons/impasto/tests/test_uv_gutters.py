@@ -63,6 +63,86 @@ class UVGutterPlanningTests(unittest.TestCase):
         self.assertEqual(offset_map_bytes(4096), 64 * 1024 * 1024)
         self.assertEqual(offset_map_bytes(8192), 256 * 1024 * 1024)
 
+
+class ConservativeBoundaryPlanningTests(unittest.TestCase):
+    @staticmethod
+    def _inside(point, triangle):
+        import numpy as np
+        p = np.asarray(point, dtype=float)
+        a, b, c = np.asarray(triangle, dtype=float)
+        cross = lambda u, v: u[0] * v[1] - u[1] * v[0]
+        signs = (cross(b - a, p - a), cross(c - b, p - b),
+                 cross(a - c, p - c))
+        return min(signs) >= -1e-9 or max(signs) <= 1e-9
+
+    @classmethod
+    def _square_intersects(cls, x, y, triangle):
+        # SAT for one unit texel square versus one triangle.
+        import numpy as np
+        tri = np.asarray(triangle, dtype=float)
+        square = np.asarray(((x, y), (x + 1, y),
+                             (x + 1, y + 1), (x, y + 1)), dtype=float)
+        axes = [np.asarray((1.0, 0.0)), np.asarray((0.0, 1.0))]
+        for i in range(3):
+            edge = tri[(i + 1) % 3] - tri[i]
+            axes.append(np.asarray((-edge[1], edge[0])))
+        for axis in axes:
+            tp, sp = tri @ axis, square @ axis
+            if tp.max() < sp.min() - 1e-9 or sp.max() < tp.min() - 1e-9:
+                return False
+        return True
+
+    def test_diagonal_boundary_has_center_missed_texel_squares(self):
+        triangle = ((1.15, 1.35), (14.7, 2.2), (2.05, 14.65))
+        missed = []
+        for y in range(16):
+            for x in range(16):
+                intersects = self._square_intersects(x, y, triangle)
+                center = self._inside((x + 0.5, y + 0.5), triangle)
+                if intersects and not center:
+                    missed.append((x, y))
+        self.assertGreaterEqual(len(missed), 3)
+        self.assertTrue(any(x > 2 and y > 2 for x, y in missed))
+
+    def test_conservative_records_include_caps_and_scale_in_pixels(self):
+        import numpy as np
+        from impasto import gpu_engine
+        from impasto.gpu.uv_seams import build_seam_correspondence
+        vertices = ((0, 1, 2), (2, 1, 3))
+        uvs = np.asarray((((0.05, 0.05), (0.45, 0.05), (0.05, 0.45)),
+                          ((0.8, 0.8), (0.6, 0.8), (0.9, 0.95))),
+                         dtype=np.float32)
+        positions = np.asarray((((0, 0, 0), (1, 0, 0), (0, 1, 0)),
+                                ((0, 1, 0), (1, 0, 0), (1, 1, 0))),
+                               dtype=np.float32)
+        seams = build_seam_correspondence(vertices, uvs)
+        records_2k = gpu_engine.build_conservative_seam_records(
+            seams, uvs, positions, 2048)
+        records_4k = gpu_engine.build_conservative_seam_records(
+            seams, uvs, positions, 4096)
+        self.assertEqual(len(records_2k), 2)
+        self.assertEqual(len(records_4k), 2)
+        # Strip (6 vertices) plus two endpoint square caps (12 vertices).
+        self.assertTrue(all(len(record[1]) == 18 for record in records_2k))
+        # Normalized expansion halves as resolution doubles: pixel width stays.
+        extent_2k = float(np.linalg.norm(
+            records_2k[0][2][2] - records_2k[0][2][1]))
+        extent_4k = float(np.linalg.norm(
+            records_4k[0][2][2] - records_4k[0][2][1]))
+        self.assertAlmostEqual(extent_2k, extent_4k * 2.0, places=5)
+
+    def test_touched_filter_rejects_unrelated_seam_faces(self):
+        import numpy as np
+        from impasto import gpu_engine
+        records = (
+            (0, np.empty((0, 3)), np.empty((0, 2)), (1, 1, 2, 2)),
+            (1, np.empty((0, 3)), np.empty((0, 2)), (8, 8, 2, 2)),
+        )
+        screen = np.asarray(((0, 0, 10, 10), (100, 100, 120, 120)),
+                            dtype=np.float32)
+        self.assertEqual(gpu_engine.touched_seam_record_indices(
+            records, screen, (2, 2, 4, 4)), (0,))
+
     def test_compact_memory_report_separates_gpu_and_cpu_peaks(self):
         # One retained RG16F map, two during ping-pong construction, plus the
         # transient float32 two-component CPU seed owned by the builder.
@@ -72,13 +152,15 @@ class UVGutterPlanningTests(unittest.TestCase):
 
 
 class UVGutterGPUPrototypeTests(unittest.TestCase):
-    def test_seam_coverage_and_transfer_shaders_compile(self):
+    def test_seam_coverage_boundary_and_interior_shaders_compile(self):
         import gpu
         from impasto import gpu_engine
         self.assertIsNotNone(gpu.shader.create_from_info(
             gpu_engine.seam_coverage_shader_create_info()))
         self.assertIsNotNone(gpu.shader.create_from_info(
-            gpu_engine.seam_transfer_shader_create_info()))
+            gpu_engine.seam_boundary_shader_create_info(2)))
+        self.assertIsNotNone(gpu.shader.create_from_info(
+            gpu_engine.seam_interior_shader_create_info()))
 
     @staticmethod
     def _read(mask, radius=8):

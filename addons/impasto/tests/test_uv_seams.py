@@ -11,6 +11,33 @@ from impasto import gpu_engine
 
 
 class UVSeamCorrespondenceTests(unittest.TestCase):
+    def test_touched_filter_selects_only_intersecting_owner_face(self):
+        import numpy as np
+        records = ((0, None, None, (0, 0, 1, 1)),
+                   (1, None, None, (4, 4, 1, 1)))
+        boxes = np.asarray(((0, 0, 10, 10), (20, 20, 30, 30)),
+                           dtype=np.float32)
+        self.assertEqual(gpu_engine.touched_seam_record_indices(
+            records, boxes, (5, 5, 8, 8)), (0,))
+
+    def test_conservative_records_include_edge_and_vertex_caps(self):
+        import numpy as np
+        vertices = ((0, 1, 2), (2, 1, 3))
+        uvs = np.asarray((((0, 0), (0.4, 0), (0, 0.4)),
+                          ((0.8, 0.8), (0.6, 0.8), (1, 1))),
+                         dtype=np.float32)
+        positions = np.asarray((((0, 0, 0), (1, 0, 0), (0, 1, 0)),
+                                ((0, 1, 0), (1, 0, 0), (1, 1, 0))),
+                               dtype=np.float32)
+        correspondence = build_seam_correspondence(vertices, uvs)
+        records = gpu_engine.build_conservative_seam_records(
+            correspondence, uvs, positions, 1024)
+        self.assertEqual(len(records), 2)
+        # Six edge vertices plus two six-vertex corner caps.
+        self.assertEqual(records[0][1].shape, (18, 3))
+        self.assertEqual(records[0][2].shape, (18, 2))
+        self.assertTrue(np.allclose(records[0][1][1], records[0][1][2]))
+
     def test_literal_transport_excludes_tangent_normal_only(self):
         keys = ("base_color", "metallic", "roughness", "normal", "height",
                 "emission_color", "emission_strength", "sss_weight")
