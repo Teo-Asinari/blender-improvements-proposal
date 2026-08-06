@@ -1666,12 +1666,23 @@ class IMPASTO_OT_gpu_paint(bpy.types.Operator):
         return True
 
     def _finish(self, context):
-        gpu_engine.stop_session()
+        finish_t0 = time.perf_counter()
+        stats = gpu_engine.stop_session(log_summary=False)
+        timer_t0 = time.perf_counter()
         if self._timer is not None:
             context.window_manager.event_timer_remove(self._timer)
             self._timer = None
+        stats["timer_remove_ms"] = ((time.perf_counter() - timer_t0)
+                                    * 1000.0)
+        redraw_t0 = time.perf_counter()
         if self._region is not None:
             self._region.tag_redraw()
+        stats["redraw_ms"] = (time.perf_counter() - redraw_t0) * 1000.0
+        stats["operator_finish_ms"] = ((time.perf_counter() - finish_t0)
+                                       * 1000.0)
+        stats["total_ms"] = stats["operator_finish_ms"]
+        if stats.get("had_session", False):
+            gpu_engine.log_stop_telemetry(stats)
         return {'FINISHED'}
 
     # -- modal loop ----------------------------------------------------------

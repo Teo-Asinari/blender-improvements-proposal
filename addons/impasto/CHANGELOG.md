@@ -4,6 +4,20 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.22
+
+- Cache backend capability-probe results for the current Blender process,
+  keyed by a versioned backend/vendor/renderer identity. Repeated sessions no
+  longer rerun the complete readback/framebuffer probe suite.
+- Add bounded startup summaries for mesh preparation and first-draw GPU phases:
+  probes, shaders/UBOs, IBL, gutters, paint textures, batches, stack baselines,
+  and remaining setup.
+- Add bounded shutdown timing for handlers, hover logging, Undo-history disposal,
+  GPU reference release, modal timer removal, redraw, and operator completion.
+- Drop GPU Undo snapshot ownership directly during teardown rather than walking
+  a no-op release callback for every tile. Required Image synchronization is
+  unchanged.
+
 ## 0.15.21
 
 - Defer per-triangle screen projection and near-plane clipping until the first

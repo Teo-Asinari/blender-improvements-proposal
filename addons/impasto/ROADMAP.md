@@ -53,7 +53,7 @@ texels with unpainted atlas gutters; qualify explicit gutter ownership and
 filter behavior at multiple zoom levels before declaring distant-view seams
 resolved.
 
-This is the authoritative list of open work for Impasto 0.15.21. Shipped work
+This is the authoritative list of open work for Impasto 0.15.22. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Near-term
@@ -93,6 +93,11 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
   Version 0.15.21 defers the remaining 100–110 ms CPU triangle projection until
   painting resumes. Re-measure orbit/zoom using the session-end hover summary
   and inspect `projection_bounds_ms` on the first subsequent stroke.
+  Version 0.15.22 caches process-stable capability probes and divides startup
+  and shutdown into named phases. Use production logs to decide whether paint
+  texture upload/seeding, shader creation, stack baselines, or GPU reference
+  release is the next viable target. Do not hide required Image sync latency
+  inside teardown measurements.
 
 ## Workflow and UX
 

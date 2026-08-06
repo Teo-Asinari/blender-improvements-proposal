@@ -1782,8 +1782,18 @@ def buffer_to_numpy(buf, path="to_list_fallback"):
 # which conversion rung _finalize_stroke_gpu uses, and whether
 # fb.read_color can fill a Buffer wrapping numpy memory directly
 # (which makes the conversion step disappear entirely).
-_buffer_numpy_path = "to_list_fallback"
-_read_into_numpy = False
+if "_buffer_numpy_path" not in globals():
+    _buffer_numpy_path = "to_list_fallback"
+if "_read_into_numpy" not in globals():
+    _read_into_numpy = False
+
+# Keep backend-stable probe results across ordinary importlib.reload() calls.
+# Blender reloads an add-on in the existing module dictionary, so guarding the
+# initialization is enough to retain this small, process-local cache.  Entries
+# are keyed by the complete GPU identity and never persisted to disk.
+if "_capability_probe_cache" not in globals():
+    _capability_probe_cache = {}
+_CAPABILITY_PROBE_CACHE_SCHEMA = 1
 
 
 # ---------------------------------------------------------------------------
@@ -3005,11 +3015,14 @@ def start_session(obj, images, region, channels=None, payloads=None,
     for the first draw. Safe headless: handler registration failures
     are quietly ignored."""
     global _session
+    start_t0 = time.perf_counter()
     if _session is not None:
         stop_session()
     if not isinstance(images, (list, tuple)):
         images = [images]
+    mesh_t0 = time.perf_counter()
     coords, uvs, normals = build_mesh_soup(obj)
+    mesh_ms = (time.perf_counter() - mesh_t0) * 1000.0
     if coords is None:
         return False
     channel_count = len(images) if channels is None else int(channels)
@@ -3033,7 +3046,9 @@ def start_session(obj, images, region, channels=None, payloads=None,
     s.coords = coords
     s.uvs = uvs
     requested_base_uv = s.settings.get("base_normal_uv_map", "")
+    base_uv_t0 = time.perf_counter()
     s.base_normal_uvs = build_uv_soup(obj, requested_base_uv)
+    base_uv_ms = (time.perf_counter() - base_uv_t0) * 1000.0
     if s.base_normal_uvs is None:
         # A missing named map disables the fallback instead of silently
         # sampling a different UV domain.
@@ -3043,33 +3058,73 @@ def start_session(obj, images, region, channels=None, payloads=None,
     s.normals = normals
     s.gutter_uvs = uvs.reshape(-1, 3, 2)
     keys = tuple(s.settings.get("channel_keys", ()))
+    seam_t0 = time.perf_counter()
     vertex_triangles = build_vertex_triangle_soup(obj)
     if vertex_triangles is not None:
         s.seam_correspondence = uv_seams.build_seam_correspondence(
             vertex_triangles, s.gutter_uvs)
+    seam_ms = (time.perf_counter() - seam_t0) * 1000.0
     s.seam_channel_keys = seam_continuation_channel_keys(keys)
+    bbox_t0 = time.perf_counter()
     s.tri_uv_bboxes = triangle_uv_bboxes(uvs)
+    bbox_ms = (time.perf_counter() - bbox_t0) * 1000.0
     _session = s
     targets = ",".join(
         "%s:%s" % (keys[i] if i < len(keys) else i, image.name)
         for i, image in enumerate(images))
     _log_line("GPU_PAINT_SPIKE_START channels=%d size=%d targets=%s"
               % (channel_count, images[0].size[0], targets))
+    _log_line("GPU_PAINT_SPIKE_START_PHASES total_ms=%.4f mesh_soup_ms=%.4f "
+              "base_uv_ms=%.4f seam_map_ms=%.4f uv_bboxes_ms=%.4f "
+              "triangles=%d"
+              % ((time.perf_counter() - start_t0) * 1000.0, mesh_ms,
+                 base_uv_ms, seam_ms, bbox_ms, len(coords) // 3))
     _add_handlers()
     return True
 
 
-def stop_session():
+def format_stop_telemetry(stats):
+    """Return one bounded, stable lifecycle line for session teardown."""
+    fields = (
+        "handlers_ms", "hover_log_ms", "history_ms", "gpu_release_ms",
+        "timer_remove_ms", "redraw_ms", "operator_finish_ms", "total_ms",
+    )
+    return "GPU_PAINT_SPIKE_STOP " + " ".join(
+        "%s=%.4f" % (name, float(stats.get(name, 0.0))) for name in fields)
+
+
+def log_stop_telemetry(stats):
+    _log_line(format_stop_telemetry(stats))
+
+
+def stop_session(log_summary=True):
     global _session
+    started = time.perf_counter()
+    had_session = _session is not None
+    phase = started
     _remove_handlers()
+    stats = {"handlers_ms": (time.perf_counter() - phase) * 1000.0}
     if _session is not None:
+        phase = time.perf_counter()
         hover = _session.hover_stats.summary()
         if hover["frames"] or hover["pixel_frames"]:
             _log_line(format_hover_telemetry(hover))
+        stats["hover_log_ms"] = (time.perf_counter() - phase) * 1000.0
+        phase = time.perf_counter()
         if _session.history_backend is not None:
-            _session.history.clear(_session.history_backend)
+            # TileSnapshots directly own their GPU textures; dropping the
+            # record graph releases them without a redundant per-tile walk.
+            _session.history.drop_references()
+        stats["history_ms"] = (time.perf_counter() - phase) * 1000.0
+        phase = time.perf_counter()
         _release_gpu_references(_session)
+        stats["gpu_release_ms"] = (time.perf_counter() - phase) * 1000.0
         _session = None
+    stats["total_ms"] = (time.perf_counter() - started) * 1000.0
+    stats["had_session"] = had_session
+    if log_summary and had_session:
+        log_stop_telemetry(stats)
+    return stats
 
 
 def _release_gpu_references(s):
@@ -3682,14 +3737,25 @@ def _apply_initial_uv_gutters(s):
 def _ensure_gpu(s):
     if s.gpu_ready:
         return
+    ensure_t0 = time.perf_counter()
     import numpy as np
     from gpu_extras.batch import batch_for_shader
 
+    startup_started = time.perf_counter()
+    startup_phases = {}
+
+    phase_started = time.perf_counter()
     if s.probe_lines is None:
-        s.probe_lines = _probe_capabilities()
+        probe_t0 = time.perf_counter()
+        s.probe_lines, probe_source = _cached_probe_capabilities()
+        probe_ms = (time.perf_counter() - probe_t0) * 1000.0
+        _log_line("GPU_PAINT_SPIKE_START_PHASE phase=capability_probe "
+                  "source=%s ms=%.4f" % (probe_source, probe_ms))
         for line in s.probe_lines:
             _log_line("GPU_PAINT_SPIKE_PROBE %s" % line)
+    startup_phases["probe"] = (time.perf_counter() - phase_started) * 1000.0
 
+    phase_started = time.perf_counter()
     channel_keys = tuple(s.settings.get("channel_keys", ()))
     s.dab_shaders = [gpu.shader.create_from_info(
         dab_shader_create_info(
@@ -3738,6 +3804,8 @@ def _ensure_gpu(s):
             for blend, indices in s.target_batches]
         s.seam_interior_shader = gpu.shader.create_from_info(
             seam_interior_shader_create_info())
+    startup_phases["shaders_ubos"] = (
+        time.perf_counter() - phase_started) * 1000.0
 
     # Blender does not expose Material Preview's prefiltered studio texture as
     # a public GPU handle. Upload Impasto's deterministic linear-HDR atlas;
@@ -3753,6 +3821,7 @@ def _ensure_gpu(s):
         s.environment_tex = None
         traceback.print_exc()
     s.environment_build_ms = (time.perf_counter() - t_environment) * 1000.0
+    startup_phases["ibl"] = s.environment_build_ms
     _log_line("GPU_PAINT_IBL source=impasto_studio_atlas size=%dx%d "
               "upload_ms=%.3f ready=%s" % (
                   ibl.ATLAS_WIDTH, ibl.ATLAS_PANEL_HEIGHT * ibl.ATLAS_PANELS,
@@ -3764,10 +3833,14 @@ def _ensure_gpu(s):
     # which converts to float32 regardless of the attachment format.
     size = s.size
     n = s.channels
+    phase_started = time.perf_counter()
     _ensure_uv_gutter_map(s)
+    startup_phases["gutters"] = (
+        time.perf_counter() - phase_started) * 1000.0
 
     # Every logical-layer binding owns an independent Blender Image. Seed all
     # GPU targets so an untouched channel round-trips losslessly.
+    phase_started = time.perf_counter()
     seeded_count = 0
     s.paint_texs = []
     for i, image_name in enumerate(s.image_names[:n]):
@@ -3831,6 +3904,8 @@ def _ensure_gpu(s):
             gpu.state.face_culling_set('NONE')
             s.seam_interior_shader.bind()
             interior_batch.draw(s.seam_interior_shader)
+    startup_phases["paint_textures"] = (
+        time.perf_counter() - phase_started) * 1000.0
     seed_line = "paint_tex_seeded_images=%d/%d" % (seeded_count, n)
     s.probe_lines.append(seed_line)
     _log_line("GPU_PAINT_SPIKE_PROBE %s" % seed_line)
@@ -3842,6 +3917,7 @@ def _ensure_gpu(s):
               "per_channel_mb=%.1f total_mb=%.1f"
               % (n, size, per_ch_mb, per_ch_mb * n))
 
+    phase_started = time.perf_counter()
     s.batch_dabs = [batch_for_shader(
         shader, 'TRIS', {"pos": s.coords, "uv": s.uvs})
         for shader in s.dab_shaders]
@@ -3883,13 +3959,38 @@ def _ensure_gpu(s):
             "uv": [(0.0, 0.0), (1.0, 0.0),
                    (1.0, 1.0), (0.0, 1.0)]})
     s.upper_transform_batch = s.baseline_batch
+    startup_phases["batches"] = (
+        time.perf_counter() - phase_started) * 1000.0
+
+    phase_started = time.perf_counter()
     _build_stack_baselines(s)
     _build_upper_transforms(s)
     _build_active_preview_textures(s)
     _ensure_base_normal_texture(s)
+    startup_phases["stack_baselines"] = (
+        time.perf_counter() - phase_started) * 1000.0
+
+    phase_started = time.perf_counter()
     s.history_backend = _GPUTileBackend(s)
     _apply_initial_uv_gutters(s)
+    startup_phases["remaining"] = (
+        time.perf_counter() - phase_started) * 1000.0
     s.gpu_ready = True
+    _log_line("GPU_PAINT_SPIKE_START_PHASE phase=first_draw_gpu_init "
+              "ms=%.4f" % ((time.perf_counter() - ensure_t0) * 1000.0))
+    startup_phases["total"] = (
+        time.perf_counter() - startup_started) * 1000.0
+    s.gpu_startup_phases_ms = dict(startup_phases)
+    _log_line(
+        "GPU_PAINT_STARTUP total_ms=%.3f probe_ms=%.3f "
+        "shaders_ubos_ms=%.3f ibl_ms=%.3f gutters_ms=%.3f "
+        "paint_textures_ms=%.3f batches_ms=%.3f "
+        "stack_baselines_ms=%.3f remaining_ms=%.3f" % (
+            startup_phases["total"], startup_phases["probe"],
+            startup_phases["shaders_ubos"], startup_phases["ibl"],
+            startup_phases["gutters"], startup_phases["paint_textures"],
+            startup_phases["batches"], startup_phases["stack_baselines"],
+            startup_phases["remaining"]))
 
     # The research spike's destructive readback characterization is not part
     # of the production Impasto session; normal stroke stats remain enabled.
@@ -4302,6 +4403,38 @@ def _characterize_readback(s):
                       "(all channels, full)"
                       % (size, s.channels, size, size, best,
                          "yes" if _read_into_numpy else "no"))
+
+
+def _gpu_backend_identity():
+    """Complete identity for process-local capability caching.
+
+    An unavailable identity is intentionally not cacheable: sharing an
+    ``unknown`` entry could reuse results after a backend/context change.
+    """
+    try:
+        from gpu import platform
+        return (_CAPABILITY_PROBE_CACHE_SCHEMA,
+                platform.backend_type_get(), platform.vendor_get(),
+                platform.renderer_get())
+    except Exception:
+        return None
+
+
+def _cached_probe_capabilities():
+    """Return ``(lines, source)`` and restore cached strategy latches."""
+    global _buffer_numpy_path, _read_into_numpy
+    identity = _gpu_backend_identity()
+    cached = _capability_probe_cache.get(identity) if identity else None
+    if cached is not None:
+        _buffer_numpy_path = cached[1]
+        _read_into_numpy = cached[2]
+        return list(cached[0]), "cache"
+    lines = _probe_capabilities()
+    if identity is not None:
+        _capability_probe_cache.clear()  # only the active backend is useful
+        _capability_probe_cache[identity] = (
+            tuple(lines), _buffer_numpy_path, _read_into_numpy)
+    return lines, "runtime"
 
 
 def _probe_capabilities():

@@ -165,6 +165,25 @@ them only on the first actual paint flush after navigation. The GPU depth pass
 still follows the live view. Stroke telemetry exposes the deferred one-time
 cost as `projection_bounds_ms`; passive navigation should no longer pay it.
 
+## 0.15.22: lifecycle profiling and probe reuse
+
+The remaining perceived delays occur at session entry and exit rather than
+ordinary navigation. Version 0.15.22 caches capability probes for a versioned
+backend/vendor/renderer identity within the Blender process. A cached session
+restores the selected readback strategy without rerunning framebuffer tests.
+
+`GPU_PAINT_SPIKE_START_PHASES` reports CPU mesh soup, base UV, seam mapping,
+and UV-bbox preparation. `GPU_PAINT_STARTUP` reports first-draw capability,
+shader/UBO, IBL, gutter, paint-texture, batch, stack-baseline, and remaining
+GPU setup. `GPU_PAINT_SPIKE_STOP` reports handler removal, hover logging,
+history disposal, GPU reference release, modal timer removal, redraw, and total
+operator teardown. Required readback/Image writes remain in the existing
+`syncback_total_ms` measurement and are not presented as teardown overhead.
+
+Object-, image-, UV-, and stack-dependent GPU resources are deliberately not
+cached across sessions until production timings justify a more complex and
+invalidation-safe resident resource pool.
+
 Other remaining costs are conservative UV-union calculation, unclassified
 flush overhead, and roughly one second for explicit near-full 4K Image
 synchronization. GPU command submission itself is small in these traces.

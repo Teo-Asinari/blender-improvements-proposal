@@ -180,6 +180,12 @@ class TileHistory:
         self._discard_records(backend, self._redo)
         self._bytes = 0
 
+    def drop_references(self):
+        """Forget records when dropping snapshots is itself their release."""
+        self._undo.clear()
+        self._redo.clear()
+        self._bytes = 0
+
 
 class StrokeTransaction:
     """Lazy before/after capture boundary for one multichannel stroke."""

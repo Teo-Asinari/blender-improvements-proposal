@@ -218,6 +218,13 @@ try:
           duplicate_tx.commit() is not None
           and duplicate_history.undo_count == 1
           and duplicate_history.byte_size == 20)
+    released_before_drop = len(duplicate_backend.released)
+    duplicate_history.drop_references()
+    check("owner teardown drops history without backend callback traversal",
+          duplicate_history.undo_count == 0
+          and duplicate_history.redo_count == 0
+          and duplicate_history.byte_size == 0
+          and len(duplicate_backend.released) == released_before_drop)
 
     print("IMPASTO_BRUSH_UNDO_PASSED")
 except Exception:

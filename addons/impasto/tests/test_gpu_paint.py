@@ -81,6 +81,58 @@ check("empty passive hover telemetry avoids division by zero",
       empty_hover["frames"] == 0
       and empty_hover["view_avg_ms"] == 0.0
       and empty_hover["unprojectable_pct"] == 0.0)
+stop_line = gpu_engine.format_stop_telemetry({
+    "handlers_ms": 1.0, "history_ms": 2.0, "gpu_release_ms": 3.0,
+    "total_ms": 6.0,
+})
+check("shutdown telemetry is bounded and machine-readable",
+      stop_line.startswith("GPU_PAINT_SPIKE_STOP ")
+      and "handlers_ms=1.0000" in stop_line
+      and "history_ms=2.0000" in stop_line
+      and "operator_finish_ms=0.0000" in stop_line
+      and len(stop_line.split()) == 9)
+
+# Capability probes are expensive GPU-context work.  Their cache is strictly
+# process-local and keyed by the complete backend identity; a cache hit must
+# also restore the readback strategy globals consumed by stroke finalization.
+saved_probe_cache = dict(gpu_engine._capability_probe_cache)
+try:
+    gpu_engine._capability_probe_cache.clear()
+    probe_calls = []
+
+    def fake_probe():
+        probe_calls.append(True)
+        gpu_engine._buffer_numpy_path = "memoryview"
+        gpu_engine._read_into_numpy = True
+        return ["backend=TEST vendor=Vendor renderer=Renderer",
+                "feature=yes"]
+
+    with mock.patch.object(gpu_engine, "_gpu_backend_identity",
+                           return_value=(1, "TEST", "Vendor", "Renderer")), \
+            mock.patch.object(gpu_engine, "_probe_capabilities",
+                              side_effect=fake_probe):
+        first_lines, first_source = gpu_engine._cached_probe_capabilities()
+        gpu_engine._buffer_numpy_path = "to_list_fallback"
+        gpu_engine._read_into_numpy = False
+        cached_lines, cached_source = gpu_engine._cached_probe_capabilities()
+    check("GPU capability probe is cached per backend identity",
+          len(probe_calls) == 1 and first_source == "runtime"
+          and cached_source == "cache" and cached_lines == first_lines)
+    check("cached GPU probe restores readback strategy latches",
+          gpu_engine._buffer_numpy_path == "memoryview"
+          and gpu_engine._read_into_numpy is True)
+
+    with mock.patch.object(gpu_engine, "_gpu_backend_identity",
+                           return_value=None), \
+            mock.patch.object(gpu_engine, "_probe_capabilities",
+                              side_effect=fake_probe):
+        _lines, unknown_source = gpu_engine._cached_probe_capabilities()
+    check("unknown GPU identity deliberately bypasses capability cache",
+          unknown_source == "runtime" and len(probe_calls) == 2)
+finally:
+    gpu_engine._capability_probe_cache.clear()
+    gpu_engine._capability_probe_cache.update(saved_probe_cache)
+
 positions, remainder = brush_math.interpolate_dabs(
     0.0, 0.0, 100.0, 0.0, 10.0, max_dabs=3)
 check("extracted dab interpolation retains its safety cap",

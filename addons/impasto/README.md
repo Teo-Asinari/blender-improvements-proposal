@@ -1,6 +1,6 @@
 # Impasto
 
-Impasto 0.15.21 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
+Impasto 0.15.22 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
 painting. It stores material work as ordered Paint and Fill layers, compiles
 the stack into a Principled BSDF material, and provides a GPU-resident painting
 session with immediate material feedback.
@@ -39,6 +39,11 @@ stroke actually needs dirty and Undo bounds. A post-0.15.20 trace still spent
 111.7 ms per changed view projecting 151,112 triangles; navigation no longer
 performs that work. The first paint flush after moving the view reports the
 one-time cost as `projection_bounds_ms`.
+Version 0.15.22 caches GPU capability probes across sessions in the same
+Blender process and reports detailed startup/shutdown phase summaries. Object,
+image, and stack GPU resources remain session-local for correctness. Undo
+history teardown now drops the owned snapshot graph directly; explicit
+GPU-to-Image synchronization remains mandatory and separately timed.
 
 ## Current feature set
 
@@ -156,6 +161,12 @@ plus mesh triangle and invalid-projection counts. It is intended to distinguish
 cursor/viewport cost from actual dab processing without logging every frame.
 After 0.15.20, prepass timing measures CPU preparation/submission rather than
 forcing a GPU-completion measurement.
+
+Lifecycle diagnostics use three bounded lines:
+
+- `GPU_PAINT_SPIKE_START_PHASES` for mesh/UV/seam preparation.
+- `GPU_PAINT_STARTUP` for first-draw GPU initialization.
+- `GPU_PAINT_SPIKE_STOP` for teardown after required synchronization.
 
 ## Flatten to channel images
 
