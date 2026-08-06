@@ -122,6 +122,21 @@ capture only while its request count or measured cost is lower than the broad
 alternative. Do not infer that Smart UV Project is universally slower: the
 observed driver is this result's many tiny islands, not the operator's name.
 
+## 0.15.19: abandoned-Undo exit and camera-plane clipping
+
+Version 0.15.19 implements the required early exit: later flushes do not build
+sparse UV rectangles or enumerate tiles after an atomic record is abandoned.
+Painting, seams, gutters, and final synchronization remain active. It also
+clips camera-crossing triangles before perspective division. Fully hidden and
+offscreen triangles receive empty screen bounds rather than entering every
+zoomed-in dab; only non-finite projection data keeps the always-dirty fallback.
+
+Passive viewport work is now measured separately. On session stop, one
+`GPU_PAINT_SPIKE_HOVER` line reports average/maximum composed-preview,
+depth-prepass, stencil, reticle, caliper, text-overlay, total view, and total
+pixel-callback times, alongside triangle and unprojectable counts. New
+production measurements are required before stating a speedup for either fix.
+
 Other remaining costs are conservative UV-union calculation, unclassified
 flush overhead, and roughly one second for explicit near-full 4K Image
 synchronization. GPU command submission itself is small in these traces.

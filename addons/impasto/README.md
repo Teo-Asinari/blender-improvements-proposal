@@ -1,6 +1,6 @@
 # Impasto
 
-Impasto 0.15.18 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
+Impasto 0.15.19 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
 painting. It stores material work as ordered Paint and Fill layers, compiles
 the stack into a Principled BSDF material, and provides a GPU-resident painting
 session with immediate material feedback.
@@ -25,11 +25,11 @@ comparison method, and remaining costs.
 Paint and Erase Undo capture is also sparse: distant UV islands contribute
 their own 128-pixel tiles without forcing capture of the empty atlas space
 between them. Exact gains depend strongly on UV layout and stroke coverage.
-Version 0.15.18 has a known performance regression on highly fragmented
-atlases: a tested Smart UV Project mesh with many tiny islands continued
-building sparse requests after its Undo transaction exceeded the memory
-budget, producing roughly 91 ms live flushes. The painted result remains
-correct, but this path is choppy pending an early-exit fix.
+Version 0.15.19 stops sparse request work immediately after an Undo transaction
+exceeds its memory budget and clips camera-crossing triangles instead of
+treating all behind-camera geometry as touched. This directly addresses the
+0.15.18 fragmented-atlas regression and extreme zoom slowdown; production
+timings still require interactive revalidation.
 
 ## Current feature set
 
@@ -140,6 +140,11 @@ During a session:
 Ordinary GPU strokes remain resident at pen-up. Synchronization is explicit or
 performed when the session exits; 4K is viable, but uses substantially more
 VRAM and makes synchronization slower.
+
+When a session stops, `GPU_PAINT_SPIKE_HOVER` reports aggregated passive-frame
+timings for preview, depth prepass, stencil, reticle, caliper, and overlays,
+plus mesh triangle and invalid-projection counts. It is intended to distinguish
+cursor/viewport cost from actual dab processing without logging every frame.
 
 ## Flatten to channel images
 

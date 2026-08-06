@@ -48,7 +48,7 @@ default `0.1 m` voxel size from triggering a prohibitively expensive operation
 without review. A viewport guide draws grid slices and voxel-sized samples at
 all eight bounding-box corners so scale can be judged visually.
 
-### [Impasto](addons/impasto/) — v0.15.18 (active development)
+### [Impasto](addons/impasto/) — v0.15.19 (active development)
 
 A non-destructive Principled-PBR layer stack with Fill, Paint, and pass-through
 Group layers. One logical Paint layer can own separate Base Color, Metallic,
@@ -118,6 +118,9 @@ flush (3.65×). Detailed measurements and caveats are maintained in the
 [Impasto GPU performance history](addons/impasto/docs/PERFORMANCE_HISTORY.md).
 Impasto 0.15.18 makes Paint/Erase Undo sparse across scattered UV islands,
 avoiding tile capture for the empty atlas space between hit regions.
+Impasto 0.15.19 stops sparse bookkeeping after Undo becomes impossible, clips
+camera-crossing triangles conservatively to prevent extreme zoom amplification,
+and adds aggregated passive-hover profiling.
 Flatten/Export to combined per-channel Blender Images is implemented. Paint,
 Soften, Smear, and Erase have independent per-channel target controls.
 Same-UV visible layers remain composed around an intermediate active layer;

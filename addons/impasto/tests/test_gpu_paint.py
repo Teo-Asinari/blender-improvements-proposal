@@ -51,6 +51,36 @@ check("GPU stencil layout is delegated to the overlay module",
 check("GPU overlay scene length formatting remains compatible",
       gpu_engine._format_scene_length(0.002) == "2 mm"
       and overlays.format_scene_length(0.002) == "2 mm")
+
+hover = gpu_engine.HoverTelemetry()
+hover.add("view", 4.0)
+hover.add("view", 8.0)
+hover.add("preview", 3.0)
+hover.add("prepass", 10.0)
+hover.add("not_a_stage", 1000.0)
+hover.geometry(400, 25)
+hover_summary = hover.summary()
+check("passive hover telemetry aggregates bounded averages and maxima",
+      hover_summary["frames"] == 2
+      and hover_summary["view_avg_ms"] == 6.0
+      and hover_summary["view_max_ms"] == 8.0
+      and hover_summary["preview_count"] == 1
+      and hover_summary["prepass_avg_ms"] == 10.0)
+check("passive hover telemetry records projection health",
+      hover_summary["triangles"] == 400
+      and hover_summary["unprojectable"] == 25
+      and hover_summary["unprojectable_pct"] == 6.25)
+hover_line = gpu_engine.format_hover_telemetry(hover_summary)
+check("passive hover summary has a stable machine-readable format",
+      hover_line.startswith("GPU_PAINT_SPIKE_HOVER ")
+      and "frames=2" in hover_line
+      and "preview_avg_ms=3.0000" in hover_line
+      and "unprojectable_pct=6.2500" in hover_line)
+empty_hover = gpu_engine.HoverTelemetry().summary()
+check("empty passive hover telemetry avoids division by zero",
+      empty_hover["frames"] == 0
+      and empty_hover["view_avg_ms"] == 0.0
+      and empty_hover["unprojectable_pct"] == 0.0)
 positions, remainder = brush_math.interpolate_dabs(
     0.0, 0.0, 100.0, 0.0, 10.0, max_dabs=3)
 check("extracted dab interpolation retains its safety cap",
@@ -411,6 +441,58 @@ try:
     rect = gpu_engine.dab_rect_union([(10.0, 20.0), (30.0, 5.0)], 4.0)
     check("dab union rect covers every disc",
           rect == (6.0, 1.0, 34.0, 24.0), str(rect))
+    identity = np.eye(4, dtype=np.float32)
+    projected, invalid = gpu_engine.triangle_screen_bboxes(
+        [(-0.5, -0.5, 0.0), (0.5, -0.5, 0.0), (0.0, 0.5, 0.0)],
+        identity, 100, 80)
+    check("screen bounds project ordinary triangles with a guard pixel",
+          np.allclose(projected[0], (24.0, 19.0, 76.0, 61.0))
+          and not invalid[0], str((projected, invalid)))
+    offscreen, invalid = gpu_engine.triangle_screen_bboxes(
+        [(2.0, -0.2, 0.0), (3.0, -0.2, 0.0), (2.5, 0.2, 0.0)],
+        identity, 100, 80)
+    check("screen bounds reject fully offscreen triangles",
+          np.isposinf(offscreen[0, :2]).all()
+          and np.isneginf(offscreen[0, 2:]).all()
+          and not invalid[0], str((offscreen, invalid)))
+
+    # A simple perspective transform with clip.w = object z lets these pure
+    # tests exercise camera-plane clipping without Blender context.
+    perspective = np.eye(4, dtype=np.float32)
+    perspective[3] = (0.0, 0.0, 1.0, 0.0)
+    behind, invalid = gpu_engine.triangle_screen_bboxes(
+        [(-0.2, -0.2, -1.0), (0.2, -0.2, -1.0),
+         (0.0, 0.2, -1.0)], perspective, 100, 80)
+    check("screen bounds reject triangles fully behind the camera",
+          np.isposinf(behind[0, :2]).all()
+          and np.isneginf(behind[0, 2:]).all()
+          and not invalid[0], str((behind, invalid)))
+    straddling, invalid = gpu_engine.triangle_screen_bboxes(
+        [(-0.3, -0.2, 1.0), (0.3, -0.2, 1.0),
+         (0.0, 0.2, -1.0)], perspective, 100, 80)
+    check("camera-straddling triangles get conservative bounded extents",
+          np.isfinite(straddling).all()
+          and (straddling[0] >= (0.0, 0.0, 0.0, 0.0)).all()
+          and (straddling[0] <= (100.0, 80.0, 100.0, 80.0)).all()
+          and not invalid[0], str((straddling, invalid)))
+    near_camera, invalid = gpu_engine.triangle_screen_bboxes(
+        [(-1e-4, -1e-4, 1e-6), (1e-4, -1e-4, 1e-6),
+         (0.0, 0.2, 1.0)], perspective, 100, 80)
+    check("near-camera perspective expansion remains viewport bounded",
+          np.isfinite(near_camera).all()
+          and near_camera[0, 0] == 0.0 and near_camera[0, 2] == 100.0
+          and not invalid[0], str((near_camera, invalid)))
+    perspective_depth, invalid = gpu_engine.triangle_screen_bboxes(
+        [(-0.5, 0.0, 1.0), (0.5, 0.0, 2.0),
+         (0.0, 0.5, 4.0)], perspective, 200, 100)
+    check("screen bounds honor perspective division for varying depth",
+          np.allclose(perspective_depth[0], (49.0, 49.0, 126.0, 57.25))
+          and not invalid[0], str((perspective_depth, invalid)))
+    nonfinite, invalid = gpu_engine.triangle_screen_bboxes(
+        [(float("nan"), 0.0, 1.0), (0.0, 0.0, 1.0),
+         (0.0, 0.5, 1.0)], perspective, 100, 80)
+    check("non-finite projection retains always-dirty fallback",
+          invalid[0], str((nonfinite, invalid)))
     check("uv bbox to texel rect clamps and pads",
           gpu_engine.uv_bbox_to_pixel_rect((0.0, 0.0, 0.5, 0.25), 64,
                                            pad=2)

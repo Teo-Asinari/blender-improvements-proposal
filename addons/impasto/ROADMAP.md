@@ -53,7 +53,7 @@ texels with unpainted atlas gutters; qualify explicit gutter ownership and
 filter behavior at multiple zoom levels before declaring distant-view seams
 resolved.
 
-This is the authoritative list of open work for Impasto 0.15.18. Shipped work
+This is the authoritative list of open work for Impasto 0.15.19. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Near-term
@@ -83,12 +83,11 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
   undo records before GPU copying. Version 0.15.18 captures Paint/Erase Undo
   from sparse hit-island tiles rather than their atlas-wide union. Re-measure
   production strokes to identify the next dominant 4K cost.
-  **Regression found:** a Smart UV Project object with very many tiny,
-  near-adjacent islands spent 15.1 seconds rebuilding sparse Undo requests in
-  a 19.3-second stroke, versus 3.7 seconds on the earlier hand-unwrapped object.
-  Once the 256 MiB transaction is abandoned, skip all further sparse-rect and
-  tile work for that stroke. Then qualify an adaptive sparse/broad threshold
-  using island fragmentation and unique tile/request counts.
+  Version 0.15.19 stops all sparse-rect/tile work once the 256 MiB transaction
+  is abandoned and replaces the behind-camera always-dirty projection fallback
+  with conservative homogeneous clipping. Re-test the fragmented Smart UV and
+  zoomed hand-unwrapped cases. If either remains costly, qualify an adaptive
+  sparse/broad threshold using island fragmentation and unique request counts.
 
 ## Workflow and UX
 

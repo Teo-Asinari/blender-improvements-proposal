@@ -4,6 +4,20 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.19
+
+- Stop sparse UV-rectangle generation and tile enumeration immediately after
+  a stroke exceeds the atomic Undo budget. Painting, dirty synchronization,
+  conservative seams, and gutters continue normally.
+- Clip camera-crossing triangles in homogeneous screen space. Fully hidden or
+  offscreen triangles no longer enter every dab's dirty/Undo selection merely
+  because one vertex crossed the camera plane; invalid non-finite geometry
+  retains the conservative fallback.
+- Emit one aggregated `GPU_PAINT_SPIKE_HOVER` line when a resident session
+  stops. It separates passive preview, depth-prepass, stencil, reticle,
+  caliper, text-overlay, and total callback timing and reports triangle and
+  unprojectable counts without per-frame log spam.
+
 ## 0.15.18
 
 - Capture Paint/Erase Undo tiles from each screen-hit triangle's UV region

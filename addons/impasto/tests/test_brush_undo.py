@@ -173,6 +173,24 @@ try:
     early_tx = early_history.begin_stroke(early_backend)
     early_tx.touch(early_keys[0])
     early_tx.touch_rect("base_color", (0, 0, 3, 1), (3, 1), tile_size=1)
+    check("abandoned transaction publicly declines further capture work",
+          not early_tx.is_recording)
+
+    original_tiles_for_rect = tile_undo.tiles_for_rect
+    enumeration_count = [0]
+    def counted_tiles_for_rect(*args, **kwargs):
+        enumeration_count[0] += 1
+        return original_tiles_for_rect(*args, **kwargs)
+    tile_undo.tiles_for_rect = counted_tiles_for_rect
+    try:
+        early_tx.touch_rect("base_color", (0, 0, 1, 1), (1, 1), 1)
+        early_tx.touch_rects((
+            ("base_color", (0, 0, 1, 1), (1, 1), 1),))
+    finally:
+        tile_undo.tiles_for_rect = original_tiles_for_rect
+    check("abandoned transaction skips all later tile enumeration",
+          enumeration_count[0] == 0)
+
     early_backend.tiles.update({key: 2 for key in early_keys})
     check("growing stroke abandons undo once its atomic budget is exceeded",
           early_tx.commit() is None and early_history.undo_count == 0
@@ -180,7 +198,6 @@ try:
     check("abandoning impossible undo does not restore painted values",
           all(early_backend.tiles[key] == 2 for key in early_keys)
           and not early_backend.restores)
-
     batch_backend = MemoryBackend(bytes_per_tile=10)
     batch_history = tile_undo.TileHistory(memory_budget_bytes=30)
     batch_tx = batch_history.begin_stroke(batch_backend)

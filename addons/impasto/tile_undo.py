@@ -193,6 +193,11 @@ class StrokeTransaction:
         self._abandoned = False
         self._estimated_record_bytes = 0
 
+    @property
+    def is_recording(self):
+        """Whether this transaction can still accept undo capture work."""
+        return not self._closed and not self._abandoned
+
     def _snapshot_byte_size(self, key):
         estimate = getattr(self._backend, "snapshot_byte_size", None)
         if estimate is None:
@@ -237,6 +242,10 @@ class StrokeTransaction:
             self._before[key] = self._backend.capture_tile(key)
 
     def touch_rect(self, channel, rect, image_size, tile_size=128):
+        if self._closed:
+            raise TileHistoryError("stroke transaction is closed")
+        if self._abandoned:
+            return ()
         keys = tiles_for_rect(channel, rect, image_size, tile_size)
         if self._preflight(keys):
             for key in keys:
@@ -246,6 +255,10 @@ class StrokeTransaction:
 
     def touch_rects(self, requests):
         """Preflight and capture several rectangles as one atomic request."""
+        if self._closed:
+            raise TileHistoryError("stroke transaction is closed")
+        if self._abandoned:
+            return ()
         groups = tuple(
             tiles_for_rect(channel, rect, image_size, tile_size)
             for channel, rect, image_size, tile_size in requests)

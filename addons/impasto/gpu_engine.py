@@ -1443,11 +1443,11 @@ def touched_seam_record_indices(records, triangle_screen_bboxes, dab_rect,
 # written if its triangle produced a fragment inside a dab disc, and a
 # triangle can only do that if its screen-space bbox intersects the
 # disc's bbox. So: project every triangle once per prepass (numpy
-# matmul), intersect the per-triangle screen bboxes with each flush's
-# dab-union rect, and union the HIT triangles' UV bboxes. Triangles
-# with any vertex at clip.w <= 0 cannot be projected — they count as
-# always-dirty. Occluded/discarded fragments only make the rect larger
-# than needed, never smaller: conservative is correct.
+# matmul), conservatively clip camera-crossing triangles in homogeneous
+# space, intersect the per-triangle screen bboxes with each flush's dab-union
+# rect, and union the HIT triangles' UV bboxes. Only invalid/non-finite
+# projections count as always-dirty. Occluded/discarded fragments only make
+# the rect larger than needed, never smaller: conservative is correct.
 # ---------------------------------------------------------------------------
 
 
@@ -1463,22 +1463,104 @@ def triangle_screen_bboxes(coords, mvp, region_w, region_h):
     """(bboxes (n_tris, 4) [minx, miny, maxx, maxy] in region pixels,
     unprojectable (n_tris,) bool) for the soup's coords (n_tris*3, 3)
     under the 4x4 ``mvp`` (view_proj @ model, row-major like mathutils).
-    Triangles with any vertex at clip.w <= 0 are flagged unprojectable
-    (their bbox row is garbage; callers must treat them as dirty)."""
+    Triangles are clipped in homogeneous space before the perspective divide.
+    This matters when the camera intersects a triangle: projecting its three
+    original vertices is undefined, but the portion the rasterizer can show
+    still has a finite, viewport-bounded screen extent.  The z clip planes are
+    deliberately omitted.  Keeping geometry rejected by the GPU near/far
+    planes can only enlarge the dirty bound, while avoiding backend-specific
+    depth conventions.  ``unprojectable`` is reserved for non-finite input;
+    those triangles retain the old always-dirty safety fallback.
+
+    Fully camera-hidden or offscreen triangles receive an empty bbox
+    ``[+inf, +inf, -inf, -inf]`` and are not marked unprojectable."""
     import numpy as np
     co = np.asarray(coords, dtype=np.float32).reshape(-1, 3)
     m = np.asarray(mvp, dtype=np.float32)
     hom = co @ m[:3, :3].T + m[:3, 3]          # clip.xyz
     w = co @ m[3, :3].T + m[3, 3]              # clip.w
-    bad = (w <= 1e-6)
-    w_safe = np.where(bad, 1.0, w)
-    px = (hom[:, :2] / w_safe[:, None] * 0.5 + 0.5)
-    px[:, 0] *= float(region_w)
-    px[:, 1] *= float(region_h)
-    tri = px.reshape(-1, 3, 2)
-    bboxes = np.concatenate([tri.min(axis=1), tri.max(axis=1)], axis=1)
-    unprojectable = bad.reshape(-1, 3).any(axis=1)
-    return bboxes.astype(np.float32), unprojectable
+    clip = np.concatenate((hom, w[:, None]), axis=1).astype(np.float64)
+
+    # Each function is >= 0 inside.  Clip w first so subsequent side-plane
+    # intersections never retain a point behind the eye.  Sutherland-Hodgman
+    # interpolation in clip space matches the fixed-function clipper.
+    planes = (
+        lambda p: p[3],
+        lambda p: p[0] + p[3], lambda p: p[3] - p[0],
+        lambda p: p[1] + p[3], lambda p: p[3] - p[1],
+    )
+
+    def clip_polygon(poly, distance):
+        if not poly:
+            return []
+        result = []
+        previous = poly[-1]
+        previous_d = float(distance(previous))
+        previous_in = previous_d >= 0.0
+        for current in poly:
+            current_d = float(distance(current))
+            current_in = current_d >= 0.0
+            if current_in != previous_in:
+                denominator = previous_d - current_d
+                if denominator != 0.0:
+                    result.append(previous + (current - previous)
+                                  * (previous_d / denominator))
+            if current_in:
+                result.append(current)
+            previous, previous_d, previous_in = (
+                current, current_d, current_in)
+        return result
+
+    triangle_count = len(clip) // 3
+    bboxes = np.empty((triangle_count, 4), dtype=np.float32)
+    bboxes[:] = (np.inf, np.inf, -np.inf, -np.inf)
+    triangles = clip.reshape(-1, 3, 4)
+    finite = np.isfinite(triangles).all(axis=(1, 2))
+    unprojectable = ~finite
+    distances = np.stack((triangles[:, :, 3],
+                          triangles[:, :, 0] + triangles[:, :, 3],
+                          triangles[:, :, 3] - triangles[:, :, 0],
+                          triangles[:, :, 1] + triangles[:, :, 3],
+                          triangles[:, :, 3] - triangles[:, :, 1]), axis=2)
+    trivially_inside = (finite & (triangles[:, :, 3] > 0.0).all(axis=1)
+                        & (distances >= 0.0).all(axis=(1, 2)))
+    inside_indices = np.flatnonzero(trivially_inside)
+    if len(inside_indices):
+        accepted = triangles[inside_indices]
+        ndc = accepted[:, :, :2] / accepted[:, :, 3, None]
+        px = (ndc * 0.5 + 0.5) * (float(region_w), float(region_h))
+        lo = np.maximum(px.min(axis=1) - 1.0, (0.0, 0.0))
+        hi = np.minimum(px.max(axis=1) + 1.0,
+                        (float(region_w), float(region_h)))
+        bboxes[inside_indices] = np.concatenate((lo, hi), axis=1)
+    # If all three vertices are outside the same plane, convexity guarantees
+    # the triangle cannot enter the retained region.
+    trivially_outside = finite & (distances < 0.0).all(axis=1).any(axis=1)
+    needs_clipping = finite & ~trivially_inside & ~trivially_outside
+    for triangle_index in np.flatnonzero(needs_clipping):
+        vertices = triangles[triangle_index]
+        polygon = list(vertices)
+        for plane in planes:
+            polygon = clip_polygon(polygon, plane)
+            if not polygon:
+                break
+        if not polygon:
+            continue
+        polygon = np.asarray(polygon)
+        positive_w = polygon[:, 3] > 0.0
+        if not bool(positive_w.any()):
+            continue
+        # Zero-w vertices can only be the camera apex.  The side-plane-clipped
+        # positive-w vertices determine the same finite viewport coverage.
+        ndc = polygon[positive_w, :2] / polygon[positive_w, 3, None]
+        px = (ndc * 0.5 + 0.5) * (float(region_w), float(region_h))
+        # A one-pixel numerical guard keeps this CPU estimate conservative at
+        # clip boundaries and under float32 GPU interpolation.
+        lo = np.maximum(px.min(axis=0) - 1.0, (0.0, 0.0))
+        hi = np.minimum(px.max(axis=0) + 1.0,
+                        (float(region_w), float(region_h)))
+        bboxes[triangle_index] = (lo[0], lo[1], hi[0], hi[1])
+    return bboxes, unprojectable
 
 
 def dab_rect_union(dabs, radius):
@@ -2485,6 +2567,7 @@ class _Session:
         self.preview_submit_ms = 0.0
         self.preview_submit_avg_ms = 0.0
         self.preview_submit_count = 0
+        self.hover_stats = HoverTelemetry()
         self.gpu_ready = False
         self.probe_lines = None
         self.overlay_circle_batch = None
@@ -2595,6 +2678,63 @@ _handle_pixel = None
 
 # Survives stop_session so the panel can show the last stroke's numbers.
 _last_stroke_stats = {}
+
+
+class HoverTelemetry:
+    """Bounded passive-viewport timing accumulator (no per-frame log spam)."""
+
+    STAGES = ("view", "prepass", "preview", "pixel", "stencil",
+              "reticle", "caliper", "stats_overlay")
+
+    def __init__(self):
+        self.counts = {name: 0 for name in self.STAGES}
+        self.totals = {name: 0.0 for name in self.STAGES}
+        self.maximums = {name: 0.0 for name in self.STAGES}
+        self.triangles = 0
+        self.unprojectable = 0
+
+    def add(self, stage, elapsed_ms):
+        if stage not in self.counts:
+            return
+        value = max(0.0, float(elapsed_ms))
+        self.counts[stage] += 1
+        self.totals[stage] += value
+        self.maximums[stage] = max(self.maximums[stage], value)
+
+    def geometry(self, triangles, unprojectable):
+        self.triangles = max(0, int(triangles))
+        self.unprojectable = max(0, min(self.triangles,
+                                        int(unprojectable)))
+
+    def summary(self):
+        result = {"frames": self.counts["view"],
+                  "pixel_frames": self.counts["pixel"],
+                  "triangles": self.triangles,
+                  "unprojectable": self.unprojectable,
+                  "unprojectable_pct": (100.0 * self.unprojectable
+                                          / self.triangles
+                                          if self.triangles else 0.0)}
+        for stage in self.STAGES:
+            count = self.counts[stage]
+            result[stage + "_avg_ms"] = (self.totals[stage] / count
+                                           if count else 0.0)
+            result[stage + "_max_ms"] = self.maximums[stage]
+            result[stage + "_count"] = count
+        return result
+
+
+def format_hover_telemetry(stats):
+    """Stable machine-readable payload for a passive-hover session."""
+    return "GPU_PAINT_SPIKE_HOVER " + " ".join(
+        "%s=%s" % (key, ("%.4f" % value)
+                    if isinstance(value, float) else value)
+        for key, value in sorted(stats.items()))
+
+
+def _passive_hover(s):
+    return not (s.stroke_active or s.dab_queue or s.pending_finalize
+                or s.pending_flush or s.flush_in_flight
+                or s.pending_history_action is not None)
 
 # Ordered (key, label, format) for UI display of the stats dict.
 STATS_LAYOUT = (
@@ -2922,6 +3062,9 @@ def stop_session():
     global _session
     _remove_handlers()
     if _session is not None:
+        hover = _session.hover_stats.summary()
+        if hover["frames"] or hover["pixel_frames"]:
+            _log_line(format_hover_telemetry(hover))
         if _session.history_backend is not None:
             _session.history.clear(_session.history_backend)
         _release_gpu_references(_session)
@@ -3305,11 +3448,15 @@ def _draw_view():
     if region is None or rv3d is None:
         return
     owning = (region.as_pointer() == s.region_ptr)
+    passive = owning and _passive_hover(s)
+    view_t0 = time.perf_counter() if passive else None
     try:
         with _gpu_state_restored():
             if owning:
                 _ensure_gpu(s)
-                _update_prepass(s, region, rv3d)
+                prepass_elapsed = _update_prepass(s, region, rv3d)
+                if passive and prepass_elapsed is not None:
+                    s.hover_stats.add("prepass", prepass_elapsed)
                 if s.dab_queue:
                     _flush_dabs(s, region)
                 if s.pending_finalize and not s.dab_queue:
@@ -3321,9 +3468,18 @@ def _draw_view():
                         and not s.dab_queue and not s.pending_finalize:
                     _apply_history_action(s)
                 if not material_inspect_active():
+                    preview_t0 = time.perf_counter() if passive else None
                     _draw_composed_preview(s)
+                    if passive:
+                        s.hover_stats.add(
+                            "preview", (time.perf_counter() - preview_t0)
+                            * 1000.0)
     except Exception:
         s.latch("draw failed")
+    finally:
+        if passive:
+            s.hover_stats.add("view", (time.perf_counter() - view_t0)
+                              * 1000.0)
 
 
 def _draw_pixel():
@@ -3333,15 +3489,34 @@ def _draw_pixel():
     region = bpy.context.region
     if region is None or region.as_pointer() != s.region_ptr:
         return
+    passive = _passive_hover(s)
+    pixel_t0 = time.perf_counter() if passive else None
     try:
+        t0 = time.perf_counter() if passive else None
         _draw_stencil_preview(s, region)
+        if passive:
+            s.hover_stats.add("stencil", (time.perf_counter() - t0) * 1000.0)
+            t0 = time.perf_counter()
         _draw_brush_reticle(s)
+        if passive:
+            s.hover_stats.add("reticle", (time.perf_counter() - t0) * 1000.0)
+            t0 = time.perf_counter()
         _draw_sss_caliper(s, region, bpy.context.region_data)
+        if passive:
+            s.hover_stats.add("caliper", (time.perf_counter() - t0) * 1000.0)
+            t0 = time.perf_counter()
         _draw_stats_overlay(s)
+        if passive:
+            s.hover_stats.add("stats_overlay",
+                              (time.perf_counter() - t0) * 1000.0)
     except Exception:
         # Text overlay must never take the viewport down; latch quietly.
         if s.error is None:
             s.latch("stats overlay failed")
+    finally:
+        if passive:
+            s.hover_stats.add("pixel", (time.perf_counter() - pixel_t0)
+                              * 1000.0)
 
 
 # ---------------------------------------------------------------------------
@@ -4451,10 +4626,10 @@ def _prepass_state_key(s, region, rv3d, obj):
 def _update_prepass(s, region, rv3d):
     obj = bpy.data.objects.get(s.obj_name)
     if obj is None:
-        return
+        return None
     key = _prepass_state_key(s, region, rv3d, obj)
     if key == s.prepass_key:
-        return
+        return None
     t0 = time.perf_counter()
 
     w = max(int(region.width), 8)
@@ -4488,6 +4663,8 @@ def _update_prepass(s, region, rv3d):
         mvp = np.array(s.view_proj @ s.model, dtype=np.float32)
         s.tri_screen_bboxes, s.tri_unprojectable = triangle_screen_bboxes(
             s.coords, mvp, w, h)
+        s.hover_stats.geometry(len(s.tri_screen_bboxes),
+                               int(s.tri_unprojectable.sum()))
     except Exception:
         s.tri_screen_bboxes = None
         s.tri_unprojectable = None
@@ -4512,6 +4689,7 @@ def _update_prepass(s, region, rv3d):
         s.depth_fb.read_color(0, 0, 1, 1, 4, 0, 'FLOAT')
     s.prepass_ms = (time.perf_counter() - t0) * 1000.0
     s.prepass_key = key
+    return s.prepass_ms
 
 
 # ---------------------------------------------------------------------------
@@ -4571,6 +4749,8 @@ def _flush_dabs(s, region):
     t_dirty = time.perf_counter()
     dab_work_rects = None
     undo_dirty_rects = None
+    undo_recording = (s.stroke_transaction is None
+                      or s.stroke_transaction.is_recording)
     if (s.tri_screen_bboxes is not None and s.tri_uv_bboxes is not None
             and queue):
         rect = dab_rect_union(queue, radius)
@@ -4585,7 +4765,9 @@ def _flush_dabs(s, region):
         bb = dirty_uv_bbox(s.tri_screen_bboxes, s.tri_unprojectable,
                            s.tri_uv_bboxes, rect)
         s.stroke_dirty = union_bbox(s.stroke_dirty, bb)
-        if s.settings.get("brush_mode", "PAINT") in {"PAINT", "ERASE"}:
+        if (undo_recording
+                and s.settings.get("brush_mode", "PAINT")
+                in {"PAINT", "ERASE"}):
             undo_dirty_rects = dirty_uv_pixel_rects(
                 s.tri_screen_bboxes, s.tri_unprojectable,
                 s.tri_uv_bboxes, rect, s.size)
@@ -4602,7 +4784,7 @@ def _flush_dabs(s, region):
 
     # Capture every touched channel tile once, immediately before its first
     # modification. Both before/after snapshots stay GPU-resident.
-    if queue and s.history_backend is not None:
+    if queue and s.history_backend is not None and undo_recording:
         undo_started = time.perf_counter()
         dirty_rect = (uv_bbox_to_pixel_rect(bb, s.size)
                       if not s.stroke_dirty_full else None)
@@ -4634,7 +4816,8 @@ def _flush_dabs(s, region):
                     (channel, item, (s.size, s.size), 128)
                     for item in sparse_rects)
             s.stroke_transaction.touch_rects(undo_requests)
-            if s.batch_seam_boundary is not None:
+            if (s.stroke_transaction.is_recording
+                    and s.batch_seam_boundary is not None):
                 eligible = set(s.seam_channel_keys) & target_keys
                 new_seams = (s.seam_selected_indices
                              - s.seam_history_touched)
@@ -4651,6 +4834,36 @@ def _flush_dabs(s, region):
                             channel, undo_rect, (s.size, s.size))
                 s.seam_history_touched.update(new_seams)
         s.undo_touch_ms += (time.perf_counter() - undo_started) * 1000.0
+
+    # Gutter propagation remains part of painting even when an oversized
+    # stroke can no longer be made undoable. Use one conservative union rect
+    # instead of rebuilding its expensive per-triangle sparse undo request.
+    if (queue and s.gutter_offset_map is not None
+            and s.stroke_transaction is not None
+            and not s.stroke_transaction.is_recording):
+        keys = tuple(s.settings.get("channel_keys", ()))
+        target_keys = set(s.settings.get(
+            "brush_target_channel_keys", keys))
+        gutter_rect = (uv_bbox_to_pixel_rect(bb, s.size)
+                       if not s.stroke_dirty_full else
+                       (0, 0, s.size, s.size))
+        if gutter_rect is not None:
+            gutter_rect = uv_gutters.expand_pixel_rect(
+                gutter_rect, s.gutter_offset_map.radius, s.size)
+            for channel in target_keys:
+                append_sparse_pixel_rect(
+                    s.stroke_gutter_rects, channel, gutter_rect)
+        if s.batch_seam_boundary is not None:
+            eligible = set(s.seam_channel_keys) & target_keys
+            new_seams = s.seam_selected_indices - s.seam_history_touched
+            for channel in eligible:
+                for seam_index in sorted(new_seams):
+                    seam_rect = uv_gutters.expand_pixel_rect(
+                        s.seam_records[seam_index][3],
+                        s.gutter_offset_map.radius, s.size)
+                    append_sparse_pixel_rect(
+                        s.stroke_gutter_rects, channel, seam_rect)
+            s.seam_history_touched.update(new_seams)
 
     if s.settings.get("brush_mode", "PAINT") == "SOFTEN":
         _flush_soften_dabs(s, region, queue, radius, hardness, occlusion,
