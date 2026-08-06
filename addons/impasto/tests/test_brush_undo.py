@@ -33,6 +33,9 @@ class MemoryBackend:
         value = self.tiles.get(key, 0)
         return tile_undo.TileSnapshot((key, value), self.bytes_per_tile)
 
+    def snapshot_byte_size(self, key):
+        return self.bytes_per_tile
+
     def restore_tile(self, key, snapshot):
         if key == self.fail_key:
             raise RuntimeError("simulated GPU copy failure")
@@ -158,7 +161,34 @@ try:
     check("oversized atomic record is rejected, never truncated",
           tx.commit() is None and oversized.byte_size == 0
           and oversized.undo_count == 0
-          and len(oversized_backend.released) == 2)
+          and len(oversized_backend.released) == 0)
+    check("known oversized record performs no pointless captures",
+          not oversized_backend.released)
+
+    early_backend = MemoryBackend(bytes_per_tile=10)
+    early_history = tile_undo.TileHistory(memory_budget_bytes=50)
+    early_keys = [tile_undo.TileKey("base_color", i, 0, 1, 1)
+                  for i in range(3)]
+    early_backend.tiles.update({key: 1 for key in early_keys})
+    early_tx = early_history.begin_stroke(early_backend)
+    early_tx.touch(early_keys[0])
+    early_tx.touch_rect("base_color", (0, 0, 3, 1), (3, 1), tile_size=1)
+    early_backend.tiles.update({key: 2 for key in early_keys})
+    check("growing stroke abandons undo once its atomic budget is exceeded",
+          early_tx.commit() is None and early_history.undo_count == 0
+          and len(early_backend.released) == 1)
+    check("abandoning impossible undo does not restore painted values",
+          all(early_backend.tiles[key] == 2 for key in early_keys)
+          and not early_backend.restores)
+
+    batch_backend = MemoryBackend(bytes_per_tile=10)
+    batch_history = tile_undo.TileHistory(memory_budget_bytes=30)
+    batch_tx = batch_history.begin_stroke(batch_backend)
+    batch_tx.touch_rects((
+        ("base_color", (0, 0, 1, 1), (1, 1), 1),
+        ("roughness", (0, 0, 1, 1), (1, 1), 1)))
+    check("multichannel preflight rejects before its first tile copy",
+          batch_tx.commit() is None and not batch_backend.released)
 
     print("IMPASTO_BRUSH_UNDO_PASSED")
 except Exception:

@@ -20,6 +20,26 @@ class UVSeamCorrespondenceTests(unittest.TestCase):
         self.assertEqual(gpu_engine.touched_seam_record_indices(
             records, boxes, (5, 5, 8, 8)), (0,))
 
+    def test_cached_touched_filter_matches_uncached_and_keeps_order(self):
+        import numpy as np
+        records = ((2, None, None, None), (0, None, None, None),
+                   (2, None, None, None), (1, None, None, None))
+        boxes = np.asarray(((5, 5, 9, 9), (20, 20, 30, 30),
+                            (-2, -2, 4, 4)), dtype=np.float32)
+        owners = gpu_engine.seam_record_triangle_index(records)
+        self.assertEqual(owners.dtype, np.int32)
+        expected = gpu_engine.touched_seam_record_indices(
+            records, boxes, (0, 0, 5, 5))
+        self.assertEqual(expected, (0, 1, 2))
+        self.assertEqual(gpu_engine.touched_seam_record_indices(
+            records, boxes, (0, 0, 5, 5), owners), expected)
+
+    def test_touched_filter_empty_records(self):
+        import numpy as np
+        self.assertEqual(gpu_engine.touched_seam_record_indices(
+            (), np.empty((0, 4), dtype=np.float32), (0, 0, 1, 1),
+            np.empty((0,), dtype=np.int32)), ())
+
     def test_conservative_records_include_edge_and_vertex_caps(self):
         import numpy as np
         vertices = ((0, 1, 2), (2, 1, 3))
@@ -127,4 +147,5 @@ class UVSeamCorrespondenceTests(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    unittest.main()
+    # Blender leaves its own CLI switches in sys.argv for --python scripts.
+    unittest.main(argv=[__file__])

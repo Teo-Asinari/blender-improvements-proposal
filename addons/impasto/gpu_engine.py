@@ -1407,15 +1407,32 @@ def build_conservative_seam_records(correspondence, uv_triangles,
     return tuple(records)
 
 
-def touched_seam_record_indices(records, triangle_screen_bboxes, dab_rect):
-    """Select only seam sides whose owning face intersects this dab union."""
+def seam_record_triangle_index(records):
+    """Cache record-owner triangles for vectorized screen-space selection."""
+    import numpy as np
+    return np.fromiter((record[0] for record in records), dtype=np.int32,
+                       count=len(records))
+
+
+def touched_seam_record_indices(records, triangle_screen_bboxes, dab_rect,
+                                record_triangles=None):
+    """Select seam sides whose owning face intersects this dab union exactly.
+
+    ``record_triangles`` is cached once per session.  Indexing the numpy bbox
+    table and applying one vectorized mask avoids walking every seam record in
+    Python for every queued flush while preserving the original inclusive
+    intersection test and record order.
+    """
+    import numpy as np
+    if not records:
+        return ()
+    owners = (seam_record_triangle_index(records) if record_triangles is None
+              else record_triangles)
+    boxes = np.asarray(triangle_screen_bboxes)[owners]
     x0, y0, x1, y1 = dab_rect
-    selected = []
-    for index, (triangle, _positions, _uvs, _rect) in enumerate(records):
-        tx0, ty0, tx1, ty1 = triangle_screen_bboxes[triangle]
-        if tx1 >= x0 and tx0 <= x1 and ty1 >= y0 and ty0 <= y1:
-            selected.append(index)
-    return tuple(selected)
+    mask = ((boxes[:, 2] >= x0) & (boxes[:, 0] <= x1)
+            & (boxes[:, 3] >= y0) & (boxes[:, 1] <= y1))
+    return tuple(map(int, np.flatnonzero(mask)))
 
 
 # ---------------------------------------------------------------------------
@@ -2454,6 +2471,7 @@ class _Session:
         self.seam_history_touched = set()
         self.seam_transfer_ms = 0.0
         self.seam_records = ()
+        self.seam_record_triangles = None
         self.seam_selected_indices = set()
         self.seam_flush_indices = ()
 
@@ -3341,6 +3359,11 @@ class _GPUTileBackend:
         return tile_undo.TileSnapshot(
             payload=tex, byte_size=key.width * key.height * 8)
 
+    @staticmethod
+    def snapshot_byte_size(key):
+        """Exact RGBA16F allocation used to reject impossible undo early."""
+        return key.width * key.height * 8
+
     def restore_tile(self, key, snapshot):
         s = self.session
         index = self._index(key)
@@ -3614,6 +3637,8 @@ def _ensure_gpu(s):
             s.seam_correspondence, s.gutter_uvs,
             s.coords.reshape(-1, 3, 3), size)
         if s.seam_records:
+            s.seam_record_triangles = seam_record_triangle_index(
+                s.seam_records)
             s.seam_strip_rects = tuple(record[3] for record in s.seam_records)
             # Selected records are concatenated into one transient batch per
             # target shader at flush time. Never allocate one GPUBatch per
@@ -4508,7 +4533,8 @@ def _flush_dabs(s, region):
         if s.seam_records:
             seam_started = time.perf_counter()
             s.seam_flush_indices = touched_seam_record_indices(
-                s.seam_records, s.tri_screen_bboxes, rect)
+                s.seam_records, s.tri_screen_bboxes, rect,
+                s.seam_record_triangles)
             s.seam_selected_indices.update(s.seam_flush_indices)
             s.seam_select_ms += (time.perf_counter() - seam_started) * 1000.0
         union_started = time.perf_counter()
@@ -4543,6 +4569,7 @@ def _flush_dabs(s, region):
             if s.gutter_offset_map is not None:
                 rect = uv_gutters.expand_pixel_rect(
                     rect, s.gutter_offset_map.radius, s.size)
+            undo_requests = []
             for i in range(s.channels):
                 channel = keys[i] if i < len(keys) else str(i)
                 if channel not in target_keys:
@@ -4551,8 +4578,9 @@ def _flush_dabs(s, region):
                     s.stroke_gutter_rects[channel] = (
                         uv_gutters.union_pixel_rect(
                             s.stroke_gutter_rects.get(channel), rect))
-                s.stroke_transaction.touch_rect(
-                    channel, rect, (s.size, s.size))
+                undo_requests.append(
+                    (channel, rect, (s.size, s.size), 128))
+            s.stroke_transaction.touch_rects(undo_requests)
             if s.batch_seam_boundary is not None:
                 eligible = set(s.seam_channel_keys) & target_keys
                 new_seams = (s.seam_selected_indices

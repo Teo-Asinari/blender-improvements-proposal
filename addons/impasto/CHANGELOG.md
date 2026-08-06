@@ -4,6 +4,15 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.17
+
+- Replace repeated Python scans of every conservative seam record with an
+  exact, cached NumPy owner lookup. Record order and inclusive intersection
+  behavior remain unchanged.
+- Preflight multichannel GPU undo storage as one atomic request. If a stroke
+  cannot fit the configured history budget, skip its otherwise-pointless tile
+  copies while preserving the painted, non-undoable result produced before.
+
 ## 0.15.16
 
 - Remove unused per-dab triangle/UV work from ordinary GPU Paint and Erase.

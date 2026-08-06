@@ -1,6 +1,6 @@
 # Impasto
 
-Impasto 0.15.16 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
+Impasto 0.15.17 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
 painting. It stores material work as ordered Paint and Fill layers, compiles
 the stack into a Principled BSDF material, and provides a GPU-resident painting
 session with immediate material feedback.
@@ -13,6 +13,10 @@ At 4K, ordinary GPU Paint and Erase strokes skip detailed per-dab UV work that
 is only needed by Soften and Smear. Stroke logs now split input time, flushing,
 UV bounds, seam selection, and undo costs so further performance work can be
 driven by measured bottlenecks.
+Conservative seam selection uses a cached vectorized owner lookup instead of
+rescanning every seam record in Python for each live flush. Oversized strokes
+that cannot fit the atomic undo budget are rejected before performing GPU tile
+copies; painting is preserved, matching the previous non-undoable outcome.
 
 ## Current feature set
 

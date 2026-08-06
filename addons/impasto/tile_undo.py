@@ -190,24 +190,74 @@ class StrokeTransaction:
         self._label = label
         self._before = {}
         self._closed = False
+        self._abandoned = False
+        self._estimated_record_bytes = 0
+
+    def _snapshot_byte_size(self, key):
+        estimate = getattr(self._backend, "snapshot_byte_size", None)
+        if estimate is None:
+            return None
+        return int(estimate(key))
+
+    def _abandon_oversized(self):
+        """Stop recording a stroke that cannot fit as one atomic record.
+
+        Painting is deliberately not restored: the old commit path also kept
+        the paint and discarded an oversized undo record, but only after
+        capturing every before/after tile.
+        """
+        for snapshot in self._before.values():
+            self._history._release_snapshot(self._backend, snapshot)
+        self._before.clear()
+        self._abandoned = True
+
+    def _preflight(self, keys):
+        if self._abandoned:
+            return False
+        new_keys = tuple(key for key in keys if key not in self._before)
+        estimates = tuple(self._snapshot_byte_size(key) for key in new_keys)
+        if any(value is None for value in estimates):
+            return True
+        added = 2 * sum(estimates)  # before plus after snapshots
+        if self._estimated_record_bytes + added > self._history.memory_budget_bytes:
+            self._abandon_oversized()
+            return False
+        self._estimated_record_bytes += added
+        return True
 
     def touch(self, key):
         """Capture a tile once, immediately before its first modification."""
         if self._closed:
             raise TileHistoryError("stroke transaction is closed")
-        if key not in self._before:
+        if key not in self._before and self._preflight((key,)):
             self._before[key] = self._backend.capture_tile(key)
 
     def touch_rect(self, channel, rect, image_size, tile_size=128):
         keys = tiles_for_rect(channel, rect, image_size, tile_size)
-        for key in keys:
-            self.touch(key)
+        if self._preflight(keys):
+            for key in keys:
+                if key not in self._before:
+                    self._before[key] = self._backend.capture_tile(key)
         return keys
+
+    def touch_rects(self, requests):
+        """Preflight and capture several rectangles as one atomic request."""
+        groups = tuple(
+            tiles_for_rect(channel, rect, image_size, tile_size)
+            for channel, rect, image_size, tile_size in requests)
+        keys = tuple(key for group in groups for key in group)
+        if self._preflight(keys):
+            for key in keys:
+                if key not in self._before:
+                    self._before[key] = self._backend.capture_tile(key)
+        return groups
 
     def commit(self):
         if self._closed:
             raise TileHistoryError("stroke transaction is closed")
         self._closed = True
+        if self._abandoned:
+            return None
         deltas = []
         try:
             for key in sorted(self._before):
@@ -229,4 +279,3 @@ class StrokeTransaction:
         for key, snapshot in reversed(tuple(self._before.items())):
             self._backend.restore_tile(key, snapshot)
             self._history._release_snapshot(self._backend, snapshot)
-

@@ -48,7 +48,7 @@ default `0.1 m` voxel size from triggering a prohibitively expensive operation
 without review. A viewport guide draws grid slices and voxel-sized samples at
 all eight bounding-box corners so scale can be judged visually.
 
-### [Impasto](addons/impasto/) — v0.15.16 (active development)
+### [Impasto](addons/impasto/) — v0.15.17 (active development)
 
 A non-destructive Principled-PBR layer stack with Fill, Paint, and pass-through
 Group layers. One logical Paint layer can own separate Base Color, Metallic,
@@ -108,6 +108,9 @@ qualified.
 Impasto 0.15.16 removes an unnecessary per-dab full-mesh UV scan from ordinary
 GPU Paint and Erase and adds detailed stroke timings to guide the remaining 4K
 performance work.
+Impasto 0.15.17 replaces repeated conservative-seam Python scans with an exact
+cached vectorized lookup and avoids GPU undo copies for strokes already known
+to exceed the atomic undo budget.
 Flatten/Export to combined per-channel Blender Images is implemented. Paint,
 Soften, Smear, and Erase have independent per-channel target controls.
 Same-UV visible layers remain composed around an intermediate active layer;
