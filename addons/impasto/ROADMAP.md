@@ -44,6 +44,15 @@ reproduced the original failure. Remaining qualification is exterior-gutter
 collision ownership for islands packed within about one texel, broader GPU
 coverage, and eventual Tangent Normal/Soften/Smear support.
 
+Observed after close-range seam validation: white seams can reappear abruptly
+past a viewport zoom-out threshold and disappear after one zoom-in increment.
+Treat this as a separate minification/filtering investigation, not a regression
+of the corrected boundary rasterization. Determine whether Lit PBR sampling is
+selecting or approximating a coarser footprint that blends painted boundary
+texels with unpainted atlas gutters; qualify explicit gutter ownership and
+filter behavior at multiple zoom levels before declaring distant-view seams
+resolved.
+
 This is the authoritative list of open work for Impasto 0.15.17. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 

@@ -57,6 +57,10 @@ comparison method, and remaining costs.
   Soften, and Smear are excluded. Exterior gutters of islands packed within
   roughly one texel can still collide, so the mode remains default-off while
   that edge case and broader hardware coverage are qualified.
+  A separate distance-dependent issue remains: seams may reappear abruptly
+  when the viewport is zoomed out and vanish one zoom increment closer. This
+  is consistent with texture-minification/filter-footprint contamination from
+  unpainted atlas gutters, but the cause is not yet confirmed.
 - Emission and Subsurface brush-value sections are collapsed by default and
   retain their disclosure state per Paint layer.
 - A collapsed **Recent Colors** menu remembers up to eight colors actually
