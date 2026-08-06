@@ -4,6 +4,15 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.16
+
+- Remove unused per-dab triangle/UV work from ordinary GPU Paint and Erase.
+  Soften and Smear retain the detailed rectangles required for neighborhood
+  sampling.
+- Add bounded stroke profiling for input duration, flush time, UV bounds,
+  seam selection, and GPU undo capture/commit. These measurements identify
+  the next bottleneck without changing painting output.
+
 ## 0.15.15
 
 - Add a separate default-off Conservative UV Seam Paint experiment for Paint

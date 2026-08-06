@@ -44,7 +44,7 @@ reproduced the original failure. Remaining qualification is exterior-gutter
 collision ownership for islands packed within about one texel, broader GPU
 coverage, and eventual Tangent Normal/Soften/Smear support.
 
-This is the authoritative list of open work for Impasto 0.15.15. Shipped work
+This is the authoritative list of open work for Impasto 0.15.16. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Near-term
@@ -68,6 +68,10 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
   8 channels. Treat 8K as experimental until latency, synchronization, undo,
   and memory behavior have been measured. See
   [high-resolution estimates](docs/HIGH_RESOLUTION_PERFORMANCE.md).
+  Version 0.15.16 removes the unused per-dab triangle scan from Paint/Erase
+  and adds timings for flushing, UV bounds, seam selection, and undo. Use
+  those fields to determine whether tile-based undo or GPU draw volume is the
+  next dominant 4K cost before changing either subsystem.
 
 ## Workflow and UX
 

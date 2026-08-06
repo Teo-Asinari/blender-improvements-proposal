@@ -12,6 +12,7 @@ GUI-checklist territory (README).
 import sys
 import traceback
 from pathlib import Path
+from unittest import mock
 
 import bpy
 import numpy as np
@@ -429,6 +430,28 @@ try:
         sample_pad=3)
     check("neighbour brushes bound each dab to padded UV work",
           work == ((11, 11, 26, 26), None), str(work))
+    with mock.patch.object(gpu_engine, "dab_dirty_pixel_rects",
+                           return_value=("detailed",)) as detailed:
+        paint_work = gpu_engine.detailed_dab_work_rects(
+            "PAINT", screen_boxes, np.array([False, False]), uv_boxes,
+            [(16.0, 16.0, 1.0)], 4.0, 64)
+        erase_work = gpu_engine.detailed_dab_work_rects(
+            "ERASE", screen_boxes, np.array([False, False]), uv_boxes,
+            [(16.0, 16.0, 1.0)], 4.0, 64)
+        check("Paint and Erase skip unused per-dab UV work",
+              paint_work is None and erase_work is None
+              and detailed.call_count == 0)
+        soften_work = gpu_engine.detailed_dab_work_rects(
+            "SOFTEN", screen_boxes, np.array([False, False]), uv_boxes,
+            [(16.0, 16.0, 1.0)], 4.0, 64)
+        smear_work = gpu_engine.detailed_dab_work_rects(
+            "SMEAR", screen_boxes, np.array([False, False]), uv_boxes,
+            [(16.0, 16.0, 1.0)], 4.0, 64)
+        pads = [call.args[-1] for call in detailed.call_args_list]
+        check("Soften and Smear retain detailed per-dab UV work",
+              soften_work == ("detailed",)
+              and smear_work == ("detailed",)
+              and pads == [1.0, 1.4], str(pads))
     engine_source = Path(gpu_engine.__file__).read_text(encoding="utf-8")
     check("soften and smear use bounded copies and scissored in-place draws",
           engine_source.count("gpu.state.scissor_set(*work_rect)") == 2

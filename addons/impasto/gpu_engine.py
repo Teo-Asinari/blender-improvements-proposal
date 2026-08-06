@@ -1528,6 +1528,18 @@ def dab_dirty_pixel_rects(screen_bboxes, unprojectable, uv_bboxes, dabs,
         for dab in dabs)
 
 
+def detailed_dab_work_rects(brush_mode, screen_bboxes, unprojectable,
+                            uv_bboxes, dabs, radius, size):
+    """Compute per-dab UV work only for neighbour-sampling brushes."""
+    mode = str(brush_mode or "PAINT")
+    if mode not in {"SOFTEN", "SMEAR"}:
+        return None
+    sample_pad = 1.0 if mode == "SOFTEN" else radius * 0.35
+    return dab_dirty_pixel_rects(
+        screen_bboxes, unprojectable, uv_bboxes, dabs, radius, size,
+        sample_pad)
+
+
 # ---------------------------------------------------------------------------
 # Buffer -> numpy conversion ladder (stroke-end readback)
 #
@@ -2464,6 +2476,14 @@ class _Session:
         self.session_dirty = None      # accumulated until explicit flush
         self.session_dirty_full = False
         self.dirty_ms = 0.0            # CPU cost of the tracking math
+        self.flush_count = 0
+        self.flush_wall_ms = 0.0
+        self.dirty_union_ms = 0.0
+        self.work_rect_ms = 0.0
+        self.seam_select_ms = 0.0
+        self.undo_touch_ms = 0.0
+        self.undo_commit_ms = 0.0
+        self.pen_up_t = None
 
         # Full-size CPU mirror arrays (one per channel): sub-rect reads
         # scatter into them; foreach_set consumes them whole (there is
@@ -2917,6 +2937,14 @@ def begin_stroke(x, y, pressure):
     s.seam_selected_indices = set()
     s.seam_flush_indices = ()
     s.dirty_ms = 0.0
+    s.flush_count = 0
+    s.flush_wall_ms = 0.0
+    s.dirty_union_ms = 0.0
+    s.work_rect_ms = 0.0
+    s.seam_select_ms = 0.0
+    s.undo_touch_ms = 0.0
+    s.undo_commit_ms = 0.0
+    s.pen_up_t = None
     s.smear_last_point = None
     s.dab_queue.append((x, y, pressure))
 
@@ -2950,6 +2978,7 @@ def end_stroke():
     if s is None or not s.stroke_active:
         return
     s.stroke_active = False
+    s.pen_up_t = time.perf_counter()
     # Pen-up is GPU-only. The draw callback drains any queued dabs and records
     # the stroke boundary, but performs no texture readback or Image writes.
     s.pending_finalize = True
@@ -4452,6 +4481,7 @@ def _ensure_stencil_texture(s):
 def _flush_dabs(s, region):
     if s.view_proj is None:
         return
+    flush_started = time.perf_counter()
     radius = float(s.settings.get("radius", 50.0))
     hardness = float(s.settings.get("hardness", 0.5))
     occlusion = bool(s.settings.get("occlusion", True))
@@ -4476,18 +4506,22 @@ def _flush_dabs(s, region):
             and queue):
         rect = dab_rect_union(queue, radius)
         if s.seam_records:
+            seam_started = time.perf_counter()
             s.seam_flush_indices = touched_seam_record_indices(
                 s.seam_records, s.tri_screen_bboxes, rect)
             s.seam_selected_indices.update(s.seam_flush_indices)
+            s.seam_select_ms += (time.perf_counter() - seam_started) * 1000.0
+        union_started = time.perf_counter()
         bb = dirty_uv_bbox(s.tri_screen_bboxes, s.tri_unprojectable,
                            s.tri_uv_bboxes, rect)
         s.stroke_dirty = union_bbox(s.stroke_dirty, bb)
-        mode = s.settings.get("brush_mode", "PAINT")
-        sample_pad = (1.0 if mode == "SOFTEN" else
-                      radius * 0.35 if mode == "SMEAR" else 0.0)
-        dab_work_rects = dab_dirty_pixel_rects(
+        s.dirty_union_ms += (time.perf_counter() - union_started) * 1000.0
+        work_started = time.perf_counter()
+        dab_work_rects = detailed_dab_work_rects(
+            s.settings.get("brush_mode", "PAINT"),
             s.tri_screen_bboxes, s.tri_unprojectable, s.tri_uv_bboxes,
-            queue, radius, s.size, sample_pad)
+            queue, radius, s.size)
+        s.work_rect_ms += (time.perf_counter() - work_started) * 1000.0
     elif queue:
         s.stroke_dirty_full = True   # no projection cache: full read
     s.dirty_ms += time.perf_counter() - t_dirty
@@ -4495,6 +4529,7 @@ def _flush_dabs(s, region):
     # Capture every touched channel tile once, immediately before its first
     # modification. Both before/after snapshots stay GPU-resident.
     if queue and s.history_backend is not None:
+        undo_started = time.perf_counter()
         dirty_rect = (uv_bbox_to_pixel_rect(bb, s.size)
                       if not s.stroke_dirty_full else None)
         if dirty_rect is not None or s.stroke_dirty_full:
@@ -4536,18 +4571,23 @@ def _flush_dabs(s, region):
                         s.stroke_transaction.touch_rect(
                             channel, undo_rect, (s.size, s.size))
                 s.seam_history_touched.update(new_seams)
+        s.undo_touch_ms += (time.perf_counter() - undo_started) * 1000.0
 
     if s.settings.get("brush_mode", "PAINT") == "SOFTEN":
         _flush_soften_dabs(s, region, queue, radius, hardness, occlusion,
                            stamp, stencil_tex, use_stencil, dab_work_rects)
         s.dab_count += len(queue)
         s.last_dab_t = time.perf_counter()
+        s.flush_count += 1
+        s.flush_wall_ms += (time.perf_counter() - flush_started) * 1000.0
         return
     if s.settings.get("brush_mode", "PAINT") == "SMEAR":
         _flush_smear_dabs(s, region, queue, radius, hardness, occlusion,
                           stamp, stencil_tex, use_stencil, dab_work_rects)
         s.dab_count += len(queue)
         s.last_dab_t = time.perf_counter()
+        s.flush_count += 1
+        s.flush_wall_ms += (time.perf_counter() - flush_started) * 1000.0
         return
 
     for batch_index, ((blend, indices), fb, sh, ubo, ubo_data,
@@ -4638,6 +4678,8 @@ def _flush_dabs(s, region):
         s, queue, radius, stamp, stencil_tex, use_stencil)
     s.dab_count += len(queue)
     s.last_dab_t = time.perf_counter()
+    s.flush_count += 1
+    s.flush_wall_ms += (time.perf_counter() - flush_started) * 1000.0
 
 
 def _flush_seam_coverage_dabs(s, queue, radius, stamp, stencil_tex,
@@ -4926,10 +4968,22 @@ def _stroke_stats(s):
             s.settings.get("channel_keys", ())))),
         "prepass_ms": s.prepass_ms,
         "dirty_ms": s.dirty_ms * 1000.0,
+        "flush_count": s.flush_count,
+        "flush_wall_ms": s.flush_wall_ms,
+        "dirty_union_ms": s.dirty_union_ms,
+        "work_rect_ms": s.work_rect_ms,
+        "seam_select_ms": s.seam_select_ms,
+        "undo_touch_ms": s.undo_touch_ms,
+        "undo_commit_ms": s.undo_commit_ms,
         "deferred": 1,
     }
     if s.stroke_t0 is not None:
         stats["stroke_s"] = time.perf_counter() - s.stroke_t0
+        stats["input_active_s"] = max(
+            0.0, (s.pen_up_t or time.perf_counter()) - s.stroke_t0)
+    if s.pen_up_t is not None:
+        stats["finalize_delay_ms"] = max(
+            0.0, (time.perf_counter() - s.pen_up_t) * 1000.0)
     if s.submit_times:
         stats["submit_avg_ms"] = (sum(s.submit_times)
                                   / len(s.submit_times)) * 1000.0
@@ -5029,7 +5083,10 @@ def _finalize_stroke_gpu(s):
     s.stroke_dirty_full = False
     s.stroke_gutter_rects = {}
     if s.stroke_transaction is not None:
+        commit_started = time.perf_counter()
         s.stroke_transaction.commit()
+        s.undo_commit_ms = getattr(s, "undo_commit_ms", 0.0) + (
+            time.perf_counter() - commit_started) * 1000.0
         s.stroke_transaction = None
     stats = _stroke_stats(s)
     _last_stroke_stats = stats
