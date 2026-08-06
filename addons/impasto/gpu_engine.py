@@ -4684,9 +4684,9 @@ def _update_prepass(s, region, rv3d):
         sh.uniform_float("view_proj_matrix", s.view_proj)
         sh.uniform_float("view_depth_plane", s.view_depth_plane)
         s.batch_prepass.draw(sh)
-        # 1x1 read forces completion: this timing is TRUE prepass cost,
-        # not submission cost (acceptable per view change).
-        s.depth_fb.read_color(0, 0, 1, 1, 4, 0, 'FLOAT')
+        # Do not read the framebuffer here. A readback forces the CPU to wait
+        # for the complete depth raster on every orbit/zoom frame. GPU command
+        # ordering already makes later consumers observe this pass.
     s.prepass_ms = (time.perf_counter() - t0) * 1000.0
     s.prepass_key = key
     return s.prepass_ms

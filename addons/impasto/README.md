@@ -1,6 +1,6 @@
 # Impasto
 
-Impasto 0.15.19 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
+Impasto 0.15.20 is a Blender 5.1 add-on for non-destructive, multi-channel PBR
 painting. It stores material work as ordered Paint and Fill layers, compiles
 the stack into a Principled BSDF material, and provides a GPU-resident painting
 session with immediate material feedback.
@@ -30,6 +30,10 @@ exceeds its memory budget and clips camera-crossing triangles instead of
 treating all behind-camera geometry as touched. This directly addresses the
 0.15.18 fragmented-atlas regression and extreme zoom slowdown; production
 timings still require interactive revalidation.
+Version 0.15.20 removes a forced GPU-completion read from the navigation depth
+prepass. In the motivating 173,063-triangle session that synchronous pass
+averaged 126.7 ms on each changed view, while Lit PBR submission averaged only
+0.22 ms. GPU ordering preserves depth correctness without blocking the CPU.
 
 ## Current feature set
 
@@ -145,6 +149,8 @@ When a session stops, `GPU_PAINT_SPIKE_HOVER` reports aggregated passive-frame
 timings for preview, depth prepass, stencil, reticle, caliper, and overlays,
 plus mesh triangle and invalid-projection counts. It is intended to distinguish
 cursor/viewport cost from actual dab processing without logging every frame.
+After 0.15.20, prepass timing measures CPU preparation/submission rather than
+forcing a GPU-completion measurement.
 
 ## Flatten to channel images
 

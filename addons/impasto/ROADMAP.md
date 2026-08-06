@@ -53,7 +53,7 @@ texels with unpainted atlas gutters; qualify explicit gutter ownership and
 filter behavior at multiple zoom levels before declaring distant-view seams
 resolved.
 
-This is the authoritative list of open work for Impasto 0.15.19. Shipped work
+This is the authoritative list of open work for Impasto 0.15.20. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Near-term
@@ -88,6 +88,9 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
   with conservative homogeneous clipping. Re-test the fragmented Smart UV and
   zoomed hand-unwrapped cases. If either remains costly, qualify an adaptive
   sparse/broad threshold using island fragmentation and unique request counts.
+  Version 0.15.20 also removes the synchronous navigation-prepass read that
+  measured 126.7 ms per changed view on the 173,063-triangle production mesh.
+  Re-measure orbit/zoom using the session-end hover summary.
 
 ## Workflow and UX
 

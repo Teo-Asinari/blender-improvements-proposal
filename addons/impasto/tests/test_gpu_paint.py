@@ -552,6 +552,11 @@ try:
               and smear_work == ("detailed",)
               and pads == [1.0, 1.4], str(pads))
     engine_source = Path(gpu_engine.__file__).read_text(encoding="utf-8")
+    prepass_source = engine_source[
+        engine_source.index("def _update_prepass"):
+        engine_source.index("# Dab dispatch")]
+    check("viewport depth prepass never forces a navigation readback",
+          ".read_color(" not in prepass_source)
     check("soften and smear use bounded copies and scissored in-place draws",
           engine_source.count("gpu.state.scissor_set(*work_rect)") == 2
           and "s.soften_scratch_fb, work_rect" in engine_source

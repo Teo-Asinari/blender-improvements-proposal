@@ -4,6 +4,15 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.20
+
+- Remove the synchronous one-pixel framebuffer read from every navigation
+  depth prepass. GPU command ordering already guarantees that later consumers
+  observe the completed pass, so viewport orbit/zoom no longer forces Blender's
+  CPU to wait for the entire mesh-depth raster on each changed view.
+- Guard the navigation path against future accidental depth readback with a
+  focused regression assertion.
+
 ## 0.15.19
 
 - Stop sparse UV-rectangle generation and tile enumeration immediately after

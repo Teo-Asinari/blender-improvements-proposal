@@ -137,6 +137,21 @@ depth-prepass, stencil, reticle, caliper, text-overlay, total view, and total
 pixel-callback times, alongside triangle and unprojectable counts. New
 production measurements are required before stating a speedup for either fix.
 
+## 0.15.20: non-blocking navigation depth prepass
+
+The first 0.15.19 hover trace reported 1,151 passive view callbacks on a
+173,063-triangle mesh. Lit PBR preview submission averaged 0.2204 ms and pixel
+overlays averaged 0.1621 ms, but 118 camera-change prepasses averaged 126.7249
+ms. Inspection found an intentional one-pixel framebuffer read after every
+depth draw. That read forced Blender's CPU to wait for the complete GPU raster,
+reducing interactive navigation toward 8 frames per second.
+
+Version 0.15.20 removes the read. Commands submitted afterward remain ordered
+behind the depth pass on the GPU, preserving the dependency without blocking
+the CPU. Consequently, `prepass_avg_ms` now measures CPU projection work and
+GPU command submission, not true completed GPU duration. Interactive orbit and
+zoom measurements are required to quantify the user-visible gain.
+
 Other remaining costs are conservative UV-union calculation, unclassified
 flush overhead, and roughly one second for explicit near-full 4K Image
 synchronization. GPU command submission itself is small in these traces.
