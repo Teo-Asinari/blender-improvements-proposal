@@ -4,6 +4,17 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.18
+
+- Capture Paint/Erase Undo tiles from each screen-hit triangle's UV region
+  rather than the bounding rectangle spanning every touched island. Final
+  Image synchronization retains its conservative broad bound.
+- Deduplicate overlapping sparse tile requests before atomic memory-budget
+  preflight and GPU capture.
+- Keep experimental gutter destinations as separate regions through pen-up,
+  ensuring the gutter pass cannot modify atlas-gap tiles omitted by sparse
+  Undo.
+
 ## 0.15.17
 
 - Replace repeated Python scans of every conservative seam record with an

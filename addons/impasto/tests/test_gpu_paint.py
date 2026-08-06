@@ -424,6 +424,23 @@ try:
     uv_boxes = np.array(
         [[0.25, 0.25, 0.5, 0.5], [0.75, 0.75, 1.0, 1.0]],
         dtype=np.float32)
+    sparse = gpu_engine.dirty_uv_pixel_rects(
+        screen_boxes, np.array([False, False]), uv_boxes,
+        (0.0, 0.0, 230.0, 230.0), 64, pad=0)
+    check("sparse undo bounds do not bridge scattered UV islands",
+          sparse == ((16, 16, 16, 16), (48, 48, 16, 16)), str(sparse))
+    sparse_near = gpu_engine.dirty_uv_pixel_rects(
+        screen_boxes, np.array([False, False]), uv_boxes,
+        (10.0, 10.0, 20.0, 20.0), 64, pad=0)
+    check("sparse undo includes only screen-hit triangles",
+          sparse_near == ((16, 16, 16, 16),), str(sparse_near))
+    sparse_unprojectable = gpu_engine.dirty_uv_pixel_rects(
+        screen_boxes, np.array([False, True]), uv_boxes,
+        (10.0, 10.0, 20.0, 20.0), 64, pad=0)
+    check("unprojectable triangles remain conservatively undoable",
+          sparse_unprojectable
+          == ((16, 16, 16, 16), (48, 48, 16, 16)),
+          str(sparse_unprojectable))
     work = gpu_engine.dab_dirty_pixel_rects(
         screen_boxes, np.array([False, False]), uv_boxes,
         [(16.0, 16.0, 1.0), (100.0, 100.0, 1.0)], 4.0, 64,

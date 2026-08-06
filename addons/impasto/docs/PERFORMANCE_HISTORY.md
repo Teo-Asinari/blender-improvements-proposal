@@ -84,11 +84,13 @@ speedup claim because the strokes had different lengths and paths.
 
 ## Remaining measured bottlenecks
 
-Undo capture is now the largest named live cost. A stroke can gradually spread
-across a fragmented UV atlas: early rectangular tile captures occur before the
-eventual atomic record is known to exceed its budget. The next exact approach
-is sparse touched-tile capture derived from individually hit UV regions rather
-than the broad rectangle spanning distant islands.
+Undo capture was the largest named live cost in the 0.15.17 trace. Version
+0.15.18 derives Paint/Erase Undo tiles from individually screen-hit triangle UV
+regions rather than the broad rectangle spanning distant islands. Overlapping
+requests are deduplicated before atomic budget accounting, and gutter work
+retains separate destination regions. The gain still requires measurement on
+the production 4K scene; dense strokes naturally benefit less than fragmented
+atlases with large empty gaps.
 
 Other remaining costs are conservative UV-union calculation, unclassified
 flush overhead, and roughly one second for explicit near-full 4K Image

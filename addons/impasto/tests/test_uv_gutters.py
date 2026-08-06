@@ -580,6 +580,48 @@ class UVGutterSessionLifecycleTests(unittest.TestCase):
         self.assertEqual(session.gutter_apply_ms, 0.5)
         self.assertEqual(session.stroke_gutter_rects, {})
 
+    def test_finalize_keeps_distant_gutter_regions_separate(self):
+        from impasto import gpu_engine
+        events = []
+
+        class Backend:
+            def _draw_copy(self, source, framebuffer, viewport, origin, scale):
+                events.append(("copy", viewport))
+
+        class Transaction:
+            def commit(self):
+                events.append(("commit",))
+
+        session = SimpleNamespace(
+            pending_finalize=True,
+            stroke_gutter_rects={"base_color": [(1, 2, 3, 4),
+                                                  (50, 51, 5, 6)]},
+            gutter_offset_map=SimpleNamespace(),
+            gutter_apply_shader="shader", gutter_apply_batch="batch",
+            history_backend=Backend(),
+            settings={"channel_keys": ("base_color",)}, channels=1,
+            paint_texs=("base",), soften_scratch_fb="scratch_fb",
+            soften_scratch="scratch", single_fbs=("base_fb",), size=64,
+            gutter_apply_ms=0.0, stroke_dirty=None,
+            stroke_dirty_full=False, session_dirty_full=False,
+            session_dirty=None, stroke_transaction=Transaction())
+
+        def apply(_source, _target, _offsets, rect, _shader, _batch):
+            events.append(("apply", rect))
+            return 0.25
+
+        with mock.patch.object(gpu_engine.uv_gutters,
+                               "apply_gutters_into", side_effect=apply), \
+                mock.patch.object(gpu_engine, "_stroke_stats",
+                                  return_value={}), \
+                mock.patch.object(gpu_engine, "_log_line"):
+            gpu_engine._finalize_stroke_gpu(session)
+        self.assertEqual(events, [
+            ("copy", (1, 2, 3, 4)), ("apply", (1, 2, 3, 4)),
+            ("copy", (50, 51, 5, 6)), ("apply", (50, 51, 5, 6)),
+            ("commit",),
+        ])
+
 
 if __name__ == "__main__":
     result = unittest.main(argv=[__file__], exit=False)

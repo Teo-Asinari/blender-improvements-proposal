@@ -214,7 +214,11 @@ class StrokeTransaction:
     def _preflight(self, keys):
         if self._abandoned:
             return False
-        new_keys = tuple(key for key in keys if key not in self._before)
+        # Sparse rectangle batches commonly name the same tile through several
+        # triangle bounds.  Count each prospective snapshot exactly once or a
+        # conservative request can be rejected despite fitting the budget.
+        new_keys = tuple(dict.fromkeys(
+            key for key in keys if key not in self._before))
         estimates = tuple(self._snapshot_byte_size(key) for key in new_keys)
         if any(value is None for value in estimates):
             return True
@@ -245,7 +249,7 @@ class StrokeTransaction:
         groups = tuple(
             tiles_for_rect(channel, rect, image_size, tile_size)
             for channel, rect, image_size, tile_size in requests)
-        keys = tuple(key for group in groups for key in group)
+        keys = tuple(dict.fromkeys(key for group in groups for key in group))
         if self._preflight(keys):
             for key in keys:
                 if key not in self._before:

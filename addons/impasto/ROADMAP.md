@@ -53,7 +53,7 @@ texels with unpainted atlas gutters; qualify explicit gutter ownership and
 filter behavior at multiple zoom levels before declaring distant-view seams
 resolved.
 
-This is the authoritative list of open work for Impasto 0.15.17. Shipped work
+This is the authoritative list of open work for Impasto 0.15.18. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Near-term
@@ -80,8 +80,9 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
   Version 0.15.16 removed the unused per-dab triangle scan from Paint/Erase
   and added timings for flushing, UV bounds, seam selection, and undo. Version
   0.15.17 vectorizes conservative seam selection and rejects impossible atomic
-  undo records before GPU copying. Re-measure production strokes to identify
-  the next dominant 4K cost.
+  undo records before GPU copying. Version 0.15.18 captures Paint/Erase Undo
+  from sparse hit-island tiles rather than their atlas-wide union. Re-measure
+  production strokes to identify the next dominant 4K cost.
 
 ## Workflow and UX
 

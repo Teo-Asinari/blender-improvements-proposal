@@ -1507,6 +1507,31 @@ def dirty_uv_bbox(screen_bboxes, unprojectable, uv_bboxes, rect):
             float(sel[:, 2].max()), float(sel[:, 3].max()))
 
 
+def dirty_uv_pixel_rects(screen_bboxes, unprojectable, uv_bboxes, rect,
+                         size, pad=DIRTY_RECT_PAD_PX):
+    """Conservative per-triangle texel rects intersecting a screen rect.
+
+    Unlike :func:`dirty_uv_bbox`, this deliberately does not bridge gaps
+    between scattered UV islands.  It is intended for sparse tile undo;
+    session readback continues to use the cheaper union bbox.  Duplicate UV
+    bounds are removed without changing their deterministic triangle order.
+    """
+    import numpy as np
+    hit = ~((screen_bboxes[:, 2] < rect[0])
+            | (screen_bboxes[:, 0] > rect[2])
+            | (screen_bboxes[:, 3] < rect[1])
+            | (screen_bboxes[:, 1] > rect[3]))
+    hit = hit | unprojectable
+    result = []
+    seen = set()
+    for bbox in np.asarray(uv_bboxes)[hit]:
+        pixel_rect = uv_bbox_to_pixel_rect(bbox, size, pad=pad)
+        if pixel_rect is not None and pixel_rect not in seen:
+            seen.add(pixel_rect)
+            result.append(pixel_rect)
+    return tuple(result)
+
+
 def union_bbox(a, b):
     """Union of two (min_u, min_v, max_u, max_v) bboxes; either may be
     None (returns the other)."""
@@ -1516,6 +1541,24 @@ def union_bbox(a, b):
         return a
     return (min(a[0], b[0]), min(a[1], b[1]),
             max(a[2], b[2]), max(a[3], b[3]))
+
+
+def append_sparse_pixel_rect(mapping, channel, rect):
+    """Remember a destination rectangle without bridging atlas-space gaps."""
+    rect = tuple(int(value) for value in rect)
+    rects = mapping.setdefault(channel, [])
+    if rect not in rects:
+        rects.append(rect)
+
+
+def sparse_pixel_rects(value):
+    """Normalize legacy single rectangles and current sparse rectangle lists."""
+    if value is None:
+        return ()
+    if (len(value) == 4
+            and all(isinstance(item, (int, float)) for item in value)):
+        return (tuple(int(item) for item in value),)
+    return tuple(tuple(int(item) for item in rect) for rect in value)
 
 
 def uv_bbox_to_pixel_rect(bbox, size, pad=DIRTY_RECT_PAD_PX):
@@ -4527,6 +4570,7 @@ def _flush_dabs(s, region):
     # stats show what the tracking itself costs).
     t_dirty = time.perf_counter()
     dab_work_rects = None
+    undo_dirty_rects = None
     if (s.tri_screen_bboxes is not None and s.tri_uv_bboxes is not None
             and queue):
         rect = dab_rect_union(queue, radius)
@@ -4541,6 +4585,10 @@ def _flush_dabs(s, region):
         bb = dirty_uv_bbox(s.tri_screen_bboxes, s.tri_unprojectable,
                            s.tri_uv_bboxes, rect)
         s.stroke_dirty = union_bbox(s.stroke_dirty, bb)
+        if s.settings.get("brush_mode", "PAINT") in {"PAINT", "ERASE"}:
+            undo_dirty_rects = dirty_uv_pixel_rects(
+                s.tri_screen_bboxes, s.tri_unprojectable,
+                s.tri_uv_bboxes, rect, s.size)
         s.dirty_union_ms += (time.perf_counter() - union_started) * 1000.0
         work_started = time.perf_counter()
         dab_work_rects = detailed_dab_work_rects(
@@ -4563,23 +4611,28 @@ def _flush_dabs(s, region):
                 s.stroke_transaction = s.history.begin_stroke(
                     s.history_backend, "GPU multi-channel stroke")
             rect = dirty_rect or (0, 0, s.size, s.size)
+            sparse_rects = (undo_dirty_rects
+                            if undo_dirty_rects is not None else (rect,))
             keys = tuple(s.settings.get("channel_keys", ()))
             target_keys = set(s.settings.get(
                 "brush_target_channel_keys", keys))
             if s.gutter_offset_map is not None:
-                rect = uv_gutters.expand_pixel_rect(
-                    rect, s.gutter_offset_map.radius, s.size)
+                sparse_rects = tuple(
+                    uv_gutters.expand_pixel_rect(
+                        item, s.gutter_offset_map.radius, s.size)
+                    for item in sparse_rects)
             undo_requests = []
             for i in range(s.channels):
                 channel = keys[i] if i < len(keys) else str(i)
                 if channel not in target_keys:
                     continue
                 if s.gutter_offset_map is not None:
-                    s.stroke_gutter_rects[channel] = (
-                        uv_gutters.union_pixel_rect(
-                            s.stroke_gutter_rects.get(channel), rect))
-                undo_requests.append(
-                    (channel, rect, (s.size, s.size), 128))
+                    for item in sparse_rects:
+                        append_sparse_pixel_rect(
+                            s.stroke_gutter_rects, channel, item)
+                undo_requests.extend(
+                    (channel, item, (s.size, s.size), 128)
+                    for item in sparse_rects)
             s.stroke_transaction.touch_rects(undo_requests)
             if s.batch_seam_boundary is not None:
                 eligible = set(s.seam_channel_keys) & target_keys
@@ -4592,10 +4645,8 @@ def _flush_dabs(s, region):
                         if s.gutter_offset_map is not None:
                             undo_rect = uv_gutters.expand_pixel_rect(
                                 seam_rect, s.gutter_offset_map.radius, s.size)
-                            s.stroke_gutter_rects[channel] = (
-                                uv_gutters.union_pixel_rect(
-                                    s.stroke_gutter_rects.get(channel),
-                                    undo_rect))
+                            append_sparse_pixel_rect(
+                                s.stroke_gutter_rects, channel, undo_rect)
                         s.stroke_transaction.touch_rect(
                             channel, undo_rect, (s.size, s.size))
                 s.seam_history_touched.update(new_seams)
@@ -5088,21 +5139,19 @@ def _finalize_stroke_gpu(s):
         keys = tuple(s.settings.get("channel_keys", ()))
         for index in range(s.channels):
             channel = keys[index] if index < len(keys) else str(index)
-            gutter_rect = gutter_rects.get(channel)
-            if gutter_rect is None:
-                continue
-            x, y, width, height = gutter_rect
-            s.history_backend._draw_copy(
-                s.paint_texs[index], s.soften_scratch_fb, gutter_rect,
-                (x / s.size, y / s.size),
-                (width / s.size, height / s.size))
-            s.gutter_apply_ms += uv_gutters.apply_gutters_into(
-                s.soften_scratch, s.single_fbs[index],
-                s.gutter_offset_map, gutter_rect,
-                s.gutter_apply_shader, s.gutter_apply_batch)
-            s.stroke_dirty = union_bbox(s.stroke_dirty, (
-                x / s.size, y / s.size,
-                (x + width) / s.size, (y + height) / s.size))
+            for gutter_rect in sparse_pixel_rects(gutter_rects.get(channel)):
+                x, y, width, height = gutter_rect
+                s.history_backend._draw_copy(
+                    s.paint_texs[index], s.soften_scratch_fb, gutter_rect,
+                    (x / s.size, y / s.size),
+                    (width / s.size, height / s.size))
+                s.gutter_apply_ms += uv_gutters.apply_gutters_into(
+                    s.soften_scratch, s.single_fbs[index],
+                    s.gutter_offset_map, gutter_rect,
+                    s.gutter_apply_shader, s.gutter_apply_batch)
+                s.stroke_dirty = union_bbox(s.stroke_dirty, (
+                    x / s.size, y / s.size,
+                    (x + width) / s.size, (y + height) / s.size))
     if s.stroke_dirty_full:
         s.session_dirty_full = True
     else:

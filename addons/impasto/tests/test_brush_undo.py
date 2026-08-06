@@ -190,6 +190,18 @@ try:
     check("multichannel preflight rejects before its first tile copy",
           batch_tx.commit() is None and not batch_backend.released)
 
+    duplicate_backend = MemoryBackend(bytes_per_tile=10)
+    duplicate_history = tile_undo.TileHistory(memory_budget_bytes=20)
+    duplicate_tx = duplicate_history.begin_stroke(duplicate_backend)
+    duplicate_tx.touch_rects((
+        ("base_color", (0, 0, 1, 1), (1, 1), 1),
+        ("base_color", (0, 0, 1, 1), (1, 1), 1)))
+    duplicate_backend.tiles[base] = 2
+    check("overlapping sparse rects count one atomic tile allocation",
+          duplicate_tx.commit() is not None
+          and duplicate_history.undo_count == 1
+          and duplicate_history.byte_size == 20)
+
     print("IMPASTO_BRUSH_UNDO_PASSED")
 except Exception:
     traceback.print_exc()
