@@ -2610,6 +2610,7 @@ class _Session:
         self.view_depth_plane = None   # -Z row of world -> view matrix
         self.model = None              # mathutils.Matrix copy
         self.prepass_ms = 0.0
+        self.projection_bounds_ms = 0.0
 
         # Dirty-rect: per-triangle screen bboxes cached per prepass
         # (same matrices the dab shader uses) + per-stroke accumulator.
@@ -3141,6 +3142,7 @@ def begin_stroke(x, y, pressure):
     s.seam_selected_indices = set()
     s.seam_flush_indices = ()
     s.dirty_ms = 0.0
+    s.projection_bounds_ms = 0.0
     s.flush_count = 0
     s.flush_wall_ms = 0.0
     s.dirty_union_ms = 0.0
@@ -4654,20 +4656,13 @@ def _update_prepass(s, region, rv3d):
     s.view = rv3d.view_matrix.copy()
     s.view_depth_plane = tuple(-s.view[2][i] for i in range(4))
     s.model = obj.matrix_world.copy()
-
-    # Cache per-triangle screen bboxes for conservative dirty-rect
-    # tracking (numpy, once per view change — the same matrices the
-    # dab shader will project with, so the bound is honest).
-    try:
-        import numpy as np
-        mvp = np.array(s.view_proj @ s.model, dtype=np.float32)
-        s.tri_screen_bboxes, s.tri_unprojectable = triangle_screen_bboxes(
-            s.coords, mvp, w, h)
-        s.hover_stats.geometry(len(s.tri_screen_bboxes),
-                               int(s.tri_unprojectable.sum()))
-    except Exception:
-        s.tri_screen_bboxes = None
-        s.tri_unprojectable = None
+    # Dirty/Undo projection bounds are needed by dabs, not by navigation.
+    # Invalidate them here and rebuild lazily at the first paint flush after
+    # the view settles. Projecting/clipping 150k+ triangles on every orbit
+    # frame made otherwise-cheap Lit PBR navigation visibly choppy.
+    s.tri_screen_bboxes = None
+    s.tri_unprojectable = None
+    s.hover_stats.geometry(len(s.coords) // 3, 0)
 
     with s.depth_fb.bind():
         s.depth_fb.viewport_set(0, 0, w, h)
@@ -4690,6 +4685,29 @@ def _update_prepass(s, region, rv3d):
     s.prepass_ms = (time.perf_counter() - t0) * 1000.0
     s.prepass_key = key
     return s.prepass_ms
+
+
+def _ensure_projection_bounds(s, region):
+    """Build dab dirty/Undo bounds lazily for the current prepass matrices."""
+    if s.tri_screen_bboxes is not None:
+        return 0.0
+    if s.coords is None or s.view_proj is None or s.model is None:
+        return None
+    started = time.perf_counter()
+    try:
+        import numpy as np
+        mvp = np.array(s.view_proj @ s.model, dtype=np.float32)
+        s.tri_screen_bboxes, s.tri_unprojectable = triangle_screen_bboxes(
+            s.coords, mvp, region.width, region.height)
+        s.hover_stats.geometry(len(s.tri_screen_bboxes),
+                               int(s.tri_unprojectable.sum()))
+    except Exception:
+        s.tri_screen_bboxes = None
+        s.tri_unprojectable = None
+        return None
+    elapsed = (time.perf_counter() - started) * 1000.0
+    s.projection_bounds_ms += elapsed
+    return elapsed
 
 
 # ---------------------------------------------------------------------------
@@ -4734,6 +4752,8 @@ def _flush_dabs(s, region):
     stamp = s.settings.get("brush_stamp")
     stencil_tex = _ensure_stencil_texture(s)
     use_stencil = stencil_tex is not None
+
+    _ensure_projection_bounds(s, region)
 
     queue = s.dab_queue
     s.dab_queue = []
@@ -5259,6 +5279,7 @@ def _stroke_stats(s):
             "brush_target_channel_keys",
             s.settings.get("channel_keys", ())))),
         "prepass_ms": s.prepass_ms,
+        "projection_bounds_ms": s.projection_bounds_ms,
         "dirty_ms": s.dirty_ms * 1000.0,
         "flush_count": s.flush_count,
         "flush_wall_ms": s.flush_wall_ms,

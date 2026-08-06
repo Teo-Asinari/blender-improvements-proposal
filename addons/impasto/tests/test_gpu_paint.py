@@ -557,6 +557,11 @@ try:
         engine_source.index("# Dab dispatch")]
     check("viewport depth prepass never forces a navigation readback",
           ".read_color(" not in prepass_source)
+    update_source = prepass_source[
+        :prepass_source.index("def _ensure_projection_bounds")]
+    check("viewport navigation defers triangle bounds until painting",
+          "triangle_screen_bboxes(" not in update_source
+          and "_ensure_projection_bounds(s, region)" in engine_source)
     check("soften and smear use bounded copies and scissored in-place draws",
           engine_source.count("gpu.state.scissor_set(*work_rect)") == 2
           and "s.soften_scratch_fb, work_rect" in engine_source

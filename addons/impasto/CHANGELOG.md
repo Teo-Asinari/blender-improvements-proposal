@@ -4,6 +4,14 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.21
+
+- Defer per-triangle screen projection and near-plane clipping until the first
+  paint flush after navigation. Orbit/zoom still updates the GPU depth texture,
+  but no longer projects 150K+ CPU triangle bounds on every changed view.
+- Report the deferred one-time work as `projection_bounds_ms` in stroke
+  telemetry.
+
 ## 0.15.20
 
 - Remove the synchronous one-pixel framebuffer read from every navigation

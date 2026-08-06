@@ -53,7 +53,7 @@ texels with unpainted atlas gutters; qualify explicit gutter ownership and
 filter behavior at multiple zoom levels before declaring distant-view seams
 resolved.
 
-This is the authoritative list of open work for Impasto 0.15.20. Shipped work
+This is the authoritative list of open work for Impasto 0.15.21. Shipped work
 belongs in [CHANGELOG.md](CHANGELOG.md), not here.
 
 ## Near-term
@@ -90,7 +90,9 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
   sparse/broad threshold using island fragmentation and unique request counts.
   Version 0.15.20 also removes the synchronous navigation-prepass read that
   measured 126.7 ms per changed view on the 173,063-triangle production mesh.
-  Re-measure orbit/zoom using the session-end hover summary.
+  Version 0.15.21 defers the remaining 100–110 ms CPU triangle projection until
+  painting resumes. Re-measure orbit/zoom using the session-end hover summary
+  and inspect `projection_bounds_ms` on the first subsequent stroke.
 
 ## Workflow and UX
 

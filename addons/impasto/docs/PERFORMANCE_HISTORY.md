@@ -152,6 +152,19 @@ the CPU. Consequently, `prepass_avg_ms` now measures CPU projection work and
 GPU command submission, not true completed GPU duration. Interactive orbit and
 zoom measurements are required to quantify the user-visible gain.
 
+## 0.15.21: defer CPU triangle bounds during navigation
+
+A post-0.15.20 production trace remained visibly choppy: 53 camera-change
+prepasses on a 151,112-triangle mesh averaged 111.6518 ms even without the
+blocking framebuffer read. Lit PBR submission remained only 0.2507 ms. The
+remaining time was CPU projection and homogeneous clipping of every triangle,
+performed on every orbit/zoom frame solely to prepare future dab dirty bounds.
+
+Version 0.15.21 invalidates those bounds when the camera moves but rebuilds
+them only on the first actual paint flush after navigation. The GPU depth pass
+still follows the live view. Stroke telemetry exposes the deferred one-time
+cost as `projection_bounds_ms`; passive navigation should no longer pay it.
+
 Other remaining costs are conservative UV-union calculation, unclassified
 flush overhead, and roughly one second for explicit near-full 4K Image
 synchronization. GPU command submission itself is small in these traces.
