@@ -45,10 +45,12 @@ or widely scattered UV layouts, and unprojectable geometry can still expand
 that region substantially. The implementation falls back to a full texture
 when projection bounds are unavailable.
 
-Explicit synchronization previously measured about 417 ms for four 4K
-channels. A simple pixel-count projection puts four 8K channels near 1.7
-seconds under comparable conditions. This estimates flush/readback latency,
-not ordinary resident pen-up latency.
+Explicit synchronization has measured roughly 0.85–0.93 seconds for near-full
+4K dirty regions in recent four-target production traces. A simple pixel-count
+projection puts the equivalent four 8K transfer around 3.4–3.7 seconds under
+comparable conditions. This estimates readback/Image synchronization latency,
+not ordinary resident pen-up latency. See the
+[performance history](PERFORMANCE_HISTORY.md) for the source measurements.
 
 ## Current policy
 

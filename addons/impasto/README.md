@@ -14,9 +14,14 @@ is only needed by Soften and Smear. Stroke logs now split input time, flushing,
 UV bounds, seam selection, and undo costs so further performance work can be
 driven by measured bottlenecks.
 Conservative seam selection uses a cached vectorized owner lookup instead of
-rescanning every seam record in Python for each live flush. Oversized strokes
-that cannot fit the atomic undo budget are rejected before performing GPU tile
-copies; painting is preserved, matching the previous non-undoable outcome.
+rescanning every seam record in Python for each live flush. Undo requests
+already known to exceed the atomic history budget are rejected before GPU tile
+copies; gradually expanding strokes stop recording once they cross that limit.
+Painting is preserved, matching the previous non-undoable outcome.
+On the production 4K mesh that motivated this work, seam selection became
+approximately 29× faster and total live flush work became 3.65× faster. See
+the [performance history](docs/PERFORMANCE_HISTORY.md) for the exact logs,
+comparison method, and remaining costs.
 
 ## Current feature set
 
@@ -256,7 +261,9 @@ were recorded.
 
 - The live preview is an Impasto approximation, not Blender Material Preview.
 - GPU painting currently requires UV-mapped image canvases.
-- Full arbitrary layered-normal composition is not implemented.
+- Generated materials, flattened export, and the resident baseline support
+  bottom-up RNM normal composition. Exact dynamic resident preview of arbitrary
+  upper normal sequences remains limited.
 - Resident GPU preview supports one visible same-UV image mask per affine
   upper layer. Multiple, independently mapped, lower, or active masks enter
   authoritative Blender material inspection.
@@ -275,7 +282,8 @@ were recorded.
 
 See [High-resolution painting estimates](docs/HIGH_RESOLUTION_PERFORMANCE.md)
 for formulas, VRAM/RAM tables, expected responsiveness, and qualification
-requirements.
+requirements. See [GPU painting performance history](docs/PERFORMANCE_HISTORY.md)
+for measured optimization results.
 
 ## Tests and development notes
 

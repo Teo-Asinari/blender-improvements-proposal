@@ -1,6 +1,6 @@
 # Impasto documentation
 
-Impasto 0.15.9 documentation is organized by authority and lifecycle.
+Impasto 0.15.17 documentation is organized by authority and lifecycle.
 
 ## Start here
 
@@ -17,6 +17,8 @@ Impasto 0.15.9 documentation is organized by authority and lifecycle.
   semantics and preview behavior.
 - [High-resolution performance](HIGH_RESOLUTION_PERFORMANCE.md) — memory,
   latency estimates, and qualification requirements.
+- [GPU painting performance history](PERFORMANCE_HISTORY.md) — measured 4K
+  optimization results, telemetry definitions, and remaining bottlenecks.
 - [GPU IBL preview](GPU_IBL_PREVIEW.md) — current resident lighting model.
 - [GPU preview acceptance contract](GPU_PREVIEW_REVIEW.md) — preview scope and
   numerical requirements.

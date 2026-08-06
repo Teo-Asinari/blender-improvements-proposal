@@ -110,7 +110,12 @@ GPU Paint and Erase and adds detailed stroke timings to guide the remaining 4K
 performance work.
 Impasto 0.15.17 replaces repeated conservative-seam Python scans with an exact
 cached vectorized lookup and avoids GPU undo copies for strokes already known
-to exceed the atomic undo budget.
+to exceed the atomic undo budget; gradually expanding strokes stop recording
+when they cross that limit.
+On the production 4K validation mesh this made seam selection approximately
+29× faster and reduced total live flush processing from 28.1 to 7.7 ms per
+flush (3.65×). Detailed measurements and caveats are maintained in the
+[Impasto GPU performance history](addons/impasto/docs/PERFORMANCE_HISTORY.md).
 Flatten/Export to combined per-channel Blender Images is implemented. Paint,
 Soften, Smear, and Erase have independent per-channel target controls.
 Same-UV visible layers remain composed around an intermediate active layer;
@@ -132,6 +137,8 @@ save/export should be preceded by **Flush for Save / Export**.
 - [research/](research/) — technical research feeding the flagship designs.
 - [Impasto documentation](addons/impasto/docs/README.md) — current workflow,
   roadmap, changelog, technical references, and archived design history.
+- [Impasto GPU performance history](addons/impasto/docs/PERFORMANCE_HISTORY.md)
+  — measured optimization results and remaining performance bottlenecks.
 
 ## Approach
 
@@ -147,9 +154,10 @@ along the way are documented in the add-on READMEs.
 ## Status
 
 Active development. Seam Path Tool, UV Island Overlay, Kiln, and Calipers have
-complete guided workflows. Impasto's layer stack and native painting paths are
-usable, while its high-performance multi-channel GPU brush remains experimental
-and is being qualified interactively on larger meshes and textures.
+complete guided workflows. Impasto's layer stack, flattening, masks, stencils,
+layered normals, and GPU multi-channel Paint/Erase workflow are usable. Its GPU
+path remains under active qualification—especially 8K, complex mixed-UV stack
+previews, sparse undo capture, and Soften/Smear seam behavior.
 
 ## License
 
