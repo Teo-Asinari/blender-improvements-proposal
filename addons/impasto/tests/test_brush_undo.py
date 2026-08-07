@@ -218,6 +218,31 @@ try:
           duplicate_tx.commit() is not None
           and duplicate_history.undo_count == 1
           and duplicate_history.byte_size == 20)
+
+    shared_backend = MemoryBackend(bytes_per_tile=10)
+    shared_history = tile_undo.TileHistory(memory_budget_bytes=1000)
+    shared_tx = shared_history.begin_stroke(shared_backend)
+    shared_keys = shared_tx.touch_channel_rects(
+        ("base_color", "roughness"),
+        ((120, 120, 40, 40), (128, 128, 16, 16), (120, 120, 40, 40)),
+        (250, 250), 128)
+    expected_geometry = [
+        (0, 0, 128, 128), (128, 0, 122, 128),
+        (0, 128, 128, 122), (128, 128, 122, 122)]
+    check("shared sparse rectangles enumerate tile geometry once per channel",
+          len(shared_keys) == 8
+          and [(key.x, key.y, key.width, key.height)
+               for key in shared_keys[:4]] == expected_geometry
+          and [key.channel for key in shared_keys]
+              == ["base_color"] * 4 + ["roughness"] * 4)
+    check("shared sparse rectangles capture every channel tile exactly once",
+          len(shared_tx._before) == 8)
+    shared_small = tile_undo.TileHistory(memory_budget_bytes=30)
+    shared_small_tx = shared_small.begin_stroke(MemoryBackend(bytes_per_tile=10))
+    shared_small_tx.touch_channel_rects(
+        ("base_color", "roughness"), ((0, 0, 1, 1),), (1, 1), 1)
+    check("shared multichannel capture abandons atomically before copying",
+          not shared_small_tx.is_recording and not shared_small_tx._before)
     released_before_drop = len(duplicate_backend.released)
     duplicate_history.drop_references()
     check("owner teardown drops history without backend callback traversal",

@@ -4993,19 +4993,18 @@ def _flush_dabs(s, region):
                     uv_gutters.expand_pixel_rect(
                         item, s.gutter_offset_map.radius, s.size)
                     for item in sparse_rects)
-            undo_requests = []
+            undo_channels = []
             for i in range(s.channels):
                 channel = keys[i] if i < len(keys) else str(i)
                 if channel not in target_keys:
                     continue
+                undo_channels.append(channel)
                 if s.gutter_offset_map is not None:
                     for item in sparse_rects:
                         append_sparse_pixel_rect(
                             s.stroke_gutter_rects, channel, item)
-                undo_requests.extend(
-                    (channel, item, (s.size, s.size), 128)
-                    for item in sparse_rects)
-            s.stroke_transaction.touch_rects(undo_requests)
+            s.stroke_transaction.touch_channel_rects(
+                undo_channels, sparse_rects, (s.size, s.size), 128)
             if (s.stroke_transaction.is_recording
                     and s.batch_seam_boundary is not None):
                 eligible = set(s.seam_channel_keys) & target_keys

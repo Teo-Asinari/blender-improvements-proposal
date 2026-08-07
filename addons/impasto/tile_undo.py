@@ -82,6 +82,27 @@ def tiles_for_rect(channel, rect, image_size, tile_size=128):
     return tuple(result)
 
 
+def _tile_geometry_for_rect(rect, image_size, tile_size):
+    """Yield clipped tile geometry without allocating channel-specific keys."""
+    x, y, width, height = (int(v) for v in rect)
+    image_width, image_height = (int(v) for v in image_size)
+    tile_size = int(tile_size)
+    if tile_size <= 0:
+        raise ValueError("tile_size must be positive")
+    x0, y0 = max(0, x), max(0, y)
+    x1 = min(image_width, x + max(0, width))
+    y1 = min(image_height, y + max(0, height))
+    if x1 <= x0 or y1 <= y0:
+        return
+    first_x, first_y = x0 // tile_size, y0 // tile_size
+    last_x, last_y = (x1 - 1) // tile_size, (y1 - 1) // tile_size
+    for tile_y in range(first_y, last_y + 1):
+        for tile_x in range(first_x, last_x + 1):
+            px, py = tile_x * tile_size, tile_y * tile_size
+            yield (px, py, min(tile_size, image_width - px),
+                   min(tile_size, image_height - py))
+
+
 class TileHistory:
     """Undo/redo records with a strict byte budget and FIFO eviction."""
 
@@ -240,6 +261,30 @@ class StrokeTransaction:
         self._estimated_record_bytes += added
         return True
 
+    def _capture_unique(self, keys):
+        """Preflight and capture a batch without rebuilding its key tuple."""
+        before = self._before
+        new_keys = []
+        seen = set()
+        estimates = []
+        for key in keys:
+            if key in before or key in seen:
+                continue
+            seen.add(key)
+            new_keys.append(key)
+            estimates.append(self._snapshot_byte_size(key))
+        if all(value is not None for value in estimates):
+            added = 2 * sum(estimates)
+            if (self._estimated_record_bytes + added
+                    > self._history.memory_budget_bytes):
+                self._abandon_oversized()
+                return False
+            self._estimated_record_bytes += added
+        capture = self._backend.capture_tile
+        for key in new_keys:
+            before[key] = capture(key)
+        return True
+
     def touch(self, key):
         """Capture a tile once, immediately before its first modification."""
         if self._closed:
@@ -274,6 +319,30 @@ class StrokeTransaction:
                 if key not in self._before:
                     self._before[key] = self._backend.capture_tile(key)
         return groups
+
+    def touch_channel_rects(self, channels, rects, image_size, tile_size=128):
+        """Capture the union of shared rectangles for several channels.
+
+        GPU painting uses the same sparse UV rectangles for every enabled
+        channel.  Union their tile geometry once, then add channel identity;
+        this avoids rebuilding and deduplicating the same large temporary key
+        lists for every channel on fragmented UV layouts.
+        """
+        if self._closed:
+            raise TileHistoryError("stroke transaction is closed")
+        if self._abandoned:
+            return ()
+        channels = tuple(str(channel) for channel in channels)
+        geometry = {}
+        for rect in rects:
+            for item in _tile_geometry_for_rect(rect, image_size, tile_size):
+                geometry.setdefault(item, None)
+        keys = tuple(
+            TileKey(channel, x, y, width, height)
+            for channel in channels
+            for x, y, width, height in geometry)
+        self._capture_unique(keys)
+        return keys
 
     def commit(self):
         if self._closed:

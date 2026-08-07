@@ -215,3 +215,18 @@ A Python-built uniform screen grid was evaluated and rejected: synthetic 173K
 triangle queries were much faster, but the roughly 2.9-second construction cost
 would have caused a severe first-stroke regression. A future spatial index must
 use a vectorized/native build or persist safely across projection changes.
+
+## 0.15.24: shared sparse Undo tile enumeration
+
+Fragmented UV layouts can produce thousands of overlapping dirty rectangles.
+The previous Undo path expanded every rectangle into channel-specific
+`TileKey` tuples, globally deduplicated them, and then deduplicated them again
+during budget preflight. Version 0.15.24 unions compact tile geometry once and
+then applies the resulting exact, deterministic tile sequence to each enabled
+channel.
+
+In a synthetic five-channel 4K workload with 20,000 overlapping rectangles and
+5,120 final unique channel tiles, bookkeeping fell from about 868.4 ms to
+69.5 ms, or 12.5x. This measures Python enumeration and preflight rather than
+GPU snapshot capture; production `undo_touch_ms` includes both and will show a
+smaller end-to-end gain when many previously untouched tiles require copying.

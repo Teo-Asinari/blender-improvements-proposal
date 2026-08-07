@@ -4,6 +4,16 @@ This file records shipped user-visible changes. Detailed historical engineering
 notes remain available in
 [docs/archive/PROGRESS_LEGACY.md](docs/archive/PROGRESS_LEGACY.md).
 
+## 0.15.24
+
+- Enumerate sparse Undo tile geometry once for all painted channels instead of
+  rebuilding and deduplicating fragmented-UV tile lists per channel.
+- Preflight each unique tile once while retaining atomic multichannel budget
+  rejection and deterministic capture order.
+- A synthetic five-channel fragmented 4K workload reduced Undo tile
+  bookkeeping from about 868 ms to 70 ms (12.5x). GPU snapshot time is separate,
+  so total interactive improvement depends on how many new tiles are captured.
+
 ## 0.15.23
 
 - Compute the exact screen-space triangle hit set once per GPU flush and reuse
