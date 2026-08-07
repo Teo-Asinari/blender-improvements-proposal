@@ -19,6 +19,8 @@ Impasto 0.15.24 documentation is organized by authority and lifecycle.
   latency estimates, and qualification requirements.
 - [GPU painting performance history](PERFORMANCE_HISTORY.md) — measured 4K
   optimization results, telemetry definitions, and remaining bottlenecks.
+- [Current performance bottlenecks](CURRENT_PERFORMANCE_BOTTLENECKS.md) — latest
+  production timings, dominant costs, and optimization priority order.
 - [GPU IBL preview](GPU_IBL_PREVIEW.md) — current resident lighting model.
 - [GPU preview acceptance contract](GPU_PREVIEW_REVIEW.md) — preview scope and
   numerical requirements.
