@@ -98,6 +98,24 @@ belongs in [CHANGELOG.md](CHANGELOG.md), not here.
   texture upload/seeding, shader creation, stack baselines, or GPU reference
   release is the next viable target. Do not hide required Image sync latency
   inside teardown measurements.
+- Continue performance hardening in this order:
+  1. Reduce temporary allocation and duplicate work while converting fragmented
+     UV dirty regions into sparse Undo tiles. This is the leading low-risk
+     target for Smart UV layouts with high `undo_touch_ms`.
+  2. Replace repeated linear gutter/seam-rectangle membership checks with an
+     exact indexed or hashed lookup, preserving deterministic ownership and
+     coverage.
+  3. Cache unchanged brush channel keys and target plans between settings
+     refreshes. This is safe but expected to be a smaller gain.
+  4. Investigate dirty-region-only GPU-to-Image synchronization at explicit
+     flush/exit. Full 4K multichannel readback remains a material delay, but
+     partial synchronization requires careful Blender Image, save, Undo, and
+     color-management qualification.
+  5. Revisit screen-space triangle indexing only with a vectorized/native build
+     or a safely persistent cache. The rejected Python uniform-grid prototype
+     accelerated synthetic queries by roughly 15x but took about 2.9 seconds
+     to construct for 173K triangles, causing an unacceptable first-stroke
+     regression.
 
 ## Workflow and UX
 
